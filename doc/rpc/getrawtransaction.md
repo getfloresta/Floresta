@@ -1,88 +1,96 @@
 # `getrawtransaction`
 
-Return the raw transaction data.
 
-## Arguments
+Returns detailed data about a specified transaction.
+
+As it is, `getrawtransaction`  only returns the given transaction when its cached by the watch-only wallet. And you can control the amount of information you want to be returned using the `verbose` argum.
 
 * `txid` - (string, required) The transaction id
 
-* `verbose` - (boolean, optional) If false, return a string, otherwise return a json object
+* `verbose` - (boolean, optional) When set, returns more human-readable and detailed data from the specified transaction, otherwise it will just return the hex encoded transaction.
 
 ## Returns
 
-### Response (if `verbose` is not set or set to false)
+### Response (without `verbose`)
 
-- The serialized, hex-encoded data for `txid`
+- The serialized transaction as a hex-encoded string.
 
-### Response (if `verbose` is set to true)
+### Response (when `verbose` is set)
 
-- `in_active_chain`   - (boolean) Whether specified block is in the active chain or not (only present with explicit "blockhash" argument)
+```json
+{
+    "in_active_chain": true,        // (boolean) Whether specified block is in the active chain or not (only present with explicit "blockhash" argument)
 
-- `hex`               - (string) The serialized, hex-encoded data for 'txid'
+    "hex": "str",                   // (string) The serialized, hex-encoded data for 'txid'
 
-- `txid`              - (string) The transaction id (same as provided)
+    "txid": "str",                  // (string) The transaction id (same as provided)
+    
+    "hash": "str",                  // (string) The transaction hash (differs from txid for witness transactions)
+    
+    "size": 123,                    // (numeric) The serialized transaction size
+    
+    "vsize": 123,                   // (numeric) The virtual transaction size (differs from size for witness transactions)
+    
+    "weight": 123,                  // (numeric) The transaction's weight (between vsize*4-3 and vsize*4)
+    
+    "version": 123,                 // (numeric) The version
+    
+    "locktime": 123,                // (numeric) The lock time
+    
+    "vin": [                        // (array)
+        {                           // (object)
+            "txid": "str",          // (string) The transaction id
 
-- `hash`              - (string) The transaction hash (differs from txid for witness transactions)
+            "vout": 123,            // (numeric) The output number
 
-- `size`              - (numeric) The serialized transaction size
+            "script_sig": {         // (object) The script
+                "asm": "str",       // (string) asm
 
-- `vsize`             - (numeric) The virtual transaction size (differs from size for witness transactions)
+                "hex": "str",       // (string) hex
+            },
 
-- `weight`            - (numeric) The transaction's weight (between vsize*4-3 and vsize*4)
+            "sequence": 123,        // (numeric) The script sequence number
 
-- `version`           - (numeric) The version
+            "witness": [            // (array)
+                "str"               // hex-encoded witness data (if any)
+            ],
+        }
+    ],
 
-- `locktime`          - (numeric) The lock time
+    "vout": [                       // (array)
+        {                           // (object)
+            "value": 123,           // (numeric) The value in BTC
 
-- `vin`               - (object array)
+            "n": 123,               // (numeric) index
 
-    - `txid`            - (string) The transaction id
+            "script_pub_key":  {    // (object)
+                "asm": "str",       // (string) the asm
 
-    - `vout`            - (numeric) The output number
+                "hex": "str",       // (string) the hex
 
-    - `script_sig`      - (object) The script
+                "req_sigs": 123,    // (numeric) The required sigs
 
-        - `asm`             - (string) asm
+                "type_": "str",     // (string) The type, eg 'pubkeyhash'
 
-        - `hex`             - (string) hex
+                "address": "str",   // (string) bitcoin address
+            }
+        }
+    ],
 
-    - `sequence`        - (numeric) The script sequence number
+    "blockhash": "str",             // (string) the block hash
 
-    - `witness`         - (strings array) hex-encoded witness data (if any)
+    "confirmations": 123,           // (numeric) The confirmations
 
-- `vout`              - (object array)
+    "blocktime": 123,               // (numeric) The block time expressed in UNIX epoch time
 
-    - `value`           - (numeric) The value in BTC
+    "time": 123                     // (numeric) Same as "blocktime"
+}
+```
 
-    - `n`               - (numeric) index
+### Error Enum 
 
-    - `script_pub_key`  - (object)
-
-        - `asm`             - (string) the asm
-
-        - `hex`             - (string) the hex
-
-        - `req_sigs`        - (numeric) The required sigs
-
-        - `type_`           - (string) The type, eg 'pubkeyhash'
-
-        - `address`         - (string) bitcoin address
-
-- `blockhash`         - (string) the block hash
-
-- `confirmations`     - (numeric) The confirmations
-
-- `blocktime`         - (numeric) The block time expressed in UNIX epoch time
-
-- `time`              - (numeric) Same as "blocktime"
-
-### Error Enum `TxNotFound`
-
-- "Transaction not found"
-
-### Error Enum `InvalidHash`
-
-- "Invalid hash"
+- `TxNotFound`
+- `InvalidHash`
 
 ## Usage Examples
 
@@ -92,4 +100,4 @@ floresta-cli getrawtransaction <txid> [true|false]
 
 ## Notes
 
-- This function only works for in-wallet transactions.
+- This function only works for transactions that are cached inside the watch-only wallet.
