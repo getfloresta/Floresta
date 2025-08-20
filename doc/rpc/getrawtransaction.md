@@ -39,13 +39,13 @@ As it is, `getrawtransaction`  only returns the given transaction when its cache
     
     "locktime": 123,                // (numeric) The lock time
     
-    "vin": [                        // (array)
-        {                           // (object)
+    "vin": [
+        {
             "txid": "str",          // (string) The transaction id
 
             "vout": 123,            // (numeric) The output number
 
-            "script_sig": {         // (object) The script
+            "script_sig": {         // The script
                 "asm": "str",       // (string) asm
 
                 "hex": "str",       // (string) hex
@@ -53,19 +53,19 @@ As it is, `getrawtransaction`  only returns the given transaction when its cache
 
             "sequence": 123,        // (numeric) The script sequence number
 
-            "witness": [            // (array)
+            "witness": [
                 "str"               // hex-encoded witness data (if any)
             ],
         }
     ],
 
-    "vout": [                       // (array)
-        {                           // (object)
+    "vout": [
+        {
             "value": 123,           // (numeric) The value in BTC
 
             "n": 123,               // (numeric) index
 
-            "script_pub_key":  {    // (object)
+            "script_pub_key":  {
                 "asm": "str",       // (string) the asm
 
                 "hex": "str",       // (string) the hex
