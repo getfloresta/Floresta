@@ -5,6 +5,8 @@ Returns detailed data about a specified transaction.
 
 As it is, `getrawtransaction`  only returns the given transaction when its cached by the watch-only wallet. And you can control the amount of information you want to be returned using the `verbose` argum.
 
+## Arguments
+
 * `txid` - (string, required) The transaction id
 
 * `verbose` - (boolean, optional) When set, returns more human-readable and detailed data from the specified transaction, otherwise it will just return the hex encoded transaction.
@@ -17,7 +19,7 @@ As it is, `getrawtransaction`  only returns the given transaction when its cache
 
 ### Response (when `verbose` is set)
 
-```json
+```json5
 {
     "in_active_chain": true,        // (boolean) Whether specified block is in the active chain or not (only present with explicit "blockhash" argument)
 
