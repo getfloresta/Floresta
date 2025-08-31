@@ -19,75 +19,65 @@ As it is, `getrawtransaction`  only returns the given transaction when its cache
 
 ### Response (when `verbose` is set)
 
-```json5
-{
-    "in_active_chain": true,        // (boolean) Whether specified block is in the active chain or not (only present with explicit "blockhash" argument)
+- `in_active_chain`   - (boolean) Whether specified block is in the active chain or not (only present with explicit "blockhash" argument)
 
-    "hex": "str",                   // (string) The serialized, hex-encoded data for 'txid'
+- `hex`               - (string) The serialized, hex-encoded data for 'txid'
 
-    "txid": "str",                  // (string) The transaction id (same as provided)
-    
-    "hash": "str",                  // (string) The transaction hash (differs from txid for witness transactions)
-    
-    "size": 123,                    // (numeric) The serialized transaction size
-    
-    "vsize": 123,                   // (numeric) The virtual transaction size (differs from size for witness transactions)
-    
-    "weight": 123,                  // (numeric) The transaction's weight (between vsize*4-3 and vsize*4)
-    
-    "version": 123,                 // (numeric) The version
-    
-    "locktime": 123,                // (numeric) The lock time
-    
-    "vin": [
-        {
-            "txid": "str",          // (string) The transaction id
+- `txid`              - (string) The transaction id (same as provided)
 
-            "vout": 123,            // (numeric) The output number
+- `hash`              - (string) The transaction hash (differs from txid for witness transactions)
 
-            "script_sig": {         // The script
-                "asm": "str",       // (string) asm
+- `size`              - (numeric) The serialized transaction size
 
-                "hex": "str",       // (string) hex
-            },
+- `vsize`             - (numeric) The virtual transaction size (differs from size for witness transactions)
 
-            "sequence": 123,        // (numeric) The script sequence number
+- `weight`            - (numeric) The transaction's weight (between vsize*4-3 and vsize*4)
 
-            "witness": [
-                "str"               // hex-encoded witness data (if any)
-            ],
-        }
-    ],
+- `version`           - (numeric) The version
 
-    "vout": [
-        {
-            "value": 123,           // (numeric) The value in BTC
+- `locktime`          - (numeric) The lock time
 
-            "n": 123,               // (numeric) index
+- `vin`               - (object array)
 
-            "script_pub_key":  {
-                "asm": "str",       // (string) the asm
+    - `txid`            - (string) The transaction id
 
-                "hex": "str",       // (string) the hex
+    - `vout`            - (numeric) The output number
 
-                "req_sigs": 123,    // (numeric) The required sigs
+    - `script_sig`      - (object) The script
 
-                "type_": "str",     // (string) The type, eg 'pubkeyhash'
+        - `asm`             - (string) asm
 
-                "address": "str",   // (string) bitcoin address
-            }
-        }
-    ],
+        - `hex`             - (string) hex
 
-    "blockhash": "str",             // (string) the block hash
+    - `sequence`        - (numeric) The script sequence number
 
-    "confirmations": 123,           // (numeric) The confirmations
+    - `witness`         - (strings array) hex-encoded witness data (if any)
 
-    "blocktime": 123,               // (numeric) The block time expressed in UNIX epoch time
+- `vout`              - (object array)
 
-    "time": 123                     // (numeric) Same as "blocktime"
-}
-```
+    - `value`           - (numeric) The value in BTC
+
+    - `n`               - (numeric) index
+
+    - `script_pub_key`  - (object)
+
+        - `asm`             - (string) the asm
+
+        - `hex`             - (string) the hex
+
+        - `req_sigs`        - (numeric) The required sigs
+
+        - `type_`           - (string) The type, eg 'pubkeyhash'
+
+        - `address`         - (string) bitcoin address
+
+- `blockhash`         - (string) the block hash
+
+- `confirmations`     - (numeric) The confirmations
+
+- `blocktime`         - (numeric) The block time expressed in UNIX epoch time
+
+- `time`              - (numeric) Same as "blocktime"
 
 ### Error Enum 
 
