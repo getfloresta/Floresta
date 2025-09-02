@@ -242,10 +242,14 @@ where
             peer_data.transport_protocol = version.transport_protocol;
 
             // If this peer doesn't have basic services, we disconnect it
-            if let ConnectionKind::Regular(needs) = version.kind {
-                if !Self::is_peer_good(peer_data, needs) {
+            if let ConnectionKind::OutboundFullRelay(needs)
+            | ConnectionKind::BlockRelayOnly(needs) = &version.kind
+            {
+                if !Self::is_peer_good(peer_data, *needs) {
                     info!(
-                        "Disconnecting peer {peer} for not having the required services. has={} needs={}", peer_data.services, needs
+                        "Disconnecting peer {peer} for not having the required services. has={} needs={}",
+                        peer_data.services,
+                        needs
                     );
                     peer_data.channel.send(NodeRequest::Shutdown)?;
                     self.address_man.update_set_state(
@@ -263,7 +267,7 @@ where
 
                     return Ok(());
                 }
-            };
+            }
 
             if peer_data.services.has(service_flags::UTREEXO.into()) {
                 self.common
@@ -399,7 +403,12 @@ where
     pub(crate) fn handle_disconnection(&mut self, peer: u32, idx: usize) -> Result<(), WireError> {
         if let Some(p) = self.peers.remove(&peer) {
             std::mem::drop(p.channel);
-            if matches!(p.kind, ConnectionKind::Regular(_)) && p.state == PeerStatus::Ready {
+
+            let is_outbound_full_relay = matches!(p.kind, ConnectionKind::OutboundFullRelay(_));
+            let is_outbound_blocks_only = matches!(p.kind, ConnectionKind::BlockRelayOnly(_));
+            let is_ready = matches!(p.state, PeerStatus::Ready);
+
+            if (is_outbound_full_relay || is_outbound_blocks_only) && is_ready {
                 info!("Peer disconnected: {peer}");
             }
 
@@ -462,6 +471,7 @@ where
 
         // This peer is misbehaving too often, ban it
         let is_missbehaving = peer.banscore >= self.common.max_banscore;
+
         // extra peers should be banned immediately
         let is_extra = peer.kind == ConnectionKind::Extra;
 
@@ -827,7 +837,7 @@ where
             return Err(WireError::PeerAlreadyExists(addr, port));
         }
 
-        let kind = ConnectionKind::Regular(ServiceFlags::NONE);
+        let kind = ConnectionKind::Manual;
         let peer_id = self.peer_id_count;
         let address = LocalAddress::new(
             self.to_addr_v2(addr),
