@@ -31,8 +31,6 @@ use floresta_chain::CompactLeafData;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use floresta_common::FractionAvg;
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-use floresta_compact_filters::network_filters::NetworkFilters;
 use rand::seq::SliceRandom;
 use rustreexo::accumulator::proof::Proof;
 use serde::Deserialize;
@@ -148,6 +146,7 @@ pub(crate) enum InflightRequests {
     Connect(PeerId),
 
     /// Requests the peer to send us the compact filters for blocks
+    #[allow(dead_code)]
     GetFilters,
 
     /// Requests the peer to send us the utreexo proof for a given block
@@ -239,6 +238,7 @@ impl Default for RunningNode {
         RunningNode {
             last_address_rearrange: Instant::now(),
             last_invs: HashMap::default(),
+            #[allow(dead_code)]
             inflight_filters: BTreeMap::new(),
         }
     }
@@ -271,7 +271,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) chain: Chain,
     pub(crate) blocks: HashMap<BlockHash, InflightBlock>,
     pub(crate) mempool: Arc<tokio::sync::Mutex<Mempool>>,
-    pub(crate) block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
+    #[allow(dead_code)]
     pub(crate) last_filter: BlockHash,
 
     // 2. Peer Management
@@ -373,7 +373,6 @@ where
         config: UtreexoNodeConfig,
         chain: Chain,
         mempool: Arc<Mutex<Mempool>>,
-        block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         kill_signal: Arc<tokio::sync::RwLock<bool>>,
         address_man: AddressMan,
     ) -> Result<Self, WireError> {
@@ -392,7 +391,6 @@ where
                 startup_time: Instant::now(),
                 block_sync_avg: FractionAvg::new(0, 0),
                 last_filter: chain.get_block_hash(0).unwrap(),
-                block_filters,
                 inflight: HashMap::new(),
                 inflight_user_requests: HashMap::new(),
                 peer_id_count: 0,

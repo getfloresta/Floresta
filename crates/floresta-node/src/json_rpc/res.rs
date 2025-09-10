@@ -296,6 +296,7 @@ pub enum JsonRpcError {
     Node(String),
 
     /// This error is returned when the node does not have block filters enabled, which is required for some RPC calls
+    #[allow(dead_code)]
     NoBlockFilters,
 
     /// This error is returned when a hex value is invalid
@@ -310,6 +311,7 @@ pub enum JsonRpcError {
     Wallet(String),
 
     /// This error is returned when there is an error with block filters, e.g., if the filters are not available or when there is an issue with the filter data
+    #[allow(dead_code)]
     Filters(String),
 
     /// This error is returned when there is an error calculating the chain work

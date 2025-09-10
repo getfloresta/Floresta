@@ -64,7 +64,6 @@ async fn main() {
         config,
         chain.clone(),
         Arc::new(Mutex::new(Mempool::new(Pollard::default(), 1000))),
-        None,
         Arc::new(tokio::sync::RwLock::new(false)),
         AddressMan::default(),
     )
