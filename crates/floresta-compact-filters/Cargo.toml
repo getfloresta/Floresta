@@ -5,16 +5,20 @@ authors = ["Floresta Developers <contact@getfloresta.org>"]
 edition = "2018"
 homepage = "https://github.com/davidson-souza/floresta"
 repository = "https://github.com/davidson-souza/floresta"
-description = """
-BIP158 compact filters for easy rescan of the blockchain in light clients.
-"""
 readme.workspace = true # Floresta/README.md
+description = """
+BIP158 compact filters for easy rescan of the blockchain in
+light clients.
+"""
 
 [dependencies]
 bitcoin = { workspace = true }
 
 # Local dependencies
-floresta-chain = { workspace = true }
+floresta-common = { workspace = true }
+
+[dev-dependencies]
+rand = "0.9.2"
 
 [lints]
 workspace = true

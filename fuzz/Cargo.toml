@@ -16,6 +16,7 @@ tempfile = { workspace = true }
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-wire = { workspace = true }
+floresta-compact-filters = { workspace = true }
 
 [[bin]]
 name = "local_address_str"
@@ -69,6 +70,13 @@ bench = false
 [[bin]]
 name = "disk_block_header_roundtrip"
 path = "fuzz_targets/disk_block_header_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filter_descriptor_roundtrip"
+path = "fuzz_targets/filter_descriptor_roundtrip.rs"
 test = false
 doc = false
 bench = false

@@ -14,8 +14,6 @@ use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_common::get_hash_from_u8;
 use floresta_common::get_spk_hash;
 use floresta_common::spsc::Channel;
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
@@ -178,9 +176,6 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
     /// We keep the script_hash and which client has it, so we can notify the
     /// clients when a new transaction is received.
     pub client_addresses: HashMap<sha256::Hash, Arc<Client>>,
-    /// A Arc-ed copy of the block filters backend that we can use to check if a
-    /// block contains a transaction that we are interested in.
-    pub block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
     /// An interface to a running node, used to broadcast transactions and request
     /// blocks.
     pub node_interface: NodeInterface,
@@ -197,7 +192,6 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     pub async fn new(
         address_cache: Arc<AddressCache<KvDatabase>>,
         chain: Arc<Blockchain>,
-        block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         node_interface: NodeInterface,
     ) -> Result<ElectrumServer<Blockchain>, Box<dyn std::error::Error>> {
         let (tx, rx) = unbounded_channel();
@@ -212,7 +206,6 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         Ok(ElectrumServer {
             chain,
             address_cache,
-            block_filters,
             node_interface,
             clients: HashMap::new(),
             message_receiver: rx,
@@ -551,7 +544,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                 info!("Catching up with addresses {:?}", self.addresses_to_scan);
                 let addresses: Vec<_> = self.addresses_to_scan.drain(..).collect();
-                self.rescan_for_addresses(addresses).await?;
+                self.rescan_for_addresses(addresses)?;
             }
         }
     }
@@ -562,64 +555,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     /// Usually, we'll rely on compact block filters to speed things up. If
     /// we don't have compact block filters, we may rescan using the older,
     /// more bandwidth-intensive method of actually downloading blocks.
-    async fn rescan_for_addresses(
+    fn rescan_for_addresses(
         &mut self,
-        addresses: Vec<ScriptBuf>,
+        _addresses: Vec<ScriptBuf>,
     ) -> Result<(), super::error::Error> {
-        // If compact block filters are enabled, use them. Otherwise, fallback
-        // to the "old-school" rescaning.
-        if let Some(cfilters) = &self.block_filters {
-            self.rescan_with_block_filters(cfilters.clone(), None, None, addresses)
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    /// If we have compact block filters enabled, this method will use them to
-    /// find blocks of interest and download for our wallet to learn about new
-    /// transactions, once a new address is added by subscription.
-    async fn rescan_with_block_filters(
-        &mut self,
-        cfilters: Arc<NetworkFilters<FlatFiltersStore>>,
-        start_height: Option<u32>,
-        stop_height: Option<u32>,
-        addresses: Vec<ScriptBuf>,
-    ) -> Result<(), super::error::Error> {
-        // By default, we look from 1..tip
-        let mut _addresses = addresses
-            .iter()
-            .map(|address| address.as_bytes())
-            .collect::<Vec<_>>();
-
-        let Ok(blocks) =
-            cfilters.match_any(_addresses, start_height, stop_height, self.chain.clone())
-        else {
-            self.addresses_to_scan.extend(addresses); // push them back to get a retry
-            return Ok(());
-        };
-
-        info!("filters told us to scan blocks: {blocks:?}");
-
-        // Tells users about the transactions we found
-        for block in blocks {
-            let block = self.node_interface.get_block(block).await;
-            let Ok(Some(block)) = block else {
-                self.addresses_to_scan.extend(addresses); // push them back to get a retry
-                return Ok(());
-            };
-
-            let height = self
-                .chain
-                .get_block_height(&block.block_hash())
-                .ok()
-                .flatten()
-                .unwrap();
-
-            self.handle_block(block, height);
-        }
-
-        Ok(())
+        todo!()
     }
 
     fn process_history(transactions: &[CachedTransaction]) -> Vec<Value> {
@@ -1055,7 +995,6 @@ mod test {
                 u_config,
                 chain.clone(),
                 Arc::new(Mutex::new(Mempool::new(MEMPOOL_SIZE))),
-                None,
                 Arc::new(RwLock::new(false)),
                 AddressMan::default(),
             )
@@ -1067,9 +1006,10 @@ mod test {
         let tls_acceptor = tls_config.map(TlsAcceptor::from);
 
         let electrum_server: ElectrumServer<ChainState<FlatChainStore>> =
-            ElectrumServer::new(wallet, chain, None, node_interface)
+            ElectrumServer::new(wallet, chain, node_interface)
                 .await
                 .unwrap();
+
         let non_tls_listener = Arc::new(TcpListener::bind(e_addr).await.unwrap());
         let assigned_port = non_tls_listener.local_addr().unwrap().port();
 

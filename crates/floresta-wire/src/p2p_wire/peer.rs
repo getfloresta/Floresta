@@ -770,6 +770,7 @@ pub enum PeerMessages {
     UtreexoState(Vec<u8>),
 
     /// Remote peer sent us a compact block filter
+    #[allow(dead_code)]
     BlockFilter((BlockHash, BlockFilter)),
 
     /// Remote peer sent us a Utreexo proof,

@@ -4,8 +4,6 @@ use bitcoin::consensus::encode;
 use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 use floresta_chain::FlatChainstoreError;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::IterableFilterStoreError;
 use floresta_watch_only::kv_database::KvDatabaseError;
 use floresta_watch_only::WatchOnlyError;
 use tokio_rustls::rustls::pki_types;
@@ -82,9 +80,8 @@ pub enum FlorestadError {
     /// Setting up the watch-only wallet.
     CouldNotSetupWallet(String),
 
-    #[cfg(feature = "compact-filters")]
-    /// Loading the compact filters store.
-    CouldNotLoadCompactFiltersStore(IterableFilterStoreError),
+    /// Invalid assumed valid value.
+    InvalidAssumeValid(bitcoin::hex::HexToArrayError),
 
     /// Failed to create a chain provider.
     CouldNotCreateChainProvider(String),
@@ -180,12 +177,9 @@ impl std::fmt::Display for FlorestadError {
             FlorestadError::CouldNotSetupWallet(err) => {
                 write!(f, "Could not setup wallet: {err}")
             }
-
-            #[cfg(feature = "compact-filters")]
-            FlorestadError::CouldNotLoadCompactFiltersStore(err) => {
-                write!(f, "Could not load compact filters store: {err}")
+            FlorestadError::InvalidAssumeValid(error) => {
+                write!(f, "Invalid assumed valid value: {error}")
             }
-
             FlorestadError::CouldNotCreateChainProvider(err) => {
                 write!(f, "Could not create chain provider: {err}")
             }
