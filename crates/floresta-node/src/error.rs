@@ -4,6 +4,7 @@ use bitcoin::consensus::encode;
 use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 use floresta_chain::FlatChainstoreError;
+use floresta_common::impl_error_from;
 use floresta_watch_only::kv_database::KvDatabaseError;
 use floresta_watch_only::WatchOnlyError;
 use tokio_rustls::rustls::pki_types;
@@ -223,29 +224,32 @@ impl std::fmt::Display for FlorestadError {
     }
 }
 
-/// Implements `From<T>` where `T` is a possible error outcome in this crate, this macro only
-/// takes `T` and builds [`FlorestadError`] with the right variant.
-macro_rules! impl_from_error {
-    ($field:ident, $error:ty) => {
-        impl From<$error> for FlorestadError {
-            fn from(err: $error) -> Self {
-                FlorestadError::$field(err)
-            }
-        }
-    };
-}
+impl_error_from!(FlorestadError, encode::Error, Encode);
+impl_error_from!(FlorestadError, std::num::ParseIntError, ParseNum);
+impl_error_from!(FlorestadError, String, Rustreexo);
+impl_error_from!(FlorestadError, std::io::Error, Io);
+impl_error_from!(
+    FlorestadError,
+    bitcoin::blockdata::script::Error,
+    ScriptValidation
+);
+impl_error_from!(FlorestadError, BlockchainError, Blockchain);
+impl_error_from!(FlorestadError, serde_json::Error, SerdeJson);
+impl_error_from!(FlorestadError, slip132::Error, WalletInput);
+impl_error_from!(FlorestadError, toml::de::Error, TomlParsing);
+impl_error_from!(FlorestadError, BlockValidationErrors, BlockValidation);
+impl_error_from!(FlorestadError, bitcoin::address::ParseError, AddressParsing);
+impl_error_from!(FlorestadError, miniscript::Error, Miniscript);
+impl_error_from!(FlorestadError, pki_types::pem::Error, InvalidPrivKey);
+impl_error_from!(
+    FlorestadError,
+    tokio_rustls::rustls::Error,
+    CouldNotConfigureTLS
+);
+impl_error_from!(
+    FlorestadError,
+    WatchOnlyError<KvDatabaseError>,
+    CouldNotInitializeWallet
+);
 
-impl_from_error!(Encode, encode::Error);
-impl_from_error!(ParseNum, std::num::ParseIntError);
-impl_from_error!(Rustreexo, String);
-impl_from_error!(Io, std::io::Error);
-impl_from_error!(ScriptValidation, bitcoin::blockdata::script::Error);
-impl_from_error!(Blockchain, BlockchainError);
-impl_from_error!(SerdeJson, serde_json::Error);
-impl_from_error!(WalletInput, slip132::Error);
-impl_from_error!(TomlParsing, toml::de::Error);
-impl_from_error!(BlockValidation, BlockValidationErrors);
-impl_from_error!(AddressParsing, bitcoin::address::ParseError);
-impl_from_error!(Miniscript, miniscript::Error);
-impl_from_error!(CouldNotObtainWalletCache, WatchOnlyError<KvDatabaseError>);
 impl std::error::Error for FlorestadError {}

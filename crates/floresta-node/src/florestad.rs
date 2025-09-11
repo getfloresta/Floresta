@@ -389,6 +389,18 @@ impl Florestad {
             .map(|addr| Self::resolve_hostname(addr, 9050))
             .transpose()?;
 
+        #[cfg(feature = "compact-filters")]
+        let cfilters = self.config.cfilters.then(|| {
+            use floresta_compact_filters::FlatFilterStore;
+
+            let data_dir = format!("{data_dir}/cfilters");
+            let path = PathBuf::from(data_dir);
+            FlatFilterStore::new(&path)
+        });
+
+        #[cfg(not(feature = "compact-filters"))]
+        let cfilters = None;
+
         let config = UtreexoNodeConfig {
             disable_dns_seeds: self.config.disable_dns_seeds,
             network: self.config.network,
@@ -416,6 +428,8 @@ impl Florestad {
             blockchain_state.clone(),
             Arc::new(tokio::sync::Mutex::new(Mempool::new(acc, 300_000_000))),
             kill_signal.clone(),
+            #[cfg(feature = "compact-filters")]
+            cfilters,
             AddressMan::default(),
         )
         .map_err(|e| FlorestadError::CouldNotCreateChainProvider(format!("{e}")))?;

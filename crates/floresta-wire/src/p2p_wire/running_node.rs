@@ -11,11 +11,11 @@ use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::BlockHash;
-use floresta_chain::proof_util;
+use floresta_chain::proof_util::UtreexoLeafError;
 use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
-use floresta_chain::ThreadSafeChain;
+use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use rand::random;
@@ -68,9 +68,9 @@ impl NodeContext for RunningNode {
 
 impl<Chain> UtreexoNode<Chain, RunningNode>
 where
-    Chain: ThreadSafeChain + Clone,
+    Chain: ChainBackend + Clone + Send + 'static,
+    Chain::Error: From<UtreexoLeafError>,
     WireError: From<Chain::Error>,
-    Chain::Error: From<proof_util::UtreexoLeafError>,
 {
     fn send_addresses(&mut self) -> Result<(), WireError> {
         let addresses = self
@@ -213,6 +213,8 @@ where
             chain,
             self.mempool.clone(),
             self.kill_signal.clone(),
+            #[cfg(feature = "compact-filters")]
+            None,
             self.address_man.clone(),
         )
         .unwrap();
@@ -418,6 +420,41 @@ where
         let _ = stop_signal.send(());
     }
 
+    #[cfg(feature = "compact-filters")]
+    #[allow(dead_code)]
+    fn download_filter_headers(&mut self) -> Result<(), WireError> {
+        use floresta_compact_filters::FilterHeadersStore;
+
+        let Some(block_filters) = &self.common.filter_store else {
+            return Ok(());
+        };
+
+        if self.inflight.contains_key(&InflightRequests::GetFilterHeaders) {
+            return Ok(());
+        }
+
+        let filter_height = block_filters.get_height().unwrap_or(0);
+        let checkpoint = self.config.assume_utreexo.as_ref().map(|assume_utreexo_value| assume_utreexo_value.height).unwrap_or(0);
+        // We only download stuff up to our checkpoint, after that we will download
+        // those blocks and build the filters ourselves
+        if filter_height >= self.chain.get_height()? || filter_height > checkpoint {
+            return Ok(());
+        }
+
+        debug!("Requesting filter headers from height {}", filter_height + 1);
+
+        let best_block_hash = self.chain.get_best_block()?.1;
+        let peer = self.send_to_random_peer(
+            NodeRequest::GetFilterHeaders(filter_height + 1, best_block_hash),
+            ServiceFlags::COMPACT_FILTERS,
+        )?;
+
+        self.inflight
+            .insert(InflightRequests::GetFilterHeaders, (peer, Instant::now()));
+
+        Ok(())
+    }
+
     fn ask_missed_block(&mut self) -> Result<(), WireError> {
         let tip = self.chain.get_height().unwrap();
         let next = self.chain.get_validation_index().unwrap();
@@ -524,6 +561,10 @@ where
                     PeerMessages::UtreexoProof(uproof) => {
                         self.attach_proof(uproof, peer)?;
                         self.process_pending_blocks()?;
+                    }
+
+                    PeerMessages::FilterHeader(_) => {
+                        // Running node doesn't handle filter headers
                     }
 
                     PeerMessages::NewBlock(block) => {
@@ -646,11 +687,6 @@ where
                         self.address_man.push_addresses(&addresses);
                     }
 
-                    PeerMessages::BlockFilter((hash, _filter)) => {
-                        debug!("Got a block filter for block {hash} from peer {peer}");
-                        // TODO
-                    }
-
                     PeerMessages::NotFound(inv) => match inv {
                         Inventory::Error => {}
                         Inventory::Block(block)
@@ -675,7 +711,11 @@ where
                                     .unwrap();
                             }
                         }
-                        _ => {}
+
+                        i => {
+                            warn!("Got NotFound for an unrequested inv {i:?} from peer {peer}");
+                            self.increase_banscore(peer, 1)?;
+                        }
                     },
 
                     PeerMessages::Transaction(tx) => {
@@ -693,6 +733,11 @@ where
 
                     PeerMessages::UtreexoState(_) => {
                         warn!("Utreexo state received from peer {peer}, but we didn't ask",);
+                        self.increase_banscore(peer, 5)?;
+                    }
+
+                    PeerMessages::BlockFilter(_) => {
+                        warn!("Block filter received from peer {peer}, but we didn't ask",);
                         self.increase_banscore(peer, 5)?;
                     }
                 }

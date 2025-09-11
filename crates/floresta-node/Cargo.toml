@@ -41,7 +41,7 @@ libc = "0.2"
 libc = "0.2"
 
 [features]
-compact-filters = ["dep:floresta-compact-filters"]
+compact-filters = ["dep:floresta-compact-filters", "floresta-wire/compact-filters"]
 zmq-server = ["dep:zmq"]
 json-rpc = ["dep:axum", "dep:tower-http", "compact-filters"]
 default = ["json-rpc"]

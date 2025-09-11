@@ -343,11 +343,6 @@ impl FlatFilterStore {
         self.len += FilterDescriptor::FILTER_DESCRIPTOR_SIZE;
         Ok(())
     }
-
-    /// Computes the current height of the filter headers store.
-    fn get_height(&self) -> Result<u32, FlatFilterStoreError> {
-        Ok(self.len / FilterDescriptor::FILTER_DESCRIPTOR_SIZE)
-    }
 }
 
 impl FilterHeadersStore for FlatFilterStore {
@@ -377,7 +372,7 @@ impl FilterHeadersStore for FlatFilterStore {
     }
 
     fn get_height(&self) -> Result<u32, FlatFilterStoreError> {
-        Self::get_height(self)
+        Ok(self.len / FilterDescriptor::FILTER_DESCRIPTOR_SIZE)
     }
 
     fn get_filter(&mut self, _height: u32) -> Result<Option<BlockFilter>, FlatFilterStoreError> {
