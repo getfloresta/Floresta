@@ -26,6 +26,7 @@ use bitcoin::Txid;
 pub(crate) use blocks::InflightBlock;
 use floresta_chain::ChainBackend;
 use floresta_common::Ema;
+use floresta_compact_filters::FilterHeadersStore;
 use floresta_mempool::Mempool;
 pub use peer_man::AddedPeerInfo;
 use running_ctx::RunningNode;
@@ -100,6 +101,8 @@ pub enum NodeRequest {
     /// Proof hashes are the hashes needed to reconstruct the proof, while
     /// leaf data are the actual data of the leaves (i.e., the txouts).
     GetBlockProof((BlockHash, Bitmap, Bitmap)),
+
+    GetFilterHeaders((u32, BlockHash)),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -121,6 +124,8 @@ pub(crate) enum InflightRequests {
 
     /// Requests the peer to send us the utreexo proof for a given block
     UtreexoProof(BlockHash),
+
+    GetFilterHeaders,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -201,6 +206,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) chain: Chain,
     pub(crate) blocks: HashMap<BlockHash, InflightBlock>,
     pub(crate) mempool: Arc<tokio::sync::Mutex<Mempool>>,
+    pub(crate) filter_headers: Option<Box<dyn FilterHeadersStore + Send + Sync>>,
 
     // 2. Peer Management
     pub(crate) peer_id_count: u32,
@@ -287,6 +293,7 @@ where
         config: UtreexoNodeConfig,
         chain: Chain,
         mempool: Arc<Mutex<Mempool>>,
+        filter_headers: Option<Box<dyn FilterHeadersStore + Send + Sync + 'static>>,
         kill_signal: Arc<tokio::sync::RwLock<bool>>,
         address_man: AddressMan,
     ) -> Result<Self, WireError> {
@@ -301,6 +308,7 @@ where
 
         Ok(UtreexoNode {
             common: NodeCommon {
+                filter_headers,
                 last_dns_seed_call: Instant::now(),
                 startup_time: Instant::now(),
                 // The last 1k blocks account for 50% of the EMA weight, the last 2k for 75%, etc.

@@ -10,11 +10,11 @@ use bitcoin::bip158::BlockFilter;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::BlockHash;
-use floresta_chain::proof_util;
+use floresta_chain::proof_util::UtreexoLeafError;
 use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
-use floresta_chain::ThreadSafeChain;
+use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use rand::random;
@@ -77,9 +77,9 @@ impl Default for RunningNode {
 
 impl<Chain> UtreexoNode<Chain, RunningNode>
 where
-    Chain: ThreadSafeChain + Clone,
+    Chain: ChainBackend + Clone + Send + 'static,
+    Chain::Error: From<UtreexoLeafError>,
     WireError: From<Chain::Error>,
-    Chain::Error: From<proof_util::UtreexoLeafError>,
 {
     fn send_addresses(&mut self) -> Result<(), WireError> {
         let addresses = self
@@ -221,6 +221,7 @@ where
             self.config.clone(),
             chain,
             self.mempool.clone(),
+            None,
             self.kill_signal.clone(),
             self.address_man.clone(),
         )
@@ -551,6 +552,10 @@ where
                         self.process_pending_blocks()?;
                     }
 
+                    PeerMessages::FilterHeader(_) => {
+                        // Running node doesn't handle filter headers
+                    }
+
                     PeerMessages::NewBlock(block) => {
                         debug!("We got an inv with block {block} requesting it");
                         self.context
@@ -669,11 +674,6 @@ where
                             addresses.into_iter().map(|addr| addr.into()).collect();
 
                         self.address_man.push_addresses(&addresses);
-                    }
-
-                    PeerMessages::BlockFilter((hash, _filter)) => {
-                        debug!("Got a block filter for block {hash} from peer {peer}");
-                        // TODO
                     }
 
                     _ => unreachable!("Error: `handle_peer_msg_common` should have handled remaining PeerMessages"),

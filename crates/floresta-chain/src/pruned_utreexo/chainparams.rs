@@ -111,6 +111,12 @@ pub struct AssumeUtreexoValue {
 
     /// The number of leaves in the Utreexo accumulator at this block
     pub leaves: u64,
+
+    /// Optional: the filter header for the block filter at the assumeutreexo block
+    ///
+    /// We use this value to verify that the filters we get from our peers are correct,
+    /// without this, they can give us incorrect filters and we won't be able to detect it.
+    pub filter_header: Option<BlockHash>,
 }
 
 impl ChainParams {
@@ -147,30 +153,35 @@ impl ChainParams {
                 ]
                 .to_vec(),
                 leaves: 2860457445,
+                filter_header: None,
             },
             Network::Testnet => AssumeUtreexoValue {
                 block_hash: genesis.block_hash(),
                 height: 0,
                 leaves: 0,
                 roots: Vec::new(),
+                filter_header: None,
             },
             Network::Testnet4 => AssumeUtreexoValue {
                 block_hash: genesis.block_hash(),
                 height: 0,
                 leaves: 0,
                 roots: Vec::new(),
+                filter_header: None,
             },
             Network::Signet => AssumeUtreexoValue {
                 block_hash: genesis.block_hash(),
                 height: 0,
                 leaves: 0,
                 roots: Vec::new(),
+                filter_header: None,
             },
             Network::Regtest => AssumeUtreexoValue {
                 block_hash: genesis.block_hash(),
                 height: 0,
                 leaves: 0,
                 roots: Vec::new(),
+                filter_header: None,
             },
         }
     }

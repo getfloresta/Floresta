@@ -46,15 +46,19 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Add;
 use std::time::Duration;
 use std::time::Instant;
 
 use bitcoin::block::Header;
 use bitcoin::consensus::deserialize;
+use bitcoin::hashes::Hash;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::FilterHeader;
 use floresta_chain::proof_util;
+use floresta_chain::proof_util::UtreexoLeafError;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
 use floresta_common::service_flags;
@@ -74,6 +78,7 @@ use crate::address_man::AddressState;
 use crate::block_proof::Bitmap;
 use crate::node::periodic_job;
 use crate::node::try_and_log;
+use crate::node::ConnectionKind;
 use crate::node::InflightBlock;
 use crate::node::InflightRequests;
 use crate::node::NodeNotification;
@@ -106,14 +111,20 @@ pub enum ChainSelectorState {
     #[default]
     /// We are opening connection with some peers
     CreatingConnections,
+
     /// We are downloading headers from only one peer, assuming this peer is honest
     DownloadingHeaders,
+
     /// We've downloaded all headers, and now we are checking with our peers if they
     /// have an alternative tip with more PoW. Very unlikely, but we shouldn't trust
     /// only one peer...
     LookingForForks(Instant),
+
     /// We've downloaded all headers
     Done,
+
+    /// We are downloading filter headers, if enabled
+    DownloadingFilterHeaders,
 }
 
 pub enum FindAccResult {
@@ -149,7 +160,7 @@ impl<Chain> UtreexoNode<Chain, ChainSelector>
 where
     Chain: ChainBackend + 'static,
     WireError: From<Chain::Error>,
-    Chain::Error: From<proof_util::UtreexoLeafError>,
+    Chain::Error: From<UtreexoLeafError>,
 {
     /// This function is called every time we get a `Headers` message from a peer.
     /// It will validate the headers and add them to our chain, if they are valid.
@@ -194,6 +205,48 @@ where
             .or_insert(last);
 
         self.request_headers(last)
+    }
+
+    fn request_filter_headers(&mut self) -> Result<(), WireError> {
+        let Some(cfilters) = self.filter_headers.as_ref() else {
+            return Ok(());
+        };
+
+        if self
+            .inflight
+            .contains_key(&InflightRequests::GetFilterHeaders)
+        {
+            // We already sent a request for filter headers, we just need to wait for the response
+            return Ok(());
+        }
+
+        if !self.has_compact_filters_peer() {
+            self.create_connection(ConnectionKind::Regular(ServiceFlags::COMPACT_FILTERS))?;
+            return Ok(());
+        }
+
+        let filters_current_height = cfilters.get_height()?.unwrap_or(0);
+        let chain_best_height = self.chain.get_best_block()?.0;
+
+        let start_height = filters_current_height + 1;
+        let stop_height = filters_current_height.add(2_000).min(chain_best_height);
+        let stop_hash = self.chain.get_block_hash(stop_height)?;
+
+        if start_height >= stop_height {
+            info!("Finished downloading filter headers");
+            self.context.state = ChainSelectorState::Done;
+            return Ok(());
+        }
+
+        let peer = self.send_to_fast_peer(
+            NodeRequest::GetFilterHeaders((start_height, stop_hash)),
+            ServiceFlags::COMPACT_FILTERS,
+        )?;
+
+        self.inflight
+            .insert(InflightRequests::GetFilterHeaders, (peer, Instant::now()));
+
+        Ok(())
     }
 
     /// Takes a serialized accumulator and parses it into a Stump
@@ -616,7 +669,7 @@ where
                 }
 
                 if let Some(assume_utreexo) = self.common.config.assume_utreexo.as_ref() {
-                    self.context.state = ChainSelectorState::Done;
+                    self.context.state = ChainSelectorState::DownloadingFilterHeaders;
                     // already assumed the chain
                     if self.chain.get_validation_index().unwrap() >= assume_utreexo.height {
                         return Ok(());
@@ -642,7 +695,7 @@ where
                     self.check_tips().await?;
                 }
 
-                self.context.state = ChainSelectorState::Done;
+                self.context.state = ChainSelectorState::DownloadingFilterHeaders;
             }
             _ => {}
         }
@@ -719,7 +772,7 @@ where
                     self.chain.get_best_block()?.0
                 );
 
-                self.context.state = ChainSelectorState::Done;
+                self.context.state = ChainSelectorState::DownloadingFilterHeaders;
                 self.chain.mark_chain_as_assumed(acc, tips[0]).unwrap();
                 self.chain.toggle_ibd(false);
             }
@@ -733,7 +786,7 @@ where
         }
 
         info!("chain close enough to tip, not asking for utreexo state");
-        self.context.state = ChainSelectorState::Done;
+        self.context.state = ChainSelectorState::DownloadingFilterHeaders;
         Ok(())
     }
 
@@ -835,6 +888,10 @@ where
                 self.context.state = ChainSelectorState::LookingForForks(Instant::now());
                 self.poke_peers()?;
             }
+        }
+
+        if let ChainSelectorState::DownloadingFilterHeaders = self.context.state {
+            try_and_log!(self.request_filter_headers());
         }
 
         if self.context.state == ChainSelectorState::CreatingConnections {
@@ -993,6 +1050,38 @@ where
                     error!("peer {peer} sent us a block we didn't request");
                     self.increase_banscore(peer, 5)?;
                 }
+            }
+
+            PeerMessages::FilterHeader(headers) => {
+                self.inflight.remove(&InflightRequests::GetFilterHeaders);
+
+                let Some(cfilters) = self.filter_headers.as_mut() else {
+                    error!("peer {peer} sent us a filter header when we didn't ask for it");
+                    self.increase_banscore(peer, 5)?;
+                    return Ok(());
+                };
+
+                let best_filter_header = cfilters
+                    .get_height()?
+                    .map(|height| cfilters.get_filter_header(height))
+                    .transpose()?
+                    .unwrap_or(FilterHeader::all_zeros());
+
+                if headers.previous_filter_header != best_filter_header {
+                    error!("peer {peer} sent us filter headers that don't connect to our current chain");
+                    self.increase_banscore(peer, 5)?;
+                    return Ok(());
+                }
+
+                let mut prev_filter_header = best_filter_header;
+                for hash in headers.filter_hashes {
+                    prev_filter_header = hash.filter_header(&prev_filter_header);
+                    cfilters.put_filter_header(prev_filter_header)?;
+                }
+
+                cfilters.flush()?;
+
+                self.request_filter_headers()?;
             }
 
             _ => {}

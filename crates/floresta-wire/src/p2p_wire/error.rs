@@ -1,11 +1,12 @@
+use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::fmt::{self};
 use std::io;
 use std::net::IpAddr;
 
 use floresta_chain::BlockchainError;
 use floresta_common::impl_error_from;
+use floresta_compact_filters::FlatFilterStoreError;
 use tokio::sync::mpsc::error::SendError;
 
 use super::peer::PeerError;
@@ -84,11 +85,15 @@ pub enum WireError {
 
     /// Couldn't find the leaf data for a block
     LeafDataNotFound,
+
+    /// Our cfilters store returned an error
+    CFiltersStore(FlatFilterStoreError),
 }
 
 impl std::fmt::Display for WireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            WireError::CFiltersStore(err) => write!(f, "Cfilters store error: {err:?}"),
             WireError::Blockchain(err) => write!(f, "Blockchain error: {err:?}"),
             WireError::ChannelSend(err) => write!(f, "Error while writing into channel: {err:?}"),
             WireError::PeerError(err) => write!(f, "Peer error: {err:?}"),
@@ -129,6 +134,7 @@ impl std::fmt::Display for WireError {
     }
 }
 
+impl_error_from!(WireError, FlatFilterStoreError, CFiltersStore);
 impl_error_from!(WireError, PeerError, PeerError);
 impl_error_from!(WireError, BlockchainError, Blockchain);
 impl_error_from!(WireError, AddrParseError, InvalidAddress);

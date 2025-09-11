@@ -113,7 +113,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .collect::<Vec<_>>();
 
         debug!("Rescanning with block filters for addresses: {addresses:?}");
-        Ok(true)
+        todo!()
     }
 
     fn rescan_blockchain(
@@ -142,7 +142,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::NoAddressesToRescan);
         }
 
-        Ok(true)
+        todo!()
     }
 
     async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {

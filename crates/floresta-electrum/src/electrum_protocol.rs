@@ -520,16 +520,15 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             for (block, height) in blocks.recv() {
                 self.handle_block(block, height);
             }
+
             // handles client requests
-            while let Ok(request) = tokio::time::timeout(
+            let fut = tokio::time::timeout(
                 std::time::Duration::from_secs(1),
                 self.message_receiver.recv(),
-            )
-            .await
-            {
-                if let Some(message) = request {
-                    self.handle_message(message).await?;
-                }
+            );
+
+            if let Ok(Some(message)) = fut.await {
+                self.handle_message(message).await?;
             }
 
             // rescan for new addresses, if any
@@ -609,7 +608,6 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         }
 
         let transactions = self.address_cache.block_process(&block, height);
-
         self.wallet_notify(&transactions);
     }
 
@@ -995,6 +993,7 @@ mod test {
                 u_config,
                 chain.clone(),
                 Arc::new(Mutex::new(Mempool::new(MEMPOOL_SIZE))),
+                None,
                 Arc::new(RwLock::new(false)),
                 AddressMan::default(),
             )

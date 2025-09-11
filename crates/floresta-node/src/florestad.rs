@@ -393,6 +393,28 @@ impl Florestad {
             .map(|addr| Self::resolve_hostname(addr, 9050))
             .transpose()?;
 
+        #[cfg(feature = "compact-filters")]
+        let cfilters = self
+            .config
+            .cfilters
+            .then(|| {
+                use floresta_compact_filters::FilterHeadersStore;
+                use floresta_compact_filters::FlatFilterStore;
+
+                use crate::error;
+
+                let data_dir = format!("{data_dir}/cfilters");
+                let path = PathBuf::from(data_dir);
+
+                // Things I hate in Rust, case #1000000:
+                Ok::<_, error::FlorestadError>(Box::new(FlatFilterStore::new(&path)?)
+                    as Box<dyn FilterHeadersStore + Send + Sync + 'static>)
+            })
+            .transpose()?;
+
+        #[cfg(not(feature = "compact-filters"))]
+        let cfilters = None;
+
         let config = UtreexoNodeConfig {
             disable_dns_seeds: self.config.disable_dns_seeds,
             network: self.config.network,
@@ -418,6 +440,7 @@ impl Florestad {
             Arc::new(tokio::sync::Mutex::new(Mempool::new(
                 DEFAULT_MEMPOOL_MAX_SIZE_BYTES,
             ))),
+            cfilters,
             kill_signal.clone(),
             AddressMan::default(),
         )
