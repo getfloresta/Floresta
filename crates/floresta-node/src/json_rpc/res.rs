@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use axum::response::IntoResponse;
+use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
 use floresta_chain::extensions::HeaderExtError;
 use floresta_common::impl_error_from;
@@ -126,6 +127,13 @@ pub enum GetBlockRes {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum GetBlockHeaderRes {
+    Zero(String),
+    One(Box<GetBlockHeaderVerbose>),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RpcError {
     pub code: i32,
     pub message: String,
@@ -220,6 +228,8 @@ pub enum JsonRpcError {
 
     /// Something went wrong when attempting to publish a transaction to mempool
     MempoolAccept(AcceptToMempoolError),
+
+    ToValue(serde_json::Error),
 }
 
 impl_error_from!(JsonRpcError, AcceptToMempoolError, MempoolAccept);
@@ -254,6 +264,7 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidDisconnectNodeCommand => write!(f, "Invalid disconnectnode command"),
             JsonRpcError::PeerNotFound => write!(f, "Peer not found in the peer list"),
             JsonRpcError::MempoolAccept(e) => write!(f, "Could not send transaction to mempool due to {e}"),
+            JsonRpcError::ToValue(e) => write!(f, "Failed to parse JSON: {e}")
         }
     }
 }

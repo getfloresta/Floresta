@@ -43,6 +43,7 @@ mod tests {
 
     use crate::jsonrpc_client::Client;
     use crate::rpc::FlorestaRPC;
+    use crate::rpc_types::GetBlockHeaderVerbose;
     use crate::rpc_types::GetBlockRes;
 
     struct Florestad {
@@ -222,13 +223,57 @@ mod tests {
     }
 
     #[test]
-    fn test_get_block_header() {
+    fn test_get_block_header_hex() {
         let (_proc, client) = start_florestad();
 
+        // First not verbose
         let blockhash = client.get_block_hash(0).expect("rpc not working");
-        let block_header = client.get_block_header(blockhash).expect("rpc not working");
+        let blockheader = client
+            .get_block_header(blockhash, false)
+            .expect("rpc not working");
 
-        assert_eq!(block_header.block_hash(), blockhash);
+        let blockheader_value = serde_json::to_value(blockheader).expect("serde not working");
+
+        assert_eq!(
+            "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000",
+            blockheader_value
+        );
+    }
+
+    #[test]
+    fn test_get_block_header_json() {
+        let (_proc, client) = start_florestad();
+
+        // Then verbose
+        let blockhash = client.get_block_hash(0).expect("rpc not working");
+        let blockheader = client
+            .get_block_header(blockhash, true)
+            .expect("rpc not working");
+
+        let blockheader_value = serde_json::to_value(blockheader).expect("serde not working");
+        let expected = serde_json::to_value(GetBlockHeaderVerbose {
+            bits: "207fffff".to_string(),
+            chain_work: "0000000000000000000000000000000000000000000000000000000000000002"
+                .to_string(),
+            confirmations: 1,
+            difficulty: 4.6565423739069247e-10,
+            hash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206".to_string(),
+            height: 0,
+            median_time: 1296688602,
+            merkle_root: "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+                .to_string(),
+            n_tx: 1,
+            nonce: 2,
+            target: "7fffff0000000000000000000000000000000000000000000000000000000000".to_string(),
+            time: 1296688602,
+            version: 1,
+            version_hex: "00000001".to_string(),
+            next_block_hash: None,
+            previous_block_hash: None,
+        })
+        .expect("serde_json not working");
+
+        assert_eq!(blockheader_value, expected);
     }
 
     #[test]

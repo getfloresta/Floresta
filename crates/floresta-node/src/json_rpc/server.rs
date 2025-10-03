@@ -140,15 +140,16 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         Ok(true)
     }
 
-    fn rescan_blockchain(
+    async fn rescan_blockchain(
         &self,
         start: Option<u32>,
         stop: Option<u32>,
         use_timestamp: bool,
         confidence: Option<RescanConfidence>,
     ) -> Result<bool> {
-        let (start_height, stop_height) =
-            self.get_rescan_interval(use_timestamp, start, stop, confidence)?;
+        let (start_height, stop_height) = self
+            .get_rescan_interval(use_timestamp, start, stop, confidence)
+            .await?;
 
         if stop_height != 0 && start_height >= stop_height {
             // When stop height is a non zero value it needs atleast to be greater than start_height.
@@ -201,6 +202,17 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .await
             .map_err(|e| JsonRpcError::Node(e.to_string()))??)
     }
+
+    async fn get_block(&self, hash: BlockHash, verbosity: u8) -> Result<Value> {
+        let res = self.get_block_res_verbose(hash, verbosity).await?;
+        serde_json::to_value(res).map_err(JsonRpcError::ToValue)
+    }
+
+    async fn get_blockheader(&self, hash: BlockHash, verbose: bool) -> Result<Value> {
+        let verbosity = if verbose { 1u8 } else { 0u8 };
+        let res = self.get_block_header(hash, verbosity).await?;
+        serde_json::to_value(res).map_err(JsonRpcError::ToValue)
+    }
 }
 
 async fn handle_json_rpc_request(
@@ -241,10 +253,7 @@ async fn handle_json_rpc_request(
             let verbosity: u8 =
                 get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1);
 
-            state
-                .get_block(hash, verbosity)
-                .await
-                .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
+            state.get_block(hash, verbosity).await
         }
 
         "getblockchaininfo" => state
@@ -272,9 +281,9 @@ async fn handle_json_rpc_request(
 
         "getblockheader" => {
             let hash = get_hash(&params, 0, "block_hash")?;
-            state
-                .get_block_header(hash)
-                .map(|h| serde_json::to_value(h).unwrap())
+            let verbose = get_bool(&params, 1, "verbose")?;
+
+            state.get_blockheader(hash, verbose).await
         }
 
         "gettxout" => {
@@ -409,6 +418,7 @@ async fn handle_json_rpc_request(
 
             state
                 .rescan_blockchain(start_height, stop_height, use_timestamp, Some(confidence))
+                .await
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
@@ -456,9 +466,10 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
         | JsonRpcError::Wallet(_) => 400,
 
         // idunnolol
-        JsonRpcError::MethodNotFound | JsonRpcError::BlockNotFound | JsonRpcError::TxNotFound => {
-            404
-        }
+        JsonRpcError::MethodNotFound
+        | JsonRpcError::BlockNotFound
+        | JsonRpcError::TxNotFound
+        | JsonRpcError::ToValue(_) => 404,
 
         // we messed up, sowwy
         JsonRpcError::InInitialBlockDownload
@@ -471,7 +482,9 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
 fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
     match err {
         // Parse Error
-        JsonRpcError::Decode(_) | JsonRpcError::InvalidParameterType(_) => -32700,
+        JsonRpcError::Decode(_)
+        | JsonRpcError::InvalidParameterType(_)
+        | JsonRpcError::ToValue(_) => -32700,
 
         // Invalid Request
         JsonRpcError::InvalidHex
@@ -659,7 +672,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 hex: output.script_pubkey.to_hex_string(),
                 req_sigs: 0, // This field is deprecated
                 address: Address::from_script(&output.script_pubkey, self.network)
-                    .map(|a| a.to_string())
+                    .map(|a: Address| a.to_string())
                     .unwrap(),
                 type_: Self::get_script_type(output.script_pubkey)
                     .unwrap_or("nonstandard")
