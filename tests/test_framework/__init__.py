@@ -612,3 +612,13 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             raise AssertionError(
                 f"Actual: any({values}) !~ {pattern}\n Expected: any({values}) ~ {pattern}"
             )
+
+    def assertAlmostEqual(self, actual: int | float, expected: int | float):
+        """
+        Assert if two numeric values are nearly equal
+        """
+        if not math.isclose(actual, expected):
+            self.stop()
+            raise AssertionError(
+                f"Actual: {actual} ~ {expected}\n Expected: {actual} ~ {expected}"
+            )
