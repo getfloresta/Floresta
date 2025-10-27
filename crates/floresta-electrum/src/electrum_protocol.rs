@@ -906,7 +906,6 @@ mod test {
     use floresta_wire::UtreexoNodeConfig;
     use rcgen::generate_simple_self_signed;
     use rcgen::CertifiedKey;
-    use rustreexo::accumulator::pollard::Pollard;
     use serde_json::json;
     use serde_json::Number;
     use serde_json::Value;
@@ -1050,7 +1049,7 @@ mod test {
             UtreexoNode::new(
                 u_config,
                 chain.clone(),
-                Arc::new(Mutex::new(Mempool::new(Pollard::default(), 0))),
+                Arc::new(Mutex::new(Mempool::new(0))),
                 None,
                 Arc::new(RwLock::new(false)),
                 AddressMan::default(),

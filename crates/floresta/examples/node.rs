@@ -20,7 +20,6 @@ use floresta_chain::FlatChainStoreConfig;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::running_node::RunningNode;
 use floresta_wire::UtreexoNodeConfig;
-use rustreexo::accumulator::pollard::Pollard;
 use tokio::sync::Mutex;
 
 const DATA_DIR: &str = "./tmp-db";
@@ -63,7 +62,7 @@ async fn main() {
     let p2p: UtreexoNode<Arc<ChainState<FlatChainStore>>, RunningNode> = UtreexoNode::new(
         config,
         chain.clone(),
-        Arc::new(Mutex::new(Mempool::new(Pollard::default(), 1000))),
+        Arc::new(Mutex::new(Mempool::new(1000))),
         None,
         Arc::new(tokio::sync::RwLock::new(false)),
         AddressMan::default(),

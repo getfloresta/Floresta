@@ -57,7 +57,6 @@ use super::block_proof::Bitmap;
 use super::error::AddrParseError;
 use super::error::WireError;
 use super::mempool::Mempool;
-use super::mempool::MempoolProof;
 use super::node_context::NodeContext;
 use super::node_interface::NodeInterface;
 use super::node_interface::NodeResponse;
@@ -1651,43 +1650,8 @@ where
                 let txid = transaction.compute_txid();
                 let mut mempool = self.mempool.lock().await;
 
-                if self.network == Network::Regtest {
-                    match mempool.try_prove(&transaction, &self.chain) {
-                        Ok(proof) => {
-                            let MempoolProof {
-                                proof,
-                                target_hashes,
-                                leaves,
-                            } = proof;
-
-                            let leaves = transaction
-                                .input
-                                .iter()
-                                .map(|input| input.previous_output)
-                                .zip(leaves.into_iter())
-                                .collect::<Vec<_>>();
-
-                            let targets = proof.targets.clone();
-                            try_and_log!(mempool.accept_to_mempool(
-                                transaction,
-                                proof,
-                                &leaves,
-                                &target_hashes,
-                                &targets,
-                            ));
-                        }
-                        Err(e) => {
-                            error!(
-                                "Could not prove tx {} because: {:?}",
-                                transaction.compute_txid(),
-                                e
-                            );
-                        }
-                    }
-
-                    peer.channel
-                        .send(NodeRequest::BroadcastTransaction(txid))
-                        .map_err(WireError::ChannelSend)?;
+                if let Err(e) = mempool.accept_to_mempool(transaction) {
+                    error!("Couldn't broadcast transaction {txid} due to: {e}");
                 }
 
                 let stale = self.mempool.lock().await.get_stale();
