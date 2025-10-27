@@ -10,6 +10,7 @@ use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::Txid;
+use floresta_mempool::mempool::AcceptToMempoolError;
 use rustreexo::accumulator::proof::Proof;
 use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
@@ -39,7 +40,7 @@ pub enum AddNode {
     Onetry((IpAddr, u16)),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A request that can be made to the node.
 ///
 /// While the node is running, consumers may want to request some useful data, like block data,
@@ -87,6 +88,9 @@ pub enum UserRequest {
 
     /// Ping all connected peers to check if they are alive.
     Ping,
+
+    /// Adds a transaction to mempool and advertises it
+    SendTransaction(Transaction),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +146,9 @@ pub enum NodeResponse {
 
     /// A response indicating whether the ping was successful.
     Ping(bool),
+
+    /// Transaction broadcast
+    TransactionBroadcastResult(Result<Txid, AcceptToMempoolError>),
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +194,17 @@ impl NodeInterface {
         let config = self.send_request(UserRequest::Config).await?;
 
         extract_variant!(Config, config);
+    }
+
+    pub async fn broadcast_transaction(
+        &self,
+        transaction: Transaction,
+    ) -> Result<Result<Txid, AcceptToMempoolError>, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::SendTransaction(transaction))
+            .await?;
+
+        extract_variant!(TransactionBroadcastResult, val)
     }
 
     /// Connects to a specified address and port.

@@ -358,11 +358,11 @@ where
                     let Some(notification) = msg else {
                         break;
                     };
-                    try_and_log!(self.handle_notification(notification));
+                    try_and_log!(self.handle_notification(notification).await);
 
                     // Drain all queued messages
                     while let Ok(notification) = self.node_rx.try_recv() {
-                        try_and_log!(self.handle_notification(notification));
+                        try_and_log!(self.handle_notification(notification).await);
                     }
                 }
             }
@@ -599,10 +599,13 @@ where
         Ok(())
     }
 
-    fn handle_notification(&mut self, notification: NodeNotification) -> Result<(), WireError> {
+    async fn handle_notification(
+        &mut self,
+        notification: NodeNotification,
+    ) -> Result<(), WireError> {
         match notification {
             NodeNotification::FromUser(request, responder) => {
-                self.perform_user_request(request, responder);
+                self.perform_user_request(request, responder).await;
             }
 
             NodeNotification::DnsSeedAddresses(addresses) => {

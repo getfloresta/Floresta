@@ -354,10 +354,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn broadcast(&self, _: &Transaction) -> Result<(), Self::Error> {
-            unimplemented!()
-        }
-
         fn estimate_fee(&self, _: usize) -> Result<f64, Self::Error> {
             unimplemented!()
         }
@@ -378,15 +374,19 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_unbroadcasted(&self) -> Vec<Transaction> {
-            unimplemented!()
-        }
-
         fn is_coinbase_mature(&self, _: u32, _: BlockHash) -> Result<bool, Self::Error> {
             unimplemented!()
         }
 
         fn get_block_locator(&self) -> Result<Vec<BlockHash>, Self::Error> {
+            unimplemented!()
+        }
+
+        fn broadcast(&self, _tx: &bitcoin::Transaction) -> Result<(), Self::Error> {
+            unimplemented!()
+        }
+
+        fn get_unbroadcasted(&self) -> Vec<Transaction> {
             unimplemented!()
         }
 
