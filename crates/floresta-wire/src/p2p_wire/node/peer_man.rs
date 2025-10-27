@@ -7,18 +7,14 @@ use std::time::UNIX_EPOCH;
 use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
-use bitcoin::Network;
 use bitcoin::Transaction;
 use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
-use floresta_mempool::MempoolProof;
 use rand::prelude::SliceRandom;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use super::try_and_log;
 use super::ConnectionKind;
 use super::InflightRequests;
 use super::LocalPeerView;
@@ -154,68 +150,6 @@ where
 
     pub(crate) fn ask_for_addresses(&mut self) -> Result<(), WireError> {
         let _ = self.send_to_random_peer(NodeRequest::GetAddresses, ServiceFlags::NONE)?;
-        Ok(())
-    }
-
-    pub(crate) async fn handle_broadcast(&self) -> Result<(), WireError> {
-        for (_, peer) in self.peers.iter() {
-            if peer.services.has(ServiceFlags::from(1 << 24)) {
-                continue;
-            }
-
-            let transactions = self.chain.get_unbroadcasted();
-
-            for transaction in transactions {
-                let txid = transaction.compute_txid();
-                let mut mempool = self.mempool.lock().await;
-
-                if self.network == Network::Regtest {
-                    match mempool.try_prove(&transaction, &self.chain) {
-                        Ok(proof) => {
-                            let MempoolProof {
-                                proof,
-                                target_hashes,
-                                leaves,
-                            } = proof;
-
-                            let leaves = transaction
-                                .input
-                                .iter()
-                                .map(|input| input.previous_output)
-                                .zip(leaves.into_iter())
-                                .collect::<Vec<_>>();
-
-                            let targets = proof.targets.clone();
-                            try_and_log!(mempool.accept_to_mempool(
-                                transaction,
-                                proof,
-                                &leaves,
-                                &target_hashes,
-                                &targets,
-                            ));
-                        }
-                        Err(e) => {
-                            error!(
-                                "Could not prove tx {} because: {:?}",
-                                transaction.compute_txid(),
-                                e
-                            );
-                        }
-                    }
-
-                    peer.channel
-                        .send(NodeRequest::BroadcastTransaction(txid))
-                        .map_err(WireError::ChannelSend)?;
-                }
-
-                let stale = self.mempool.lock().await.get_stale();
-                for tx in stale {
-                    peer.channel
-                        .send(NodeRequest::BroadcastTransaction(tx))
-                        .map_err(WireError::ChannelSend)?;
-                }
-            }
-        }
         Ok(())
     }
 
