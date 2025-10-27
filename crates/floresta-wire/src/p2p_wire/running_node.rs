@@ -338,7 +338,7 @@ where
             while let Ok(Some(notification)) =
                 timeout(Duration::from_millis(100), self.node_rx.recv()).await
             {
-                try_and_log!(self.handle_notification(notification));
+                try_and_log!(self.handle_notification(notification).await);
             }
 
             // Jobs that don't need a connected peer
@@ -390,13 +390,6 @@ where
                 self.ask_for_addresses(),
                 self.last_get_address_request,
                 ASK_FOR_PEERS_INTERVAL,
-                RunningNode
-            );
-            // Try broadcast transactions
-            periodic_job!(
-                self.handle_broadcast().await,
-                self.last_broadcast,
-                BROADCAST_DELAY,
                 RunningNode
             );
             // Send our addresses to our peers
@@ -582,10 +575,13 @@ where
         Ok(())
     }
 
-    fn handle_notification(&mut self, notification: NodeNotification) -> Result<(), WireError> {
+    async fn handle_notification(
+        &mut self,
+        notification: NodeNotification,
+    ) -> Result<(), WireError> {
         match notification {
             NodeNotification::FromUser(request, responder) => {
-                self.perform_user_request(request, responder);
+                self.perform_user_request(request, responder).await;
             }
 
             NodeNotification::DnsSeedAddresses(addresses) => {

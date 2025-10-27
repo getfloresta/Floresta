@@ -184,7 +184,7 @@ where
 
         loop {
             while let Ok(Some(msg)) = timeout(Duration::from_secs(1), self.node_rx.recv()).await {
-                try_and_log!(self.handle_message(msg));
+                try_and_log!(self.handle_message(msg).await);
             }
 
             if *self.kill_signal.read().await {
@@ -253,10 +253,10 @@ where
     }
 
     /// Process a message from a peer and handle it accordingly between the variants of [`PeerMessages`].
-    fn handle_message(&mut self, msg: NodeNotification) -> Result<(), WireError> {
+    async fn handle_message(&mut self, msg: NodeNotification) -> Result<(), WireError> {
         match msg {
             NodeNotification::FromUser(request, responder) => {
-                self.perform_user_request(request, responder);
+                self.perform_user_request(request, responder).await;
             }
 
             NodeNotification::DnsSeedAddresses(addresses) => {
