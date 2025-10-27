@@ -107,7 +107,7 @@ pub struct PeerInfo {
     pub transport_protocol: TransportProtocol,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// A response that can be sent back to the user.
 ///
 /// When the user makes a request to the node, the node will respond with some data. This enum

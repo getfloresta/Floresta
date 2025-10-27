@@ -1101,6 +1101,7 @@ dependencies = [
  "floresta-common",
  "rand",
  "rustreexo",
+ "tracing",
 ]
 
 [[package]]

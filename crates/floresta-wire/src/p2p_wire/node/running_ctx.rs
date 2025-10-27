@@ -428,11 +428,7 @@ where
             self.last_get_address_request => self.ask_for_addresses(),
             RunningNode::ASK_FOR_PEERS_INTERVAL,
         );
-        // Try broadcast transactions
-        periodic_job!(
-            self.last_broadcast => self.handle_broadcast().await,
-            RunningNode::BROADCAST_DELAY,
-        );
+
         // Send our addresses to our peers
         periodic_job!(
             self.last_send_addresses => self.send_addresses(),
