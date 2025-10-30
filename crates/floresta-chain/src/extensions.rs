@@ -382,14 +382,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn broadcast(&self, _tx: &bitcoin::Transaction) -> Result<(), Self::Error> {
-            unimplemented!()
-        }
-
-        fn get_unbroadcasted(&self) -> Vec<Transaction> {
-            unimplemented!()
-        }
-
         fn get_block_locator_for_tip(
             &self,
             _: BlockHash,

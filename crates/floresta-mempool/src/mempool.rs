@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::time::Duration;
@@ -100,6 +101,8 @@ impl Display for AcceptToMempoolError {
         }
     }
 }
+
+impl Error for AcceptToMempoolError {}
 
 impl Mempool {
     /// Creates a new mempool with a given maximum size
@@ -365,7 +368,6 @@ mod tests {
     use std::collections::HashSet;
     use std::str::FromStr;
 
-    use bitcoin::Txid;
     use bitcoin::absolute;
     use bitcoin::block;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -377,6 +379,7 @@ mod tests {
     use bitcoin::Sequence;
     use bitcoin::Target;
     use bitcoin::Transaction;
+    use bitcoin::Txid;
     use bitcoin::Witness;
     use floresta_common::bhash;
     use rand::Rng;
@@ -537,7 +540,7 @@ mod tests {
         //
         // The hash is simply the result of the command `echo Satoshi | sha256sum`
         let dummy_input = OutPoint {
-            txid:  Txid::all_zeros(),
+            txid: Txid::all_zeros(),
             vout: 0,
         };
         outputs.insert(dummy_input);

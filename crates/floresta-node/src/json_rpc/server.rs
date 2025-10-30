@@ -18,6 +18,7 @@ use bitcoin::Address;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
+use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
@@ -218,12 +219,16 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         Ok(true)
     }
 
-    fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
+    async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
         let tx_hex = Vec::from_hex(&tx).map_err(|_| JsonRpcError::InvalidHex)?;
-        let tx = deserialize(&tx_hex).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
-        self.chain.broadcast(&tx).map_err(|_| JsonRpcError::Chain)?;
+        let tx: Transaction =
+            deserialize(&tx_hex).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
 
-        Ok(tx.compute_txid())
+        Ok(self
+            .node
+            .broadcast_transaction(tx)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))??)
     }
 
     async fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
@@ -449,6 +454,7 @@ async fn handle_json_rpc_request(
             let tx = get_string(&params, 0, "hex")?;
             state
                 .send_raw_transaction(tx)
+                .await
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
@@ -483,6 +489,7 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
         | JsonRpcError::InvalidParameterType(_)
         | JsonRpcError::MissingParameter(_)
         | JsonRpcError::ChainWorkOverflow
+        | JsonRpcError::MempoolAccept(_)
         | JsonRpcError::Wallet(_) => 400,
 
         // idunnolol
@@ -521,7 +528,8 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
         | JsonRpcError::InvalidRescanVal
         | JsonRpcError::NoAddressesToRescan
         | JsonRpcError::ChainWorkOverflow
-        | JsonRpcError::Wallet(_) => -32600,
+        | JsonRpcError::Wallet(_)
+        | JsonRpcError::MempoolAccept(_) => -32600,
 
         // server error
         JsonRpcError::InInitialBlockDownload
