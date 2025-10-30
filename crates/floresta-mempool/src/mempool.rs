@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::time::Duration;
@@ -100,6 +101,8 @@ impl Display for AcceptToMempoolError {
         }
     }
 }
+
+impl Error for AcceptToMempoolError {}
 
 impl Mempool {
     /// Creates a new mempool with a given maximum size
