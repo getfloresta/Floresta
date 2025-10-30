@@ -3,6 +3,7 @@ use std::fmt::Display;
 use axum::response::IntoResponse;
 use floresta_chain::extensions::HeaderExtError;
 use floresta_common::impl_error_from;
+use floresta_wire::mempool::AcceptToMempoolError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -320,7 +321,12 @@ pub enum JsonRpcError {
 
     /// Raised if when the rescanblockchain command, with the timestamp flag activated, contains some timestamp thats less than the genesis one and not zero which is the default value for this arg.
     InvalidTimestamp,
+
+    /// Something went wrong when attempting to publish a transaction to mempool
+    MempoolAccept(AcceptToMempoolError),
 }
+
+impl_error_from!(JsonRpcError, AcceptToMempoolError, MempoolAccept);
 
 impl Display for JsonRpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -350,6 +356,7 @@ impl Display for JsonRpcError {
             JsonRpcError::Filters(e) => write!(f, "Error with filters: {e}"),
             JsonRpcError::ChainWorkOverflow => write!(f, "Overflow while calculating the chain work"),
             JsonRpcError::InvalidAddnodeCommand => write!(f, "Invalid addnode command"),
+            JsonRpcError::MempoolAccept(e) => write!(f, "Could not send transaction to mempool due to {e}"),
         }
     }
 }

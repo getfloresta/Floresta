@@ -33,6 +33,7 @@ use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Target;
 use bitcoin::Transaction;
+use bitcoin::Txid;
 use bitcoin::Work;
 use floresta_common::Channel;
 #[cfg(feature = "metrics")]
@@ -116,10 +117,6 @@ pub struct ChainStateInner<PersistedState: ChainStore> {
     chainstore: PersistedState,
     /// Best known block, cached in a specific field to faster access.
     best_block: BestChain,
-    /// When one of our consumers tries to broadcast a transaction, this transaction gets
-    /// written to broadcast_queue, and the ChainStateBackend can use it's own logic to actually
-    /// broadcast the tx.
-    broadcast_queue: Vec<Transaction>,
     /// We may have multiple modules that needs to receive and process blocks as they come, to
     /// be notified of new blocks, a module should implement the [BlockConsumer] trait, and
     /// subscribe by passing an [Arc] of itself to chainstate.
@@ -553,7 +550,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
                     validation_index: genesis.block_hash(),
                     alternative_tips: Vec::new(),
                 },
-                broadcast_queue: Vec::new(),
                 subscribers: Vec::new(),
                 fee_estimation: (1_f64, 1_f64, 1_f64),
                 ibd: true,
@@ -715,7 +711,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let inner = ChainStateInner {
             acc,
             best_block,
-            broadcast_queue: Vec::new(),
             chainstore,
             fee_estimation: (1_f64, 1_f64, 1_f64),
             subscribers: Vec::new(),
@@ -1101,26 +1096,20 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
             .map(|header| header.height())
     }
 
-    fn get_block_hash(&self, height: u32) -> Result<bitcoin::BlockHash, Self::Error> {
+    fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
         read_lock!(self)
             .chainstore
             .get_block_hash(height)?
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
-    fn get_tx(&self, _txid: &bitcoin::Txid) -> Result<Option<bitcoin::Transaction>, Self::Error> {
+    fn get_tx(&self, _txid: &Txid) -> Result<Option<Transaction>, Self::Error> {
         unimplemented!("This chainstate doesn't hold any tx")
     }
 
     fn get_height(&self) -> Result<u32, Self::Error> {
         let inner = read_lock!(self);
         Ok(inner.best_block.depth)
-    }
-
-    fn broadcast(&self, tx: &bitcoin::Transaction) -> Result<(), Self::Error> {
-        let mut inner = write_lock!(self);
-        inner.broadcast_queue.push(tx.clone());
-        Ok(())
     }
 
     fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error> {
@@ -1134,7 +1123,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         }
     }
 
-    fn get_block(&self, _hash: &BlockHash) -> Result<bitcoin::Block, Self::Error> {
+    fn get_block(&self, _hash: &BlockHash) -> Result<Block, Self::Error> {
         unimplemented!("This chainstate doesn't hold full blocks")
     }
 
@@ -1143,7 +1132,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         Ok((inner.best_block.depth, inner.best_block.best_block))
     }
 
-    fn get_block_header(&self, hash: &BlockHash) -> Result<bitcoin::block::Header, Self::Error> {
+    fn get_block_header(&self, hash: &BlockHash) -> Result<BlockHeader, Self::Error> {
         let inner = read_lock!(self);
         if let Some(header) = inner.chainstore.get_header(hash)? {
             return Ok(*header);
@@ -1199,12 +1188,8 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
 
         Ok(height + chain_params.coinbase_maturity <= current_height)
     }
-
-    fn get_unbroadcasted(&self) -> Vec<Transaction> {
-        let mut inner = write_lock!(self);
-        inner.broadcast_queue.drain(..).collect()
-    }
 }
+
 impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedState> {
     fn switch_chain(&self, new_tip: BlockHash) -> Result<(), BlockchainError> {
         let new_tip = self.get_block_header(&new_tip)?;
@@ -1462,7 +1447,6 @@ impl<T: ChainStore> TryFrom<ChainStateBuilder<T>> for ChainState<T> {
             best_block: builder.best_block()?,
             assume_valid: builder.assume_valid(),
             ibd: builder.ibd(),
-            broadcast_queue: Vec::new(),
             subscribers: Vec::new(),
             fee_estimation: (1_f64, 1_f64, 1_f64),
             consensus: Consensus {
