@@ -274,14 +274,14 @@ async fn handle_json_rpc_request(
                 0 => {
                     let block = state.get_block_serialized(hash).await?;
 
-                    let block = GetBlockRes::Serialized(block);
+                    let block = GetBlockRes::Zero(block);
                     Ok(serde_json::to_value(block).unwrap())
                 }
 
                 1 => {
                     let block = state.get_block(hash).await?;
 
-                    let block = GetBlockRes::Verbose(block.into());
+                    let block = GetBlockRes::One(block.into());
                     Ok(serde_json::to_value(block).unwrap())
                 }
 

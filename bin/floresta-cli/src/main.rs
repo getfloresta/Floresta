@@ -95,8 +95,8 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             let block = client.get_block(hash, verbosity)?;
 
             match block {
-                GetBlockRes::Verbose(block) => serde_json::to_string_pretty(&block)?,
-                GetBlockRes::Serialized(block) => serde_json::to_string_pretty(&block)?,
+                GetBlockRes::One(block) => serde_json::to_string_pretty(&block)?,
+                GetBlockRes::Zero(block) => serde_json::to_string_pretty(&block)?,
             }
         }
         Methods::GetPeerInfo => serde_json::to_string_pretty(&client.get_peer_info()?)?,

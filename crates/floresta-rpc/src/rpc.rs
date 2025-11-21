@@ -235,7 +235,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                         Value::Number(Number::from(verbosity)),
                     ],
                 )?;
-                Ok(GetBlockRes::Serialized(block))
+                Ok(GetBlockRes::Zero(block))
             }
 
             1 => {
@@ -246,7 +246,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                         Value::Number(Number::from(verbosity)),
                     ],
                 )?;
-                Ok(GetBlockRes::Verbose(block))
+                Ok(GetBlockRes::One(block))
             }
 
             _ => Err(rpc_types::Error::InvalidVerbosity),
