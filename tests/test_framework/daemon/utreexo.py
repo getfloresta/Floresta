@@ -7,6 +7,9 @@ A test framework for testing utreexod daemon in regtest mode.
 from typing import List
 
 from test_framework.daemon.base import BaseDaemon
+from test_framework.rpc import ConfigRPC
+from test_framework.daemon import ConfigP2P
+from test_framework.electrum import ConfigElectrum
 
 
 class UtreexoDaemon(BaseDaemon):
@@ -16,96 +19,56 @@ class UtreexoDaemon(BaseDaemon):
     and utreexo proofs for tests.
     """
 
-    def create(self, target: str):
-        self.name = "utreexod"
-        self.target = target
-
-    def valid_daemon_args(self) -> List[str]:
+    def get_cmd_network(self) -> List[str]:
+        """
+        Return the network configuration flags for the node.
+        """
         return [
-            "--datadir",
-            "--logdir",
-            "-C,",
-            "--configfile",
-            "-d,",
-            "--debuglevel",
-            "--dbtype",
-            "--sigcachemaxsize",
-            "--utxocachemaxsize",
-            "--noutreexo",
-            "--prune",
-            "--profile",
-            "--cpuprofile",
-            "--memprofile",
-            "--traceprofile",
-            "--testnet",
             "--regtest",
-            "--notls",
-            "--norpc",
-            "--rpccert",
-            "--rpckey",
-            "--rpclimitpass",
-            "--rpclimituser",
-            "--rpclisten",
-            "--rpcmaxclients",
-            "--rpcmaxconcurrentreqs",
-            "--rpcmaxwebsockets",
-            "--rpcquirks",
-            "--proxy",
-            "--proxypass",
-            "--proxyuser",
-            "-a",
-            "--addpeer",
-            "--connect",
-            "--listen",
-            "--nolisten",
-            "--maxpeers",
-            "--uacomment",
-            "--trickleinterval",
-            "--nodnsseed",
-            "--externalip",
-            "--upnp",
-            "--agentblacklist",
-            "--agentwhitelist",
-            "--whitelist",
-            "--nobanning",
-            "--banduration",
-            "--banthreshold",
-            "--addcheckpoint",
-            "--nocheckpoints",
-            "--noassumeutreexo",
-            "--blocksonly",
-            "--maxorphantx",
-            "--minrelaytxfee",
-            "--norelaypriority",
-            "--relaynonstd",
-            "--rejectnonstd",
-            "--rejectreplacement",
-            "--limitfreerelay",
-            "--generate",
-            "--miningaddr",
-            "--blockmaxsize",
-            "--blockminsize",
-            "--blockmaxweight",
-            "--blockminweight",
-            "--blockprioritysize",
-            "--addrindex",
-            "--txindex",
-            "--utreexoproofindex",
-            "--flatutreexoproofindex",
-            "--utreexoproofindexmaxmemory",
-            "--cfilters",
-            "--nopeerbloomfilters",
-            "--dropaddrindex",
-            "--dropcfindex",
-            "--droptxindex",
-            "--droputreexoproofindex",
-            "--dropflatutreexoproofindex",
-            "--watchonlywallet",
-            "--registeraddresstowatchonlywallet",
-            "--registerextendedpubkeystowatchonlywallet",
-            "--registerextendedpubkeyswithaddresstypetowatchonlywallet",
-            "--nobdkwallet",
-            "--electrumlisteners",
-            "--tlselectrumlisteners",
-            "--disableelectrum",
         ]
+
+    def get_cmd_data_dir(self, data_dir: str) -> List[str]:
+        """
+        Return the data directory configuration flags for the node.
+        """
+        return [f"--datadir={data_dir}"]
+
+    def get_cmd_rpc(self, config: ConfigRPC) -> List[str]:
+        """
+        Return the RPC configuration flags for the node.
+        """
+        if config.user is None or config.password is None:
+            raise ValueError("RPC user and password must be set for utreexod")
+        address = f"{config.host}:{config.port}"
+        return [
+            f"--rpcuser={config.user}",
+            f"--rpcpass={config.password}",
+            f"--rpclisten={address}",
+            "--utreexoproofindex",
+        ]
+
+    def get_cmd_p2p(self, config: ConfigP2P) -> List[str]:
+        """
+        Return the P2P configuration flags for the node.
+        """
+        address = f"{config.host}:{config.port}"
+        return [f"--listen={address}"]
+
+    def get_cmd_electrum(self, config: ConfigElectrum) -> List[str]:
+        """
+        Return the Electrum configuration flags for the node.
+        """
+        electrum_settings = []
+        electrum_settings.append(f"--electrumlisteners={config.host}:{config.port}")
+        if config.tls:
+            electrum_settings.extend(
+                [
+                    f"--rpckey={config.tls.key_file}",
+                    f"--rpccert={config.tls.cert_file}",
+                    f"--tlselectrumlisteners={config.tls.port}",
+                ]
+            )
+        else:
+            electrum_settings.append("--notls")
+
+        return electrum_settings

@@ -6,7 +6,7 @@ This functional test checks the failure on connect to florestad's TLS port.
 
 import errno
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 from test_framework.electrum.client import ElectrumClient
 
 
@@ -22,7 +22,7 @@ class TestSslFailInitialization(FlorestaTestFramework):
         """
         Instantiate the node without Electrum TLS.
         """
-        self.florestad = self.add_node(variant="florestad", tls=False)
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
     def run_test(self):
         """
@@ -36,8 +36,8 @@ class TestSslFailInitialization(FlorestaTestFramework):
         with self.assertRaises(ConnectionRefusedError) as exc:
             self.log("Trying to connect the Electrum no-TLS client")
             TestSslFailInitialization.electrum = ElectrumClient(
-                self.florestad.get_host(),
-                self.florestad.get_port("electrum-server") + 1,
+                self.florestad.config_electrum.host,
+                self.florestad.config_electrum.port + 1,
             )
 
         self.log("Failed to connect to Electrum TLS client")

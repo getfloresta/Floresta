@@ -6,25 +6,17 @@ A test framework for testing JsonRPC calls to a utreexo node.
 
 from test_framework.rpc.base import BaseRPC
 
-REGTEST_RPC_SERVER = {
-    "host": "127.0.0.1",
-    "ports": {
-        "p2p": 18444,
-        "rpc": 18334,
-        "electrum-server": 20001,
-        "electrum-server-tls": 20002,
-    },
-    "user": "utreexo",
-    "password": "utreexo",
-    "jsonrpc": "1.0",
-    "timeout": 10000,
-}
-
 
 class UtreexoRPC(BaseRPC):
     """
     A class for making RPC calls to a utreexo node.
     """
+
+    def get_jsonrpc_version(self) -> str:
+        """
+        Get the JSON-RPC version of the node
+        """
+        return "1.0"
 
     def get_blockchain_info(self) -> dict:
         """
@@ -37,7 +29,7 @@ class UtreexoRPC(BaseRPC):
         Perform the `stop` RPC command to utreexod and some cleanup on process and files
         """
         result = self.perform_request("stop")
-        self.wait_for_connections(opened=False)
+        self.wait_on_socket(opened=False)
         return result
 
     def get_new_address(self):

@@ -4,7 +4,7 @@ floresta_cli_getroots.py
 This functional test cli utility to interact with a Floresta node with `getroots`
 """
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class GetRootsIDBLenZeroTest(FlorestaTestFramework):
@@ -17,7 +17,7 @@ class GetRootsIDBLenZeroTest(FlorestaTestFramework):
         Setup the two node florestad process with different data-dirs, electrum-addresses
         and rpc-addresses in the same regtest network
         """
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
     def run_test(self):
         """

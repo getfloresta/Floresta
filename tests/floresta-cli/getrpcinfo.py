@@ -5,9 +5,7 @@ This functional test cli utility to interact with a Floresta node with `getrpcin
 """
 
 import os
-from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class GetRpcInfoTest(FlorestaTestFramework):
@@ -22,25 +20,10 @@ class GetRpcInfoTest(FlorestaTestFramework):
         Setup the two node florestad process with different data-dirs, electrum-addresses
         and rpc-addresses in the same regtest network
         """
-        # Create data directories for the nodes
-        self.data_dirs = GetRpcInfoTest.create_data_dirs(
-            DATA_DIR, self.__class__.__name__.lower(), nodes=2
-        )
-
         # Now create the nodes with the data directories
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[
-                f"--data-dir={self.data_dirs[0]}",
-            ],
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
-            extra_args=[
-                f"-datadir={self.data_dirs[1]}",
-            ],
-        )
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def assert_rpcinfo_structure(self, result, expected_logpath: str):
         # Ensure only 'active_commands' and 'logpath' are present
@@ -54,7 +37,8 @@ class GetRpcInfoTest(FlorestaTestFramework):
         # Check the command structure
         self.assertEqual(command["method"], "getrpcinfo")
         self.assertTrue(command["duration"] > 0)
-        self.assertEqual(result["logpath"], os.path.normpath(expected_logpath))
+        # Check the logpath contains the expected path, but ignore absolute path differences
+        self.assertTrue(result["logpath"].endswith(os.path.normpath(expected_logpath)))
 
     def test_floresta_getrpcinfo(self):
         """
@@ -62,7 +46,9 @@ class GetRpcInfoTest(FlorestaTestFramework):
         and checking the response in florestad.
         """
         result = self.florestad.rpc.get_rpcinfo()
-        expected_logpath = os.path.join(self.data_dirs[0], "regtest", "debug.log")
+        expected_logpath = os.path.join(
+            self.florestad.daemon.data_dir, "regtest", "debug.log"
+        )
         self.assert_rpcinfo_structure(result, expected_logpath)
 
     def test_bitcoind_getrpcinfo(self):
@@ -71,7 +57,9 @@ class GetRpcInfoTest(FlorestaTestFramework):
         and checking the response in bitcoind.
         """
         result = self.bitcoind.rpc.get_rpcinfo()
-        expected_logpath = os.path.join(self.data_dirs[1], "regtest", "debug.log")
+        expected_logpath = os.path.join(
+            self.bitcoind.daemon.data_dir, "regtest", "debug.log"
+        )
         self.assert_rpcinfo_structure(result, expected_logpath)
 
     def run_test(self):

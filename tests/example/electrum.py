@@ -5,7 +5,7 @@ This is an example of how a tests with integrated electrum should look like,
 see `tests/test_framework/test_framework.py` for more info.
 """
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 from test_framework.electrum.client import ElectrumClient
 
 
@@ -24,7 +24,7 @@ class ElectrumTest(FlorestaTestFramework):
         """
         Here we define setup for test adding a node definition
         """
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
     # All tests should override the run_test method
     def run_test(self):
@@ -46,9 +46,9 @@ class ElectrumTest(FlorestaTestFramework):
         # Create an instance of the Electrum Client,
         # a small implementation of the electrum
         # protocol, to test our own electrum implementation
-        host = self.florestad.get_host()
-        port = self.florestad.get_port("electrum-server")
-        electrum = ElectrumClient(host, port)
+        electrum = ElectrumClient(
+            self.florestad.config_electrum.host, self.florestad.config_electrum.port
+        )
         rpc_response = electrum.get_version()
 
         # Make assertions with our framework. Avoid usage of
