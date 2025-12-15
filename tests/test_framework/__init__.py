@@ -111,10 +111,15 @@ class Node:
                     f"Unsupported variant: {variant}. Use 'florestad', 'utreexod' or 'bitcoind'."
                 )
 
+        if variant == NodeType.BITCOIND:
+            electrum = None
+        else:
+            electrum = ElectrumClient(electrum_config)
+
         self.daemon = daemon
         self.rpc = rpc
+        self.electrum = electrum
         self._tls = tls
-        self._config_electrum = electrum_config
         self._variant = variant
         self._static_values = True
 
@@ -178,20 +183,14 @@ class Node:
         """Setter for `static_values` property"""
         self._static_values = value
 
-    @property
-    def config_electrum(self) -> ConfigElectrum:
-        """
-        Get the Electrum URL to connect to the node.
-        """
-        return self._config_electrum
-
     def set_config_electrum(self, value: ConfigElectrum):
         """Setter for `config_electrum` property"""
         if self.static_values:
             raise ValueError("Cannot modify static config_electrum")
 
         self.daemon.set_electrum_config(value)
-        self._config_electrum = value
+        if self.electrum is not None:
+            self.electrum.set_config(value)
 
     def set_p2p_config(self, value: ConfigP2P):
         """Setter for `p2p_config` property"""

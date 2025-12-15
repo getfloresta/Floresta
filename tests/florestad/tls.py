@@ -29,15 +29,8 @@ class TestSslInitialization(FlorestaTestFramework):
         """
         self.run_node(self.florestad)
 
-        # now create a connection with an electrum client at default port
-        TestSslInitialization.electrum = ElectrumClient(
-            self.florestad.config_electrum.host,
-            self.florestad.config_electrum.tls.port,
-            tls=True,
-        )
-
         # request something to TLS port
-        res = TestSslInitialization.electrum.ping()
+        res = self.florestad.electrum.ping()
         result = res["result"]
         id = res["id"]
         jsonrpc = res["jsonrpc"]
