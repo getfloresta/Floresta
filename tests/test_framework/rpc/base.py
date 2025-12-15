@@ -8,6 +8,7 @@ Define a base class for making RPC calls to a
 import json
 import socket
 import time
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -20,6 +21,7 @@ from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
 
 
+# pylint: disable=too-many-public-methods
 class BaseRPC(ABC):
     """
     Abstract base class for managing JSON-RPC connections to a daemon.
@@ -59,18 +61,6 @@ class BaseRPC(ABC):
     @abstractmethod
     def get_jsonrpc_version(self) -> str:
         """Get the JSON-RPC version used by this RPC connection."""
-
-    @abstractmethod
-    def get_blockchain_info(self) -> dict:
-        """
-        Get the blockchain info by performing `perform_request('getblockchaininfo')`
-        """
-
-    @abstractmethod
-    def stop(self):
-        """
-        Perform the `stop` RPC command to the daemon and some cleanup on process and files
-        """
 
     # pylint: disable=R0801
     def log(self, message: str):
@@ -208,3 +198,119 @@ class BaseRPC(ABC):
         if not success:
             state = "open" if opened else "closed"
             raise TimeoutError(f"{self.address} not {state} after {timeout} seconds")
+
+    def get_blockchain_info(self) -> dict:
+        """
+        Get the blockchain info
+        """
+        return self.perform_request("getblockchaininfo")
+
+    def stop(self):
+        """
+        Perform the `stop` RPC command to the daemon and wait for the connection to close
+        """
+        result = self.perform_request("stop")
+        self.wait_on_socket(opened=False)
+        return result
+
+    def addnode(self, node: str, command: str, v2transport: bool = False):
+        """
+        Adds a new node to our list of peers performing
+
+        This will make our node try to connect to this peer.
+        """
+        # matches, IPv4, IPv6 and optional ports from 0 to 65535
+        pattern = re.compile(
+            r"^("
+            r"(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}"
+            r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|"
+            r"\[([a-fA-F0-9:]+)\]"
+            r")"
+            r"(:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-9]?[0-9]{1,4}))?$"
+        )
+
+        if not pattern.match(node):
+            raise ValueError("Invalid ip[:port] format")
+
+        if command not in ("add", "remove", "onetry"):
+            raise ValueError(f"Invalid command '{command}'")
+
+        return self.perform_request("addnode", params=[node, command, v2transport])
+
+    # pylint: disable=R0801
+    def get_bestblockhash(self) -> str:
+        """
+        Get the hash of the best block in the chain
+        """
+        return self.perform_request("getbestblockhash")
+
+    def get_blockhash(self, height: int) -> str:
+        """
+        Get the blockhash associated with a given height
+        """
+        return self.perform_request("getblockhash", [height])
+
+    def get_block_count(self) -> int:
+        """
+        Get block count of the node
+        """
+        return self.perform_request("getblockcount")
+
+    def get_blockheader(self, blockhash: str) -> dict:
+        """
+        Get the header of a block
+        """
+        if not bool(re.fullmatch(r"^[a-f0-9]{64}$", blockhash)):
+            raise ValueError(f"Invalid blockhash '{blockhash}'.")
+
+        return self.perform_request("getblockheader", params=[blockhash])
+
+    def get_block(self, blockhash: str, verbosity: int = 1):
+        """
+        Get a full block, given its hash performing
+
+        Notice that this rpc will cause a actual network request to our node,
+        so it may be slow, and if used too often, may cause more network usage.
+        The returns for this rpc are identical to bitcoin core's getblock rpc
+        as of version 27.0.
+
+        the `str` param should be a valid 32 bytes hex formatted string
+        the `int` param should be a integer verbosity level
+        """
+        if len(blockhash) != 64:
+            raise ValueError(f"invalid blockhash param: {blockhash}")
+
+        if verbosity not in (0, 1):
+            raise ValueError(f"Invalid verbosity level param: {verbosity}")
+
+        return self.perform_request("getblock", params=[blockhash, verbosity])
+
+    def get_peerinfo(self):
+        """
+        Get the peer information
+        """
+        return self.perform_request("getpeerinfo")
+
+    def get_rpcinfo(self):
+        """
+        Returns stats about our RPC server
+        """
+        return self.perform_request("getrpcinfo")
+
+    def uptime(self) -> int:
+        """
+        Get the uptime of the node
+        """
+        return self.perform_request("uptime")
+
+    def get_txout(self, txid: str, vout: int, include_mempool: bool) -> dict:
+        """
+        Get transaction output
+        """
+        return self.perform_request("gettxout", params=[txid, vout, include_mempool])
+
+    def ping(self):
+        """
+        Tells our node to send a ping to all its peers
+        """
+        return self.perform_request("ping")
