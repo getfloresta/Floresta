@@ -37,6 +37,17 @@ class Utility:
         Note: This directory is based on the git describe value to
         separate logs from different commits.
         """
+        git_describe = Utility.get_git_describe()
+        base_dir = Utility.get_integration_test_dir()
+        logs_data_dir = os.path.join(base_dir, "logs", git_describe)
+
+        return logs_data_dir
+
+    @staticmethod
+    def get_git_describe():
+        """
+        Get the output of 'git describe --tags --always' command.
+        """
         try:
             git_describe = subprocess.check_output(
                 ["git", "describe", "--tags", "--always"], text=True
@@ -46,10 +57,7 @@ class Utility:
                 "Failed to run 'git describe'. Run this at the Floresta directory."
             ) from exc
 
-        base_dir = Utility.get_integration_test_dir()
-        logs_data_dir = os.path.join(base_dir, "logs", git_describe)
-
-        return logs_data_dir
+        return git_describe
 
     @staticmethod
     def create_data_dirs(data_dir: str, base_name: str, nodes: int) -> list[str]:
