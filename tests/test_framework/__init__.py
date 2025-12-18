@@ -130,17 +130,21 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.exception = exc_value
             return True
 
-    def __init__(self):
+    def __init__(self, logger=None):
         """
         Sets test framework defaults.
 
         Do not override this method. Instead, override the set_test_params() method
         """
         self._nodes = []
+        self.logger = logger
 
     # pylint: disable=R0801
     def log(self, msg: str):
         """Log a message with the class caller"""
+        if self.logger is not None:
+            self.logger.debug(msg)
+            return
 
         now = (
             datetime.now(timezone.utc)
