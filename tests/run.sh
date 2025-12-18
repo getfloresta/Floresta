@@ -6,12 +6,27 @@
 #
 ## What this script do  ?
 #
-# 1. Sets $PATH to include the compiled florestad and utreexod at FLORESTA_TEMP_DIR/binaries.
-#
-# 2. Run all needed commands for batch executing all python tests suites:
-#
-#       uv run tests/run_tests.py
+# Run the all functional tests located at tests/ directory using the test runner or pytest.
 set -e
+
+USE_TEST_RUNNER=true
+USE_PYTEST=true
+PRESERVE_DATA=false
+TEST_RUNNER_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+  --test-runner) USE_PYTEST=false ;;
+  --pytest) USE_TEST_RUNNER=false ;;
+  --preserve-data-dir) PRESERVE_DATA=true ;;
+  --)
+    shift
+    TEST_RUNNER_ARGS+=("$@")
+    break
+    ;;
+  --*) TEST_RUNNER_ARGS+=("$arg") ;;
+  *) TEST_RUNNER_ARGS+=("$arg") ;;
+  esac
+done
 
 if [[ -z "$FLORESTA_TEMP_DIR" ]]; then
 
@@ -29,25 +44,19 @@ fi
 # Clean existing data/logs directories before running the tests
 rm -rf "$FLORESTA_TEMP_DIR/data"
 
-# Detect if --preserve-data-dir is among args
-# and forward args to uv
-PRESERVE_DATA=false
-UV_ARGS=()
-
-for arg in "$@"; do
-    if [[ "$arg" == "--preserve-data-dir" ]]; then
-        PRESERVE_DATA=true
-    else
-        UV_ARGS+=("$arg")
-    fi
-done
-
 # Run the re-freshed tests
-uv run ./tests/test_runner.py "${UV_ARGS[@]}"
+if [ "$USE_TEST_RUNNER" = true ]; then
+  echo "FLORESTA_TEMP_DIR=$FLORESTA_TEMP_DIR uv run ./tests/test_runner.py ${TEST_RUNNER_ARGS[@]}"
+  uv run ./tests/test_runner.py "${TEST_RUNNER_ARGS[@]}"
+fi
+
+if [ "$USE_PYTEST" = true ]; then
+  echo "FLORESTA_TEMP_DIR=$FLORESTA_TEMP_DIR uv run pytest ${TEST_RUNNER_ARGS[@]}"
+  uv run pytest "${TEST_RUNNER_ARGS[@]}"
+fi
 
 # Clean up the data dir if we succeeded and --preserve-data-dir was not passed
-if [ $? -eq 0 ] && [ "$PRESERVE_DATA" = false ];
-then
-    echo "Tests passed, cleaning up the data dir at $FLORESTA_TEMP_DIR"
-    rm -rf $FLORESTA_TEMP_DIR/data $FLORESTA_TEMP_DIR/logs
+if [ "$PRESERVE_DATA" = false ]; then
+  echo "Tests passed, cleaning up the data dir at $FLORESTA_TEMP_DIR"
+  rm -rf $FLORESTA_TEMP_DIR/data $FLORESTA_TEMP_DIR/logs
 fi
