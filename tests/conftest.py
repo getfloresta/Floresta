@@ -118,9 +118,9 @@ def setup_logging(request):
 
 
 @pytest.fixture(scope="function")
-def node_manager(setup_logging):
+def node_manager(setup_logging, request):
     """Provides a FlorestaTestFramework instance that automatically cleans up after each test"""
-    manager = FlorestaTestFramework(logger=setup_logging)
+    manager = FlorestaTestFramework(logger=setup_logging, test_name=request.node.name)
 
     yield manager
 
