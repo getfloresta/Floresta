@@ -40,10 +40,12 @@ python_functions = ["test_*"]
 
 addopts = [
     "-v",
+    "-n 4",
     "--strict-markers",
     "--strict-config",
     "--tb=short",
     "--log-cli-level=DEBUG",
+    "-x"
 ]
 
 markers = [
