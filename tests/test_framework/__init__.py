@@ -130,14 +130,27 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.exception = exc_value
             return True
 
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, test_name: str = None):
         """
         Sets test framework defaults.
 
         Do not override this method. Instead, override the set_test_params() method
         """
+        self._test_name = test_name
         self._nodes = []
         self.logger = logger
+
+    @property
+    def test_name(self) -> str:
+        """
+        Get the test name, which is the class name in lowercase.
+        This is used to create a log file for the test.
+        """
+        if self._test_name is not None:
+            return self._test_name
+
+        self._test_name = self.__class__.__name__.lower()
+        return self._test_name
 
     # pylint: disable=R0801
     def log(self, msg: str):
@@ -151,7 +164,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             .replace(microsecond=0)
             .strftime("%Y-%m-%d %H:%M:%S")
         )
-        print(f"[{self.__class__.__name__} {now}] {msg}")
+        print(f"[{self.test_name} {now}] {msg}")
 
     def main(self):
         """
@@ -214,12 +227,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         tempdir = str(Utility.get_logs_dir())
 
-        # Get the class's base filename
-        filename = sys.modules[self.__class__.__module__].__file__
-        filename = os.path.basename(filename)
-        filename = filename.replace(".py", "")
-
-        return os.path.join(tempdir, f"{filename}.log")
+        return os.path.join(tempdir, f"{self.test_name}.log")
 
     def is_option_set(self, extra_args: list[str], option: str) -> bool:
         """
@@ -263,7 +271,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.count_nodes_by_variant(node_type)
         )
         datadir = os.path.normpath(
-            os.path.join(tempdir, "data", self.__class__.__name__.lower(), path_name)
+            os.path.join(tempdir, "data", self.test_name, path_name)
         )
         os.makedirs(datadir, exist_ok=True)
 

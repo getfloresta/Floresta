@@ -13,6 +13,7 @@ dependencies = [
   "cryptography>=46.0.5",
   "pyOpenSSL>=25.0.0",
   "pytest>=9.0.0",
+  "pytest-xdist>=3.8.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -30,10 +31,12 @@ python_functions = ["test_*"]
 
 addopts = [
     "-v",
+    "-n 4",
     "--strict-markers",
     "--strict-config",
     "--tb=short",
     "--log-cli-level=DEBUG",
+    "-x"
 ]
 
 markers = [

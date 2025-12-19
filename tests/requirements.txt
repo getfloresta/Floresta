@@ -6,3 +6,4 @@ pyOpenSSL>=25.0.0
 pytest>=9.0.0
 pytest-timeout>=2.4.0
 pytest-html>=4.0.0
+pytest-xdist>=3.8.0
