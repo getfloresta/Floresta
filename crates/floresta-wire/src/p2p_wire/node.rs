@@ -152,6 +152,9 @@ pub(crate) enum InflightRequests {
 
     /// Requests the peer to send us the utreexo proof for a given block
     UtreexoProof(BlockHash),
+
+    /// We've requested addresses from a peer
+    GetAddresses,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -456,6 +459,15 @@ where
             let Some((peer, _)) = self.inflight.remove(&req) else {
                 continue;
             };
+
+            // If a feeler connection times out, we ban them at the first message
+            if let Some(peer_data) = self.peers.get(&peer) {
+                if peer_data.kind == ConnectionKind::Feeler {
+                    debug!("Feeler peer {peer} timed out request");
+                    self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                    continue;
+                }
+            }
 
             if let InflightRequests::Connect(_) = req {
                 // ignore the output as it might fail due to the task being cancelled
@@ -1320,6 +1332,7 @@ where
             InflightRequests::Blocks(block) => {
                 self.request_blocks(vec![block])?;
             }
+
             InflightRequests::Headers => {
                 let peer = self.send_to_fastest_peer(
                     NodeRequest::GetHeaders(vec![]),
@@ -1329,6 +1342,7 @@ where
                 self.inflight
                     .insert(InflightRequests::Headers, (peer, Instant::now()));
             }
+
             InflightRequests::UtreexoState(_) => {
                 let peer = self.send_to_fastest_peer(
                     NodeRequest::GetUtreexoState((self.chain.get_block_hash(0).unwrap(), 0)),
@@ -1337,6 +1351,7 @@ where
                 self.inflight
                     .insert(InflightRequests::UtreexoState(peer), (peer, Instant::now()));
             }
+
             InflightRequests::GetFilters => {
                 if !self.has_compact_filters_peer() {
                     return Ok(());
@@ -1349,9 +1364,34 @@ where
                 self.inflight
                     .insert(InflightRequests::GetFilters, (peer, Instant::now()));
             }
-            InflightRequests::Connect(_) => {
+
+            InflightRequests::Connect(_) | InflightRequests::GetAddresses => {
                 // We don't need to do anything here
             }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_addresses_from_peer(
+        &mut self,
+        peer: u32,
+        addresses: Vec<AddrV2Message>,
+    ) -> Result<(), WireError> {
+        self.inflight
+            .remove(&InflightRequests::GetAddresses);
+        debug!("Got {} addresses from peer {}", addresses.len(), peer);
+        let addresses: Vec<_> = addresses.into_iter().map(|addr| addr.into()).collect();
+        self.address_man.push_addresses(&addresses);
+
+        // For feeler peers, we ask for addresses to populate our address manager,
+        // then disconnect them
+        let Some(peer_data) = self.peers.get(&peer) else {
+            return Ok(());
+        };
+
+        if matches!(peer_data.kind, ConnectionKind::Feeler) {
+            self.send_to_peer(peer, NodeRequest::Shutdown)?;
         }
 
         Ok(())
@@ -1371,21 +1411,26 @@ where
         version: &Version,
     ) -> Result<(), WireError> {
         self.inflight.remove(&InflightRequests::Connect(peer));
-        if version.kind == ConnectionKind::Feeler {
-            self.peers.entry(peer).and_modify(|p| {
-                p.state = PeerStatus::Ready;
-            });
 
+        // Mark this peer as ready to communicate with
+        self.peers.entry(peer).and_modify(|p| {
+            p.state = PeerStatus::Ready;
+        });
+
+        // Ask for new addresses to populate our address manager
+        self.send_to_peer(peer, NodeRequest::GetAddresses)?;
+        self.inflight
+            .insert(InflightRequests::GetAddresses, (peer, Instant::now()));
+
+        if version.kind == ConnectionKind::Feeler {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
 
-            self.send_to_peer(peer, NodeRequest::Shutdown)?;
             self.address_man
                 .update_set_service_flag(version.address_id, version.services)
                 .update_set_state(version.address_id, AddressState::Tried(now));
-
             return Ok(());
         }
 
@@ -1405,7 +1450,6 @@ where
         );
 
         if let Some(peer_data) = self.common.peers.get_mut(&peer) {
-            peer_data.state = PeerStatus::Ready;
             peer_data.services = version.services;
             peer_data.user_agent.clone_from(&version.user_agent);
             peer_data.height = version.blocks;

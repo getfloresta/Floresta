@@ -955,8 +955,7 @@ where
             }
 
             PeerMessages::Addr(addresses) => {
-                let addresses: Vec<_> = addresses.iter().cloned().map(|addr| addr.into()).collect();
-                self.address_man.push_addresses(&addresses);
+                self.handle_addresses_from_peer(peer, addresses)?;
             }
 
             PeerMessages::Block(block) => {

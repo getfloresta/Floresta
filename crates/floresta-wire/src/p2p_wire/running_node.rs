@@ -714,11 +714,7 @@ where
                     }
 
                     PeerMessages::Addr(addresses) => {
-                        debug!("Got {} addresses from peer {}", addresses.len(), peer);
-                        let addresses: Vec<_> =
-                            addresses.into_iter().map(|addr| addr.into()).collect();
-
-                        self.address_man.push_addresses(&addresses);
+                        self.handle_addresses_from_peer(peer, addresses)?;
                     }
 
                     PeerMessages::BlockFilter((hash, filter)) => {
