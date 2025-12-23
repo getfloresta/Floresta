@@ -237,15 +237,15 @@ where
             }
 
             try_and_log!(self.process_pending_blocks());
+
             if !self.has_utreexo_peers() {
                 continue;
             }
 
+            self.get_blocks_to_download();
             // Ask for missed blocks or proofs if they are no longer inflight or pending
             try_and_log!(self.ask_for_missed_blocks());
             try_and_log!(self.ask_for_missed_proofs());
-
-            self.get_blocks_to_download();
         }
 
         done_cb(&self.chain);

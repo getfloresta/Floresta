@@ -465,6 +465,7 @@ where
                 if peer_data.kind == ConnectionKind::Feeler {
                     debug!("Feeler peer {peer} timed out request");
                     self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                    self.peers.remove(&peer);
                     continue;
                 }
             }
@@ -525,7 +526,6 @@ where
         // See https://github.com/bitcoin/bitcoin/blob/8309a9747a8df96517970841b3648937d05939a3/src/net.cpp#L3558
         debug!("Adding node {addr}:{port}");
         let address = self.to_addr_v2(addr);
-
         // Check if the peer already exists
         if self
             .added_peers
@@ -1378,17 +1378,14 @@ where
         peer: u32,
         addresses: Vec<AddrV2Message>,
     ) -> Result<(), WireError> {
-        self.inflight
-            .remove(&InflightRequests::GetAddresses);
+        self.inflight.remove(&InflightRequests::GetAddresses);
         debug!("Got {} addresses from peer {}", addresses.len(), peer);
         let addresses: Vec<_> = addresses.into_iter().map(|addr| addr.into()).collect();
         self.address_man.push_addresses(&addresses);
 
         // For feeler peers, we ask for addresses to populate our address manager,
         // then disconnect them
-        let Some(peer_data) = self.peers.get(&peer) else {
-            return Ok(());
-        };
+        let peer_data = self.peers.get(&peer).unwrap();
 
         if matches!(peer_data.kind, ConnectionKind::Feeler) {
             self.send_to_peer(peer, NodeRequest::Shutdown)?;
