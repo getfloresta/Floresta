@@ -123,6 +123,9 @@ pub(crate) enum InflightRequests {
 
     /// Requests the peer to send us the utreexo proof for a given block
     UtreexoProof(BlockHash),
+
+    /// We've requested addresses from a peer
+    GetAddresses,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
