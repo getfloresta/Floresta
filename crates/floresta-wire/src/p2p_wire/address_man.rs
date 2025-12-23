@@ -29,13 +29,16 @@ use tracing::warn;
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
 
 /// The minimum amount of addresses we need to have on the [`AddressMan`].
-const MIN_PEERS: usize = 15;
+const MIN_ADDRESSES: usize = 15;
 
 /// The minimum amount of CBF-capable addresses we need to have on the [`AddressMan`].
-const MIN_PEERS_CBF: usize = 5;
+const MIN_ADDRESSES_CBF: usize = 5;
 
 /// The minimum amount of Utreexo-capable addresses we need to have on the [`AddressMan`].
-const MIN_PEERS_UTREEXO: usize = 2;
+const MIN_ADDRESSES_UTREEXO: usize = 2;
+
+/// How many addresses we keep in our address manager
+const MAX_ADDRESSES: usize = 50_000;
 
 /// A type alias for a list of addresses to send to our peers
 type AddressToSend = Vec<(AddrV2, u64, ServiceFlags, u16)>;
@@ -180,7 +183,7 @@ impl LocalAddress {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 /// A module that keeps track of known addresses and chooses addresses that our node can connect
 pub struct AddressMan {
     /// A map of all peers we know, mapping the address id to the actual address.
@@ -202,14 +205,36 @@ pub struct AddressMan {
     ///
     /// This works similarly to `good_peers_by_service`. However, we keep all peers here, not only good peers
     peers_by_service: HashMap<ServiceFlags, Vec<usize>>,
+
+    /// The maximum number of entries this address manager can hold
+    max_size: usize,
+}
+
+impl Default for AddressMan {
+    fn default() -> Self {
+        AddressMan::new(None)
+    }
 }
 
 impl AddressMan {
+    /// Creates a new address manager
+    ///
+    /// `max_size` is the maximum number of addresses to keep in memory. If None is provided,
+    /// a default of 50,000 addresses is used.
+    pub fn new(max_size: Option<usize>) -> Self {
+        AddressMan {
+            addresses: HashMap::new(),
+            good_addresses: Vec::new(),
+            good_peers_by_service: HashMap::new(),
+            peers_by_service: HashMap::new(),
+            max_size: max_size.unwrap_or(MAX_ADDRESSES),
+        }
+    }
+
     /// Add a new address to our list of known address
     pub fn push_addresses(&mut self, addresses: &[LocalAddress]) {
         for address in addresses {
             let id = address.id;
-
             // don't add addresses that don't have the minimum required services
             if !address.services.has(ServiceFlags::WITNESS)
                 | !address.services.has(ServiceFlags::NETWORK)
@@ -242,6 +267,37 @@ impl AddressMan {
                 self.push_if_has_service(address, ServiceFlags::COMPACT_FILTERS);
             }
         }
+
+        // Open up space by pruning old addresses
+        self.prune_addresses();
+    }
+
+    /// Remove addresses that we last heard of, until we are under the limit
+    /// of addresses to keep.
+    fn prune_addresses(&mut self) {
+        let excess = self.addresses.len().saturating_sub(self.max_size);
+        if excess == 0 {
+            return;
+        }
+
+        let mut oldest_ids: Vec<_> = self
+            .addresses
+            .iter()
+            .map(|(&id, addr)| (id, addr.last_connected))
+            .collect();
+
+        oldest_ids.sort_by_key(|&(_, last_connected)| last_connected);
+
+        for (oldest_id, _) in oldest_ids.into_iter().take(excess) {
+            self.addresses.remove(&oldest_id);
+            self.good_addresses.retain(|&x| x != oldest_id);
+            for peers in self.good_peers_by_service.values_mut() {
+                peers.retain(|&x| x != oldest_id);
+            }
+            for peers in self.peers_by_service.values_mut() {
+                peers.retain(|&x| x != oldest_id);
+            }
+        }
     }
 
     /// Return addresses from the [`AddressMan`] filtered by their [`ServiceFlags`].
@@ -260,15 +316,15 @@ impl AddressMan {
     /// Check if we have enough addresses on the address manager.
     #[rustfmt::skip]
     pub fn enough_addresses(&self) -> bool {
-        if self.good_addresses.len() < MIN_PEERS {
+        if self.good_addresses.len() < MIN_ADDRESSES{
             return false;
         }
 
-        if self.get_addresses_by_service(ServiceFlags::COMPACT_FILTERS).len() < MIN_PEERS_CBF {
+        if self.get_addresses_by_service(ServiceFlags::COMPACT_FILTERS).len() < MIN_ADDRESSES_CBF {
             return false;
         }
 
-        if self.get_addresses_by_service(service_flags::UTREEXO.into()).len() < MIN_PEERS_UTREEXO {
+        if self.get_addresses_by_service(service_flags::UTREEXO.into()).len() < MIN_ADDRESSES_UTREEXO {
             return false;
         }
 
@@ -575,6 +631,7 @@ impl AddressMan {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
+
         for (_, address) in self.addresses.iter_mut() {
             match address.state {
                 AddressState::Banned(ban_time) => {
@@ -677,6 +734,13 @@ impl AddressMan {
                 self.good_addresses.retain(|&x| x != idx);
             }
             AddressState::Connected => {
+                self.addresses.entry(idx).and_modify(|addr| {
+                    addr.last_connected = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                });
+
                 if !self.good_addresses.contains(&idx) {
                     self.good_addresses.push(idx);
                 }
@@ -815,6 +879,7 @@ pub struct DiskLocalAddress {
     /// An id to identify this address
     id: Option<usize>,
 }
+
 impl From<LocalAddress> for DiskLocalAddress {
     fn from(value: LocalAddress) -> Self {
         let address = match value.address {
@@ -979,6 +1044,8 @@ mod test {
     use std::io::Read;
     use std::io::{self};
     use std::net::Ipv4Addr;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
 
     use bitcoin::p2p::address::AddrV2;
     use bitcoin::p2p::ServiceFlags;
@@ -1107,5 +1174,155 @@ mod test {
         ));
 
         address_man.rearrange_buckets();
+    }
+
+    #[test]
+    fn test_is_private() {
+        // random addresses that are private
+        let addresses = vec![
+            "10.42.187.23:8333",
+            "10.0.254.199:8333",
+            "172.16.88.4:8333",
+            "172.31.201.77:8333",
+            "192.168.1.14:8333",
+            "192.168.203.250:8333",
+            "[fd3a:9f2b:4c10:1a2b::1]:8333",
+            "[fd12:3456:789a:1::dead]:8333",
+            "[fdff:ab23:9012:beef::42]:8333",
+            "[fd7c:2e91:aa10:ff01:1234:5678:9abc:def0]:8333",
+            "[fd00:1111:2222:3333:4444:5555:6666:7777]:8333",
+        ]
+        .into_iter()
+        .map(|s| {
+            LocalAddress::try_from(s).unwrap_or_else(|_| panic!("Failed to parse address: {s}"))
+        })
+        .collect::<Vec<_>>();
+
+        for address in addresses {
+            assert!(AddressMan::is_private(&address));
+        }
+
+        // now load the signet seeds and ensure none are private
+        let signet_address =
+            load_addresses_from_json("./src/p2p_wire/seeds/signet_seeds.json").unwrap();
+
+        for address in signet_address {
+            assert!(!AddressMan::is_private(&address));
+        }
+    }
+
+    fn get_addresses_and_random_times() -> Vec<LocalAddress> {
+        let signet_address =
+            load_addresses_from_json("./src/p2p_wire/seeds/signet_seeds.json").unwrap();
+
+        // modify some addresses to have failed connections in the past
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut modified_addresses = signet_address.clone();
+        let addresses = modified_addresses.len();
+        for (i, item) in modified_addresses.iter_mut().enumerate().take(addresses) {
+            if i % 3 == 0 {
+                item.last_connected = now - 5000;
+            } else if i % 3 == 1 {
+                item.last_connected = now - 6000;
+            } else {
+                item.last_connected = now - 2000;
+            }
+        }
+
+        modified_addresses
+    }
+
+    #[test]
+    fn test_rearrange_buckets() {
+        let mut address_man = AddressMan::default();
+        let addresses = get_addresses_and_random_times();
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+        );
+
+        assert_eq!(address_man.addresses.len(), addresses.len());
+        address_man.rearrange_buckets();
+
+        assert!(address_man.addresses.iter().all(|(_, addr)| {
+            matches!(
+                addr.state,
+                AddressState::NeverTried | AddressState::Tried(_)
+            )
+        }));
+    }
+
+    #[test]
+    fn test_prune_addresses() {
+        let mut address_man = AddressMan::new(Some(10));
+        let addresses = get_addresses_and_random_times();
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+        );
+
+        assert_eq!(address_man.addresses.len(), addresses.len(),);
+
+        address_man.prune_addresses();
+
+        assert_ne!(address_man.addresses.len(), addresses.len());
+    }
+
+    #[test]
+    fn test_update_address_state() {
+        let mut address_man = AddressMan::default();
+        let addresses = get_addresses_and_random_times();
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+        );
+
+        for addr in addresses {
+            address_man.update_set_state(addr.id, AddressState::Banned(0));
+        }
+
+        assert!(address_man
+            .addresses
+            .values()
+            .all(|addr| matches!(addr.state, AddressState::Banned(_))));
+    }
+
+    #[test]
+    fn test_update_service_flags() {
+        let mut address_man = AddressMan::default();
+        let addresses = get_addresses_and_random_times();
+
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+        );
+
+        for addr in addresses {
+            address_man.update_set_service_flag(addr.id, service_flags::UTREEXO.into());
+        }
+
+        assert!(address_man
+            .addresses
+            .values()
+            .all(|addr| addr.services.has(service_flags::UTREEXO.into())));
+    }
+
+    #[test]
+    fn test_add_fixed_addresses() {
+        let mut address_man = AddressMan::default();
+        address_man.add_fixed_addresses(Network::Signet);
+        assert!(!address_man.addresses.is_empty());
     }
 }

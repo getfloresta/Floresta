@@ -529,6 +529,7 @@ where
                 if peer_data.kind == ConnectionKind::Feeler {
                     debug!("Feeler peer {peer} timed out request");
                     self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                    self.peers.remove(&peer);
                     continue;
                 }
             }
