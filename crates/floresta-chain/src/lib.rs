@@ -18,6 +18,10 @@
 
 pub mod extensions;
 
+pub use bitcoinkernel;
+
+pub mod bitcoinkernelimpl;
+
 pub mod pruned_utreexo;
 pub(crate) use floresta_common::prelude;
 pub use pruned_utreexo::chain_state::*;
