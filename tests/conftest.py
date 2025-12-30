@@ -174,3 +174,21 @@ def add_node_with_tls(node_manager):
         return node
 
     return _create_node
+
+
+@pytest.fixture
+def add_node_with_extra_args(node_manager):
+    """
+    Creates and starts a node with extra command-line arguments, based on the
+    specified variant.
+    """
+
+    def _create_node(variant: NodeType, extra_args: list) -> Node:
+        node = node_manager.add_node_extra_args(
+            variant=variant,
+            extra_args=extra_args,
+        )
+        node_manager.run_node(node)
+        return node
+
+    return _create_node
