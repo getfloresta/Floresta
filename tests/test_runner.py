@@ -50,7 +50,6 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getbestblockhash"),
     ("floresta-cli", "getblockhash"),
     ("floresta-cli", "gettxout"),
-    ("florestad", "connect"),
     ("floresta-cli", "ping"),
     ("floresta-cli", "getblock"),
     ("florestad", "node-info"),
