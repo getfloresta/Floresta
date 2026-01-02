@@ -8,36 +8,20 @@ The test verifies that the node can stop and restart without encountering
 issues, such as data corruption or failure to initialize.
 """
 
-from test_framework import FlorestaTestFramework
-from test_framework.node import NodeType
+import pytest
 
 
-class TestRestart(FlorestaTestFramework):
+@pytest.mark.florestad
+def test_restart(florestad_node):
     """
-    Test the restart of a Floresta node using the same data directory.
-    Ensures that the node can stop and restart without issues.
+    Test restarting a Floresta node and ensuring data directory integrity.
     """
+    florestad = florestad_node
 
-    def set_test_params(self):
-        """
-        Here we define setup for test
-        """
+    florestad.stop()
 
-        self.floresta = self.add_node_default_args(
-            variant=NodeType.FLORESTAD,
-        )
+    florestad.start()
+    florestad.rpc.wait_on_socket(opened=True)
 
-    def run_test(self):
-        """
-        Tests the node's ability to restart without initialization issues.
-        This would have caught, the error fixed in #9
-        """
-
-        self.run_node(self.floresta)
-        self.floresta.stop()
-
-        self.run_node(self.floresta)
-
-
-if __name__ == "__main__":
-    TestRestart().main()
+    response = florestad.rpc.get_blockchain_info()
+    assert response is not None
