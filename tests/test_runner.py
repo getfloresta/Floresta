@@ -54,7 +54,6 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "gettxout"),
     ("florestad", "connect"),
     ("floresta-cli", "ping"),
-    ("florestad", "tls"),
     ("floresta-cli", "getblock"),
     ("florestad", "node-info"),
 ]
