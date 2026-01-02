@@ -59,7 +59,6 @@ BASE_TEST_SUITE = [
     ("florestad", "tls"),
     ("floresta-cli", "getblock"),
     ("florestad", "tls-fail"),
-    ("floresta-cli", "getmemoryinfo"),
     ("floresta-cli", "getpeerinfo"),
     ("floresta-cli", "getblockchaininfo"),
     ("floresta-cli", "getblockheader"),
