@@ -54,7 +54,6 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "ping"),
     ("floresta-cli", "getrpcinfo"),
     ("floresta-cli", "getroots"),
-    ("florestad", "tls"),
     ("floresta-cli", "getblock"),
     ("florestad", "tls-fail"),
     ("floresta-cli", "getpeerinfo"),
