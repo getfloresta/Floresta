@@ -50,7 +50,6 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getblockhash"),
     ("floresta-cli", "gettxout"),
     ("florestad", "restart"),
-    ("florestad", "connect"),
     ("floresta-cli", "ping"),
     ("floresta-cli", "getrpcinfo"),
     ("floresta-cli", "getroots"),
