@@ -76,6 +76,25 @@ class Node:
 
         return response
 
+    def connect(self, other_node: "Node"):
+        """
+        Connect this node to another node using `addnode` RPC command.
+        """
+        if self.daemon.is_running is False:
+            raise RuntimeError(f"Node '{self.variant}' is not running.")
+
+        if other_node.daemon.is_running is False:
+            raise RuntimeError(f"Node '{other_node.variant}' is not running.")
+
+        address = f"127.0.0.1:{other_node.get_port('p2p')}"
+        response = self.rpc.addnode(address, "add")
+
+        if response is not None:
+            raise RuntimeError(
+                f"Failed to connect {self.variant} to {other_node.variant}, "
+                f"port {other_node.get_ports('p2p')}"
+            )
+
     def get_host(self) -> str:
         """
         Get the host address of the node.
@@ -686,6 +705,50 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         for i in range(len(self._nodes)):
             self.stop_node(i)
+
+    def connect_nodes(self):
+        """
+        Establish connections between nodes in the test framework.
+        - Connects `florestad` to non-Floresta nodes.
+        - Ensures no redundant connections between non-Floresta nodes.
+        - Avoids self-connections and treats (i, j) and (j, i) as the same pair.
+        """
+        if len(self._nodes) < 2:
+            raise RuntimeError("Not enough nodes to connect.")
+
+        florestads = [node for node in self._nodes if node.variant == "florestad"]
+        other_nodes = [node for node in self._nodes if node.variant != "florestad"]
+
+        if len(other_nodes) < 1:
+            raise RuntimeError("No non-Floresta nodes available to connect.")
+
+        for florestad_index, florestad_node in enumerate(florestads):
+            for other_node_index, other_node in enumerate(other_nodes):
+                florestad_node.connect(other_node)
+                self.log(
+                    f"Connected Floresta node {florestad_index} to node {other_node_index}"
+                )
+
+        if len(other_nodes) < 2:
+            return
+
+        connected_pairs = set()
+
+        for source_node_index, source_node in enumerate(other_nodes):
+            for target_node_index, target_node in enumerate(other_nodes):
+                if source_node_index == target_node_index:
+                    continue
+                pair = (
+                    min(source_node_index, target_node_index),
+                    max(source_node_index, target_node_index),
+                )
+                if pair in connected_pairs:
+                    continue
+                source_node.connect(target_node)
+                connected_pairs.add(pair)
+                self.log(
+                    f"Connected non-Floresta node {source_node_index} to node {target_node_index}"
+                )
 
     # pylint: disable=invalid-name
     def assertTrue(self, condition: bool):

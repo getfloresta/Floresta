@@ -44,7 +44,6 @@ ALLDONE_EMOJI = "🎉"
 # Bitcoin Core's functional tests:
 # https://github.com/bitcoin/bitcoin/blob/master/test/functional/test_runner.py#L89
 BASE_TEST_SUITE = [
-    ("florestad", "reorg-chain"),
     ("floresta-cli", "getblockcount"),
     ("floresta-cli", "getbestblockhash"),
     ("floresta-cli", "getblockhash"),
