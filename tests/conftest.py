@@ -157,3 +157,20 @@ def utreexod_node(node_manager) -> Node:
     )
     node_manager.run_node(node)
     return node
+
+
+@pytest.fixture
+def add_node_with_tls(node_manager):
+    """Creates and starts a node with TLS enabled, based on the specified variant."""
+
+    def _create_node(variant: NodeType) -> Node:
+        if variant == NodeType.BITCOIND:
+            raise ValueError("BITCOIND does not support TLS")
+
+        node = node_manager.add_node_with_tls(
+            variant=variant,
+        )
+        node_manager.run_node(node)
+        return node
+
+    return _create_node
