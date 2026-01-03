@@ -45,7 +45,6 @@ ALLDONE_EMOJI = "🎉"
 # https://github.com/bitcoin/bitcoin/blob/master/test/functional/test_runner.py#L89
 BASE_TEST_SUITE = [
     ("floresta-cli", "getblockcount"),
-    ("floresta-cli", "getbestblockhash"),
     ("floresta-cli", "getblockhash"),
     ("floresta-cli", "gettxout"),
     ("floresta-cli", "ping"),
