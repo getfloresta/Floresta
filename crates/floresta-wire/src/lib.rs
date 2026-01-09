@@ -10,7 +10,12 @@
 //! like requesting blocks, mempool transactions or asking to connect with a given
 //! peer.
 
+// cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_logo_url = "https://avatars.githubusercontent.com/u/249173822")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
+)]
 
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::Block;

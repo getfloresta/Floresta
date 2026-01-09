@@ -8,7 +8,12 @@
 //! ready-to-use library for interacting with florestad's json-rpc interface in your rust
 //! application.
 
+// cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_logo_url = "https://avatars.githubusercontent.com/u/249173822")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
+)]
 
 #[cfg(feature = "with-jsonrpc")]
 pub mod jsonrpc_client;
@@ -16,7 +21,7 @@ pub mod jsonrpc_client;
 pub mod rpc;
 pub mod rpc_types;
 
-// Those tests doesn't work on windowns
+// Those tests doesn't work on windows
 // TODO (Davidson): work on windows?
 
 #[cfg(all(test, feature = "with-jsonrpc", not(target_os = "windows")))]
