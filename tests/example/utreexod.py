@@ -7,63 +7,20 @@ see `tests/test_framework/test_framework.py` for more info.
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+import pytest
+
+from conftest import TEST_CHAIN, GENESIS_BLOCK_BLOCK, GENESIS_BLOCK_DIFFICULTY_INT
 
 
-class UtreexodTest(FlorestaTestFramework):
+@pytest.mark.example
+def test_utreexod(utreexod_node):
     """
-    Tests should be a child class from FlorestaTestFramework
-
-    In each test class definition, `set_test_params` and `run_test`, say what
-    the test do and the expected result in the docstrings
+    This test demonstrates how to set up and run a utreexod node,
+    and verifies that the blockchain information returned by the node's RPC
+    matches the expected values for the test chain.
     """
+    response = utreexod_node.rpc.get_blockchain_info()
 
-    expected_chain = "regtest"
-    expected_height = 0
-    expected_headers = 0
-    expected_blockhash = (
-        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-    )
-    expected_difficulty = 1
-
-    def set_test_params(self):
-        """
-        Here we define setup for test adding a node definition
-        """
-        self.utreexod = self.add_node_default_args(variant=NodeType.UTREEXOD)
-
-    # All tests should override the run_test method
-    def run_test(self):
-        """
-        Here we define the test itself:
-
-        - creates a dummy rpc listening on default port
-        - perform some requests to FlorestaRPC node
-        - if any assertion fails, all nodes will be stopped
-        - if no error occurs, all nodes will be stopped at the end
-        """
-        # Start a new node (this crate's binary)
-        # This method start a defined daemon,
-        # in this case, `utreexod`, and wait for
-        # all ports opened by it, including the
-        # RPC port to be available
-        self.run_node(self.utreexod)
-
-        # Once the node is running, we can create
-        # a request to the RPC server. In this case, we
-        # call it node, but in truth, will be a RPC request
-        # to perform some kind of action
-        utreexo_response = self.utreexod.rpc.get_blockchain_info()
-
-        self.assertEqual(utreexo_response["chain"], UtreexodTest.expected_chain)
-        self.assertEqual(
-            utreexo_response["bestblockhash"], UtreexodTest.expected_blockhash
-        )
-        self.assertEqual(
-            utreexo_response["difficulty"], UtreexodTest.expected_difficulty
-        )
-
-        self.stop()
-
-
-if __name__ == "__main__":
-    UtreexodTest().main()
+    assert response["chain"] == TEST_CHAIN
+    assert response["bestblockhash"] == GENESIS_BLOCK_BLOCK
+    assert response["difficulty"] == GENESIS_BLOCK_DIFFICULTY_INT

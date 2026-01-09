@@ -7,61 +7,26 @@ see `tests/test_framework/test_framework.py` for more info.
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+import pytest
+
+from conftest import (
+    GENESIS_BLOCK_HEIGHT,
+    GENESIS_BLOCK_BLOCK,
+    GENESIS_BLOCK_DIFFICULTY_INT,
+    GENESIS_BLOCK_LEAF_COUNT,
+)
 
 
-class FunctionalTest(FlorestaTestFramework):
+@pytest.mark.example
+def test_functional(florestad_node):
     """
-    Tests should be a child class from FlorestaTestFramework
-
-    In each test class definition, `set_test_params` and `run_test`, say what
-    the test do and the expected result in the docstrings
+    This test demonstrates how to set up and run a `florestad_node`
+    and verifies that the blockchain information returned by the node's RPC
+    matches the expected values for the genesis block.
     """
+    response = florestad_node.rpc.get_blockchain_info()
 
-    expected_height = 0
-    expected_block = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-    expected_difficulty = 1
-    expected_leaf_count = 0
-
-    def set_test_params(self):
-        """
-        Here we define setup for test adding a node definition
-        """
-        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
-
-    # All tests should override the run_test method
-    def run_test(self):
-        """
-        Here we define the test itself:
-
-        - creates a dummy rpc listening on default port
-        - perform some requests to FlorestaRPC node
-        - if any assertion fails, all nodes will be stopped
-        - if no error occurs, all nodes will be stopped at the end
-        """
-        # Start a new node (this crate's binary)
-        # This method start a defined daemon,
-        # in this case, `florestad`, and wait for
-        # all ports opened by it, including the
-        # RPC port to be available
-        self.run_node(self.florestad)
-
-        # Once the node is running, we can create
-        # a request to the RPC server. In this case, we
-        # call it node, but in truth, will be a RPC request
-        # to perform some kind of action
-        inf_response = self.florestad.rpc.get_blockchain_info()
-
-        # Make assertions with our framework. Avoid usage of
-        # native `assert` clauses. For more information, see
-        # https://github.com/getfloresta/Floresta/issues/426
-        self.assertEqual(inf_response["height"], FunctionalTest.expected_height)
-        self.assertEqual(inf_response["best_block"], FunctionalTest.expected_block)
-        self.assertEqual(inf_response["difficulty"], FunctionalTest.expected_difficulty)
-        self.assertEqual(inf_response["leaf_count"], FunctionalTest.expected_leaf_count)
-
-        # stop nodes
-        self.stop()
-
-
-if __name__ == "__main__":
-    FunctionalTest().main()
+    assert response["height"] == GENESIS_BLOCK_HEIGHT
+    assert response["best_block"] == GENESIS_BLOCK_BLOCK
+    assert response["difficulty"] == GENESIS_BLOCK_DIFFICULTY_INT
+    assert response["leaf_count"] == GENESIS_BLOCK_LEAF_COUNT
