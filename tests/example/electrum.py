@@ -53,7 +53,7 @@ class ElectrumTest(FlorestaTestFramework):
 
         # Make assertions with our framework. Avoid usage of
         # native `assert` clauses. For more information, see
-        # https://github.com/vinteumorg/Floresta/issues/426
+        # https://github.com/getfloresta/Floresta/issues/426
         self.assertEqual(rpc_response["result"][0], ElectrumTest.expected_version[0])
         self.assertEqual(rpc_response["result"][1], ElectrumTest.expected_version[1])
 

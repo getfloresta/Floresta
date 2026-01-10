@@ -4,7 +4,7 @@
 
 It also supports compact block filters, which are particularly helpful for rescans because Floresta is fully pruned, and an optional SOCKS5 proxy to route all P2P traffic and DNS seed queries.
 
-This crate delegates chain state, validation, and persistence to [`floresta-chain`](https://github.com/vinteumorg/Floresta/tree/master/crates/floresta-chain) and is used by the `florestad` binary.
+This crate delegates chain state, validation, and persistence to [`floresta-chain`](https://github.com/getfloresta/Floresta/tree/master/crates/floresta-chain) and is used by the `florestad` binary.
 
 ## Usage
 
@@ -70,4 +70,4 @@ This library should compile with any combination of features on **Rust 1.81.0**.
 
 ## License
 
-`floresta-wire` is released under the terms of the MIT license. See [LICENSE](https://github.com/vinteumorg/Floresta/blob/master/LICENSE) for more information or see https://opensource.org/licenses/MIT.
+`floresta-wire` is released under the terms of the MIT license. See [LICENSE](https://github.com/getfloresta/Floresta/blob/master/LICENSE) for more information or see https://opensource.org/licenses/MIT.

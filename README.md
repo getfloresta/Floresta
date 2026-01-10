@@ -8,14 +8,14 @@
   </p>
 
   <p>
-    <a href="https://github.com/vinteumorg/Floresta/blob/master/LICENSE">
+    <a href="https://github.com/getfloresta/Floresta/blob/master/LICENSE">
       <img alt="MIT Licensed" src="https://img.shields.io/github/license/getfloresta/floresta" />
     </a>
     <a href="https://github.com/getfloresta/Floresta/releases/latest">
       <img alt="Latest release" src="https://img.shields.io/github/v/release/getfloresta/floresta" />
     </a>
-    <a href="https://github.com/vinteumorg/Floresta/actions/workflows/functional.yml">
-      <img alt="Functional Tests" src="https://github.com/vinteumorg/Floresta/actions/workflows/functional.yml/badge.svg" />
+    <a href="https://github.com/getfloresta/Floresta/actions/workflows/functional.yml">
+      <img alt="Functional Tests" src="https://github.com/getfloresta/Floresta/actions/workflows/functional.yml/badge.svg" />
     </a>
     <a href="https://docs.getfloresta.sh"><img alt="API Docs" src="https://img.shields.io/badge/docs-floresta-green" /></a>
     <a href="https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/">
@@ -24,8 +24,8 @@
     <a href="https://hub.docker.com/r/dlsz/floresta">
       <img alt="Docker pulls" src="https://img.shields.io/docker/pulls/dlsz/floresta" />
     </a>
-    <a href="https://github.com/vinteumorg/Floresta/actions/workflows/docker.yml">
-      <img alt="Docker Build Status" src="https://github.com/vinteumorg/Floresta/actions/workflows/docker.yml/badge.svg" />
+    <a href="https://github.com/getfloresta/Floresta/actions/workflows/docker.yml">
+      <img alt="Docker Build Status" src="https://github.com/getfloresta/Floresta/actions/workflows/docker.yml/badge.svg" />
     </a>
     <a href="https://discord.gg/5Wj8fjjS93">
       <img alt="Chat on Discord" src="https://img.shields.io/discord/1185232004506198056" />
@@ -77,7 +77,7 @@ If you want to contribute but don't know where to start, take a look at the issu
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://github.com/vinteumorg/Floresta/blob/master/LICENSE) file for details
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/getfloresta/Floresta/blob/master/LICENSE) file for details
 
 ## Acknowledgments
 

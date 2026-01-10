@@ -19,7 +19,7 @@ This will start the full node, and you can connect to it with an Electrum wallet
 floresta-cli getblockchaininfo
 ```
 
-For more information on how to use the `floresta-cli` tool, you can check the [API documentation](https://github.com/vinteumorg/Floresta/blob/master/crates/floresta-cli/README.md).
+For more information on how to use the `floresta-cli` tool, you can check the [API documentation](https://github.com/getfloresta/Floresta/blob/master/crates/floresta-cli/README.md).
 
 ## TLS
 

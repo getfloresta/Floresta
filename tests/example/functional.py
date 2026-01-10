@@ -52,7 +52,7 @@ class FunctionalTest(FlorestaTestFramework):
 
         # Make assertions with our framework. Avoid usage of
         # native `assert` clauses. For more information, see
-        # https://github.com/vinteumorg/Floresta/issues/426
+        # https://github.com/getfloresta/Floresta/issues/426
         self.assertEqual(inf_response["height"], FunctionalTest.expected_height)
         self.assertEqual(inf_response["best_block"], FunctionalTest.expected_block)
         self.assertEqual(inf_response["difficulty"], FunctionalTest.expected_difficulty)

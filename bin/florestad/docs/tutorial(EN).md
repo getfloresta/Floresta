@@ -18,7 +18,7 @@ To compile, you need the Rust toolchain and Cargo, more information [here](https
 You can obtain the source code by downloading from Github or cloning with
 
 ```bash
-git clone https://github.com/vinteumorg/Floresta.git
+git clone https://github.com/getfloresta/Floresta.git
 ```
 
 Navigate into the folder with

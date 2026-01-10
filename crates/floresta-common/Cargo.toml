@@ -5,7 +5,7 @@ edition = "2021"
 description = "Common types and functions for Floresta"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
 license = "MIT"
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 readme.workspace = true # Floresta/README.md
 
 [dependencies]

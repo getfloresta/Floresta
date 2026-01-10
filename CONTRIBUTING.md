@@ -9,7 +9,7 @@ with any level of experience or expertise. We only ask that you respect others a
 Communications Channels
 -----------------------
 
-The primary communication channel is the [GitHub repository](https://github.com/vinteumorg/floresta). We also have Discord server, where you can ask questions, discuss features, and get help. You can join the server by clicking [here](https://discord.gg/5Wj8fjjS93).
+The primary communication channel is the [GitHub repository](https://github.com/getfloresta/floresta). We also have Discord server, where you can ask questions, discuss features, and get help. You can join the server by clicking [here](https://discord.gg/5Wj8fjjS93).
 
 Contribution Workflow
 ---------------------

@@ -35,7 +35,7 @@ You'll need Rust and Cargo, refer to [this](https://www.rust-lang.org/) for more
 Once you have Cargo, clone the repository with:
 
 ```bash
-git clone https://github.com/vinteumorg/Floresta.git
+git clone https://github.com/getfloresta/Floresta.git
 ```
 
 go to the Floresta directory

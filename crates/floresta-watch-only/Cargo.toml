@@ -7,7 +7,7 @@ authors = ["Floresta Developers <contact@getfloresta.org>"]
 keywords = ["bitcoin", "watch-only", "electrum-server"]
 categories = ["cryptography::cryptocurrencies"]
 license = "MIT"
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 readme.workspace = true # Floresta/README.md
 
 [dependencies]

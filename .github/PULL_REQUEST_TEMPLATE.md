@@ -11,7 +11,7 @@
 
 <!-- Please remove this section once you've confirmed all items -->
 
-- [ ] I've followed the [contribution guidelines](https://github.com/vinteumorg/Floresta/blob/master/CONTRIBUTING.md)
+- [ ] I've followed the [contribution guidelines](https://github.com/getfloresta/Floresta/blob/master/CONTRIBUTING.md)
 - [ ] I've verified one of the following:
   - Ran `just pcc` (recommended but slower)
   - Ran `just lint-features '-- -D warnings' && cargo test --release`

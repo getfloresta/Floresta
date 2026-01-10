@@ -16,7 +16,7 @@ This script will guide the user about Floresta's installation/configuration or r
 
 * check if you have the required dependencies to build Floresta, and if not, download them;
 * start the guide to desired Floresta's `systemd` service configuration;
-* once configured, download the [latest release](https://github.com/vinteumorg/Floresta/releases/latest), build and install the `florestad` and `floresta-cli` binaries with the `jsonrpc` feature;
+* once configured, download the [latest release](https://github.com/getfloresta/Floresta/releases/latest), build and install the `florestad` and `floresta-cli` binaries with the `jsonrpc` feature;
 * warn how to start and enable the `systemd` service;
 * check if the service is running.
 
@@ -25,13 +25,13 @@ This script will guide the user about Floresta's installation/configuration or r
 Use `curl` to download the script and execute it with `bash`:
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/vinteumorg/Floresta/refs/heads/master/contrib/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/getfloresta/Floresta/refs/heads/master/contrib/install.sh | bash
 ```
 
 Or you can use `wget`:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/vinteumorg/Floresta/refs/heads/master/contrib/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/getfloresta/Floresta/refs/heads/master/contrib/install.sh | bash
 ```
 
 ### Check dependencies
@@ -39,7 +39,7 @@ wget -qO- https://raw.githubusercontent.com/vinteumorg/Floresta/refs/heads/maste
 When you start the command above you could see something like this:
 
 ```bash
-$ curl -LsSf https://raw.githubusercontent.com/vinteumorg/Floresta/refs/heads/master/contrib/install.sh | bash
+$ curl -LsSf https://raw.githubusercontent.com/getfloresta/Floresta/refs/heads/master/contrib/install.sh | bash
 ✅ Internet connection is available.
 🐧 'dialog' is not installed. Installing...
 [sudo] password for user:

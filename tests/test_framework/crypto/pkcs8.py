@@ -16,7 +16,7 @@ from cryptography.x509.oid import NameOID
 
 DEFAULT_PUBLIC_EXPONENT = 65537
 DEFAULT_KEY_SIZE = 2048
-DEFAULT_CN = "vinteumorg"
+DEFAULT_CN = "getfloresta"
 DEFAULT_DAYS = 1
 
 

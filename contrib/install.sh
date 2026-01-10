@@ -21,7 +21,7 @@ network="bitcoin"
 proxy=""
 uninstall_mode=false
 interactive_mode=true
-defaultRepo="vinteumorg"
+defaultRepo="getfloresta"
 defaultTag="0.8.0"
 tarSrc="https://github.com/$defaultRepo/Floresta/archive/refs/tags/v$defaultTag.tar.gz"
 shaSrc="https://github.com/$defaultRepo/Floresta/releases/download/v$defaultTag/SHA256SUMS"
@@ -423,7 +423,7 @@ EOF
     sudo tee $florestaService >/dev/null <<EOF
 [Unit]
 Description=Floresta: A Lightweight Utreexo-powered Bitcoin full node implementation
-Documentation=https://github.com/vinteumorg/Floresta
+Documentation=https://github.com/getfloresta/Floresta
 After=network-online.target time-set.target
 Wants=network-online.target
 
@@ -694,7 +694,7 @@ interactive_prepare() {
 # install, what removes from system, etc
 interactive_greeting() {
     dialog --title "Floresta-Installer" \
-        --msgbox "Welcome to Floresta: a lightweight Bitcoin full node implementation written in Rust and powered by Utreexo, a novel dynamic accumulator designed for the Bitcoin UTXO set.\n\nThis installer will guide you through the various options you can perform on your new node.\n\nIf you have any questions, don't hesitate to contact us via:\n\n * Discord\n (https://discord.gg/p6w6468c);\n\n * Github\n (https://github.com/vinteumorg/Floresta/issues).\n\nIf you want to disclose a security vulnerability, please email:\n\n * Davidson Souza at me AT dlsouza DOT lol;\n\n * using the PGP key 2C8E0F 836FD7D BBBB9E 9B2EF899 64EC3AB 22B2E3 (https://blog.dlsouza.lol/assets/gpg.asc)." \
+        --msgbox "Welcome to Floresta: a lightweight Bitcoin full node implementation written in Rust and powered by Utreexo, a novel dynamic accumulator designed for the Bitcoin UTXO set.\n\nThis installer will guide you through the various options you can perform on your new node.\n\nIf you have any questions, don't hesitate to contact us via:\n\n * Discord\n (https://discord.gg/p6w6468c);\n\n * Github\n (https://github.com/getfloresta/Floresta/issues).\n\nIf you want to disclose a security vulnerability, please email:\n\n * Davidson Souza at me AT dlsouza DOT lol;\n\n * using the PGP key 2C8E0F 836FD7D BBBB9E 9B2EF899 64EC3AB 22B2E3 (https://blog.dlsouza.lol/assets/gpg.asc)." \
         30 60
 }
 
