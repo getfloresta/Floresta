@@ -20,6 +20,7 @@ RUN rustup default 1.81.0
 
 WORKDIR /opt/app
 
+COPY README.md .
 COPY Cargo.* ./
 COPY bin/ bin/
 COPY crates/ crates/
