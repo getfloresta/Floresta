@@ -25,7 +25,6 @@ use floresta_common::service_flags::UTREEXO;
 use floresta_common::FractionAvg;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use rustreexo::accumulator::pollard::Pollard;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc::unbounded_channel;
@@ -363,7 +362,7 @@ pub async fn setup_node(
     let config = FlatChainStoreConfig::new(datadir.into());
 
     let chainstore = FlatChainStore::new(config).unwrap();
-    let mempool = Arc::new(Mutex::new(Mempool::new(Pollard::default(), 1000)));
+    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
     let chain = ChainState::new(chainstore, network, AssumeValidArg::Disabled);
     let chain = Arc::new(chain);
 

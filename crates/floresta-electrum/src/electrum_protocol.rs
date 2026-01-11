@@ -194,7 +194,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
 }
 
 impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
-    pub fn new(
+    pub async fn new(
         address_cache: Arc<AddressCache<KvDatabase>>,
         chain: Arc<Blockchain>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
@@ -203,7 +203,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         let (tx, rx) = unbounded_channel();
         let unconfirmed = address_cache.find_unconfirmed().unwrap();
         for tx in unconfirmed {
-            chain.broadcast(&tx).expect("Invalid chain");
+            let txid = tx.compute_txid();
+            if let Err(e) = node_interface.broadcast_transaction(tx).await? {
+                error!("Could not re-broadcast tx: {txid} due to {e}");
+            }
         }
 
         Ok(ElectrumServer {
@@ -221,7 +224,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
     /// Handle a request from a client. All methods are defined in the electrum
     /// protocol.
-    fn handle_client_request(
+    async fn handle_client_request(
         &mut self,
         client: Arc<Client>,
         request: Request,
@@ -432,10 +435,17 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     Vec::from_hex(&tx).map_err(|_| super::error::Error::InvalidParams)?;
                 let tx: Transaction =
                     deserialize(&hex).map_err(|_| super::error::Error::InvalidParams)?;
-                self.chain
-                    .broadcast(&tx)
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
-                let id = tx.compute_txid();
+
+                let txid = tx.compute_txid();
+                if let Err(e) = self
+                    .node_interface
+                    .broadcast_transaction(tx.clone())
+                    .await?
+                {
+                    error!("Could not broadcast transaction {txid} due to {e:?}");
+                    return Err(super::error::Error::Mempool(e));
+                };
+
                 let updated = self
                     .address_cache
                     .cache_mempool_transaction(&tx)
@@ -444,7 +454,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     .collect::<Vec<_>>();
 
                 self.wallet_notify(&updated);
-                json_rpc_res!(request, id)
+                json_rpc_res!(request, txid)
             }
             "blockchain.transaction.get" => {
                 let tx_id = get_arg!(request, Txid, 0);
@@ -525,7 +535,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             .await
             {
                 if let Some(message) = request {
-                    self.handle_message(message)?;
+                    self.handle_message(message).await?;
                 }
             }
 
@@ -664,7 +674,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     }
 
     /// Handles each kind of Message
-    fn handle_message(&mut self, message: Message) -> Result<(), crate::error::Error> {
+    async fn handle_message(&mut self, message: Message) -> Result<(), crate::error::Error> {
         match message {
             Message::NewClient((id, client)) => {
                 self.clients.insert(id, client);
@@ -680,7 +690,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     }
                     let client = client.unwrap().to_owned();
                     let id = req.id.to_owned();
-                    let res = self.handle_client_request(client.clone(), req);
+                    let res = self.handle_client_request(client.clone(), req).await;
 
                     if let Ok(res) = res {
                         client.write(serde_json::to_string(&res).unwrap().as_bytes())?;
@@ -706,7 +716,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                         }
                         let client = client.unwrap().to_owned();
                         let id = req.id.to_owned();
-                        let res = self.handle_client_request(client.clone(), req);
+                        let res = self.handle_client_request(client.clone(), req).await;
 
                         if let Ok(res) = res {
                             results.push(res);
@@ -906,7 +916,6 @@ mod test {
     use floresta_wire::UtreexoNodeConfig;
     use rcgen::generate_simple_self_signed;
     use rcgen::CertifiedKey;
-    use rustreexo::accumulator::pollard::Pollard;
     use serde_json::json;
     use serde_json::Number;
     use serde_json::Value;
@@ -1050,7 +1059,7 @@ mod test {
             UtreexoNode::new(
                 u_config,
                 chain.clone(),
-                Arc::new(Mutex::new(Mempool::new(Pollard::default(), 0))),
+                Arc::new(Mutex::new(Mempool::new(10_000))),
                 None,
                 Arc::new(RwLock::new(false)),
                 AddressMan::default(),
@@ -1063,10 +1072,14 @@ mod test {
         let tls_acceptor = tls_config.map(TlsAcceptor::from);
 
         let electrum_server: ElectrumServer<ChainState<FlatChainStore>> =
-            ElectrumServer::new(wallet, chain, None, node_interface).unwrap();
+            ElectrumServer::new(wallet, chain, None, node_interface)
+                .await
+                .unwrap();
         let non_tls_listener = Arc::new(TcpListener::bind(e_addr).await.unwrap());
         let assigned_port = non_tls_listener.local_addr().unwrap().port();
 
+        let (stop_signal, _) = tokio::sync::oneshot::channel();
+        task::spawn(chain_provider.run(stop_signal));
         task::spawn(client_accept_loop(
             non_tls_listener,
             electrum_server.message_transmitter.clone(),

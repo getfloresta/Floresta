@@ -449,10 +449,6 @@ impl BlockchainInterface for PartialChainState {
         unimplemented!("partialChainState::get_tx")
     }
 
-    fn broadcast(&self, _tx: &bitcoin::Transaction) -> Result<(), Self::Error> {
-        unimplemented!("partialChainState::broadcast")
-    }
-
     fn subscribe(&self, _tx: sync::Arc<dyn crate::BlockConsumer>) {
         unimplemented!("partialChainState::subscribe")
     }
@@ -463,10 +459,6 @@ impl BlockchainInterface for PartialChainState {
 
     fn get_block_height(&self, _hash: &bitcoin::BlockHash) -> Result<Option<u32>, Self::Error> {
         unimplemented!("partialChainState::get_block_height")
-    }
-
-    fn get_unbroadcasted(&self) -> Vec<bitcoin::Transaction> {
-        unimplemented!("partialChainState::get_unbroadcasted")
     }
 }
 
