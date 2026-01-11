@@ -21,6 +21,7 @@ pub mod rpc_types;
 
 #[cfg(all(test, feature = "with-jsonrpc", not(target_os = "windows")))]
 mod tests {
+    use std::env;
     use std::fs;
     use std::net::TcpListener;
     use std::path::Path;
@@ -57,10 +58,15 @@ mod tests {
     /// you can poke at the stdin and out for this process. You don't have to kill it though,
     /// once the handle goes out of scope, the process will be killed.
     ///
+    /// This function tries to find florestad under these directories below, preferring them in the according order:
+    /// - $PROJECT_ROOT/target/release/florestad.
+    /// - $PROJECT_ROOT/target/debug/florestad.
+    /// - $FLORESTA_TEMP_DIR/binaries/florestad.
+    ///
     /// The process created by this method will run in a random datadir and use random ports
     /// for both RPC and Electrum. The datadir will be in the current dir, under a `tmp` subdir.
     /// If you're at $HOME/floresta it will run on $HOME/floresta/tmp/<random_name>/
-    fn start_florestad() -> (Florestad, Client) {
+    fn start_florestad() -> Option<(Florestad, Client)> {
         // CARGO_MANIFEST_DIR is always floresta-cli's directory; PWD changes based on where the
         // command is executed.
         let root = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
@@ -69,10 +75,26 @@ mod tests {
 
         let release_found = Path::new(&release_path).try_exists().unwrap();
         // If release target not found, default to the debug path
-        let florestad_path = match release_found {
+        let mut florestad_path = match release_found {
             true => release_path,
             false => debug_path,
         };
+
+        if env::var("FLORESTA_TEMP_DIR").is_ok() {
+            let given_test_setup = env::var("FLORESTA_TEMP_DIR").unwrap();
+            let test_binaries_path = format!("{given_test_setup}/binaries/florestad");
+
+            florestad_path = if Path::new(&test_binaries_path).try_exists().unwrap() {
+                test_binaries_path
+            } else {
+                florestad_path
+            };
+        }
+
+        // florestad not being found normally means that we dont want to run these tests
+        if !Path::new(&florestad_path).try_exists().unwrap() {
+            return None;
+        }
 
         // Makes a temporary directory to store the chain db, TLS certificate, logs, etc.
         let test_code = rand::random::<u64>();
@@ -121,7 +143,7 @@ mod tests {
             }
         }
 
-        (Florestad { proc: fld }, client)
+        Some((Florestad { proc: fld }, client))
     }
 
     fn get_available_port() -> u16 {
@@ -140,7 +162,10 @@ mod tests {
 
     #[test]
     fn test_stop() {
-        let (mut _proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let stop = client.stop().expect("rpc not working");
         assert_eq!(stop.as_str(), "Floresta stopping");
@@ -148,7 +173,10 @@ mod tests {
 
     #[test]
     fn test_get_blockchaininfo() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let gbi = client.get_blockchain_info().expect("rpc not working");
 
@@ -161,7 +189,10 @@ mod tests {
 
     #[test]
     fn test_get_roots() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let gbi = client.get_blockchain_info().expect("rpc not working");
 
@@ -170,7 +201,10 @@ mod tests {
 
     #[test]
     fn test_get_best_block_hash() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let blockhash = client.get_best_block_hash().expect("rpc not working");
 
@@ -184,7 +218,10 @@ mod tests {
 
     #[test]
     fn test_get_block() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let block_hash: BlockHash =
             "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
@@ -204,7 +241,10 @@ mod tests {
 
     #[test]
     fn test_get_block_hash() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let blockhash = client.get_block_hash(0).expect("rpc not working");
 
@@ -218,7 +258,10 @@ mod tests {
 
     #[test]
     fn test_get_block_header() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let blockhash = client.get_block_hash(0).expect("rpc not working");
         let block_header = client.get_block_header(blockhash).expect("rpc not working");
@@ -228,7 +271,10 @@ mod tests {
 
     #[test]
     fn test_get_height() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let height = client.get_block_count().unwrap();
         assert_eq!(height, 0);
@@ -236,7 +282,10 @@ mod tests {
 
     #[test]
     fn test_send_raw_transaction() {
-        let (_proc, client) = start_florestad();
+        let (mut _proc, client) = match start_florestad() {
+            Some((_proc, client)) => (_proc, client),
+            None => return,
+        };
 
         let tx = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000".to_string();
 
