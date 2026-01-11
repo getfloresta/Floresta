@@ -404,7 +404,7 @@ mod tests {
         fn update_acc(
             &self,
             _: Stump,
-            _: Block,
+            _: &Block,
             _: u32,
             _: Proof,
             _: Vec<Sha256Hash>,

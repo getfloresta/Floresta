@@ -10,6 +10,7 @@ use bitcoin::block::Header as BlockHeader;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::sha256;
+use bitcoin::script;
 use bitcoin::Amount;
 use bitcoin::Block;
 use bitcoin::CompactTarget;
@@ -138,10 +139,8 @@ impl Consensus {
         let coinbase_total = transactions[0]
             .output
             .iter()
-            .try_fold(Amount::ZERO, |acc, out| {
-                acc.checked_add(out.value)
-                    .ok_or(BlockValidationErrors::TooManyCoins)
-            })?;
+            .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
+            .ok_or(BlockValidationErrors::TooManyCoins)?;
 
         if coinbase_total > allowed_reward {
             return Err(BlockValidationErrors::BadCoinbaseOutValue)?;
@@ -283,10 +282,8 @@ impl Consensus {
         let out_value = transaction
             .output
             .iter()
-            .try_fold(Amount::ZERO, |acc, out| {
-                acc.checked_add(out.value)
-                    .ok_or(BlockValidationErrors::TooManyCoins)
-            })?;
+            .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
+            .ok_or(BlockValidationErrors::TooManyCoins)?;
 
         // Sanity check
         if out_value > Amount::MAX_MONEY {
@@ -360,6 +357,32 @@ impl Consensus {
         }
 
         Ok(())
+    }
+
+    // TODO remove this once https://github.com/rust-bitcoin/rust-bitcoin/pull/3585 makes it into a
+    // rust-bitcoin stable release (i.e., 0.33).
+    pub fn get_bip34_height(block: &Block) -> Option<u32> {
+        let cb = block.coinbase()?;
+        let input = cb.input.first()?;
+        let push = input.script_sig.instructions_minimal().next()?;
+
+        match push {
+            Ok(script::Instruction::PushBytes(b)) => {
+                let h = script::read_scriptint(b.as_bytes()).ok()?;
+                Some(h as u32)
+            }
+
+            Ok(script::Instruction::Op(opcode)) => {
+                let opcode = opcode.to_u8();
+                if (0x51..=0x60).contains(&opcode) {
+                    Some(opcode as u32 - 0x50)
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        }
     }
 
     /// Checks if a testnet4 block is compliant with the anti-timewarp rules of BIP94.

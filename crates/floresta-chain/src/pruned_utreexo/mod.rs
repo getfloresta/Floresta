@@ -82,7 +82,7 @@ pub trait BlockchainInterface {
     fn update_acc(
         &self,
         acc: Stump,
-        block: Block,
+        block: &Block,
         height: u32,
         proof: Proof,
         del_hashes: Vec<sha256::Hash>,
@@ -313,7 +313,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
     fn update_acc(
         &self,
         acc: Stump,
-        block: Block,
+        block: &Block,
         height: u32,
         proof: Proof,
         del_hashes: Vec<sha256::Hash>,

@@ -405,7 +405,7 @@ where
             .leaf_data
             .expect("Leaf data should be present");
 
-        let acc1 = self.update_acc(agreed, inflight_block.block, proof, &leaf_data, fork + 1)?;
+        let acc1 = self.update_acc(agreed, &inflight_block.block, proof, &leaf_data, fork + 1)?;
 
         let peer1_acc = Self::parse_acc(peer1_acc)?;
         let peer2_acc = Self::parse_acc(peer2_acc)?;
@@ -508,7 +508,7 @@ where
     fn update_acc(
         &self,
         acc: Stump,
-        block: Block,
+        block: &Block,
         proof: Proof,
         leaf_data: &[CompactLeafData],
         height: u32,

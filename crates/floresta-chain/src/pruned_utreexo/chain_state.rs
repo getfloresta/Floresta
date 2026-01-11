@@ -26,7 +26,6 @@ use core::cell::UnsafeCell;
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::sha256;
-use bitcoin::script;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
@@ -925,30 +924,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(Consensus::check_bip94_time(block, &prev_header)?)
     }
 
-    pub fn get_bip34_height(&self, block: &Block) -> Option<u32> {
-        let cb = block.coinbase()?;
-        let input = cb.input.first()?;
-        let push = input.script_sig.instructions_minimal().next()?;
-
-        match push {
-            Ok(script::Instruction::PushBytes(b)) => {
-                let h = script::read_scriptint(b.as_bytes()).ok()?;
-                Some(h as u32)
-            }
-
-            Ok(script::Instruction::Op(opcode)) => {
-                let opcode = opcode.to_u8();
-                if (0x51..=0x60).contains(&opcode) {
-                    Some(opcode as u32 - 0x50)
-                } else {
-                    None
-                }
-            }
-
-            _ => None,
-        }
-    }
-
     /// Validates the block without checking whether the inputs are present in the UTXO set. This
     /// function contains the core validation logic.
     ///
@@ -966,7 +941,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         let bip34_height = self.chain_params().params.bip34_height;
         // If bip34 is active, check that the encoded block height is correct
-        if height >= bip34_height && self.get_bip34_height(block) != Some(height) {
+        if height >= bip34_height && Consensus::get_bip34_height(block) != Some(height) {
             return Err(BlockValidationErrors::BadBip34)?;
         }
 
@@ -1019,12 +994,12 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
     fn update_acc(
         &self,
         acc: Stump,
-        block: Block,
+        block: &Block,
         height: u32,
         proof: Proof,
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error> {
-        Consensus::update_acc(&acc, &block, height, proof, del_hashes)
+        Consensus::update_acc(&acc, block, height, proof, del_hashes)
     }
 
     fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {

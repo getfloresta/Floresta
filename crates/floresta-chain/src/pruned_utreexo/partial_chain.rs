@@ -426,7 +426,7 @@ impl BlockchainInterface for PartialChainState {
     fn update_acc(
         &self,
         _acc: Stump,
-        _block: Block,
+        _block: &Block,
         _height: u32,
         _proof: rustreexo::accumulator::proof::Proof,
         _del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
