@@ -10,7 +10,12 @@
 //! for it. Therefore, you can't use this to speedup wallet sync **before** IBD,
 //! since we wouldn't have the filter for all blocks yet.
 
+// cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc(html_logo_url = "https://avatars.githubusercontent.com/u/249173822")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
+)]
 #![allow(clippy::manual_is_multiple_of)]
 
 use core::fmt::Debug;

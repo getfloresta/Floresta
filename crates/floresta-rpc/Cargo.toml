@@ -9,7 +9,7 @@ floresta-rpc is a Rust library that provides a JSON-RPC interface for interactin
 users to perform various operations such as querying blockchain data, managing wallets, and
 broadcasting transactions through a simple and efficient API.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 readme.workspace = true # Floresta/README.md
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]
 categories = ["cryptography::cryptocurrencies", "command-line-utilities"]

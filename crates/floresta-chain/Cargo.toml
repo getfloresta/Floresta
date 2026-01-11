@@ -8,7 +8,7 @@ description = """
     Using floresta-chain, you can create a Bitcoin node that validates blocks
     and transactions, according to the Bitcoin consensus rules.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 license = "MIT"
 readme.workspace = true # Floresta/README.md
 keywords = ["bitcoin", "utreexo", "node", "consensus"]

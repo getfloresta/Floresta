@@ -16,7 +16,7 @@ description = """
     See the examples directory for examples of how to use this library, and
     each crate's documentation for more information on how to use each module.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 license = "MIT"
 readme.workspace = true # Floresta/README.md
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]

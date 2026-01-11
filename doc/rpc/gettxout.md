@@ -48,6 +48,6 @@ floresta-cli gettxout aa5f3068b53941915d82be382f2b35711305ec7d454a34ca69f8897510
 
 ## Notes
 
-* This `rpc` isn't fully implemented mostly because we need to implement a mempool. For more information see [RPC Saga](https://github.com/orgs/vinteumorg/projects/5):
+* This `rpc` isn't fully implemented mostly because we need to implement a mempool. For more information see [RPC Saga](https://github.com/orgs/getfloresta/projects/5):
 
 * The API accept the `include_mempool` argument but, for now, it does nothing.

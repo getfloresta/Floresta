@@ -8,7 +8,7 @@ description = """
     to fetch blocks and transactions from the network, and to broadcast
     your own transactions.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 license = "MIT"
 readme = "README.md"
 keywords = ["bitcoin", "utreexo", "p2p", "networking"]

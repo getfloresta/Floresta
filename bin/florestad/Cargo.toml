@@ -13,7 +13,7 @@ run this binary as a daemon on unix systems. There's a couple of features and co
 options to customize the node to your needs. Check out the README.md and the documentation
 for more information on how to use and configure Florestad.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 readme.workspace = true # Floresta/README.md
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]
 categories = ["cryptography::cryptocurrencies", "command-line-utilities"]

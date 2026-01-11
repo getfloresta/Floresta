@@ -16,7 +16,7 @@ The functional tests also need some dependencies, we use python for writing them
 
 The functional tests will build Bitcoin Core, Utreexo and Floresta in order to make integration testing. To do so it will use some dependencies.
 
-The following guide is a compilation taken from [Bitcoin](https://github.com/bitcoin/bitcoin/tree/master/doc) and [Utreexo](https://github.com/utreexo/utreexod/). It considers the user running the tests already has the required dependencies for building [Floresta](https://github.com/vinteumorg/Floresta/tree/master/doc).
+The following guide is a compilation taken from [Bitcoin](https://github.com/bitcoin/bitcoin/tree/master/doc) and [Utreexo](https://github.com/utreexo/utreexod/). It considers the user running the tests already has the required dependencies for building [Floresta](https://github.com/getfloresta/Floresta/tree/master/doc).
 
 #### Ubuntu & Debian
 
@@ -64,7 +64,7 @@ Next sections will cover the Python functional tests.
 
 We provide three way for running functional tests:
 * from `just` tool that abstracts what is necessary to run the tests before doing a commit;
-* from helper scripts — [prepare.sh](https://github.com/vinteumorg/Floresta/blob/master/tests/prepare.sh) and [run.sh](https://github.com/vinteumorg/Floresta/blob/master/tests/run.sh) — to automatically build and run the tests;
+* from helper scripts — [prepare.sh](https://github.com/getfloresta/Floresta/blob/master/tests/prepare.sh) and [run.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run.sh) — to automatically build and run the tests;
 * from python utility directly: the most laborious, but you can run a specific test suite.
 
 #### From `just` tool
@@ -98,9 +98,9 @@ just test-functional-run "-t floresta-cli -k getblock"
 
 We provide two helper scripts to support our functional tests in this process and guarantee isolation and reproducibility.
 
-* [prepare.sh](https://github.com/vinteumorg/Floresta/blob/master/tests/prepare.sh) checks for build dependencies for both `utreexod` and `florestad`, builds them, and sets the `$FLORESTA_TEMP_DIR` environment variable. This variable points to where our functional tests will look for the binaries — specifically at `$FLORESTA_TEMP_DIR/binaries`.
+* [prepare.sh](https://github.com/getfloresta/Floresta/blob/master/tests/prepare.sh) checks for build dependencies for both `utreexod` and `florestad`, builds them, and sets the `$FLORESTA_TEMP_DIR` environment variable. This variable points to where our functional tests will look for the binaries — specifically at `$FLORESTA_TEMP_DIR/binaries`.
 
-* [run.sh](https://github.com/vinteumorg/Floresta/blob/master/tests/run.sh) adds the binaries found at `$FLORESTA_TEMP_DIR/binaries` to your `$PATH` and runs the tests in that environment.
+* [run.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run.sh) adds the binaries found at `$FLORESTA_TEMP_DIR/binaries` to your `$PATH` and runs the tests in that environment.
 
 So a basic usage would be:
 

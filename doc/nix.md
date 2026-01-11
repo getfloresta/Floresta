@@ -24,7 +24,7 @@ Just a example of how to consume our expressions. Check out on [floresta-nix](ht
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    floresta.url = "github:vinteumorg/floresta"; # Using the latest nix
+    floresta.url = "github:getfloresta/floresta"; # Using the latest nix
     # expressions from the main repository of the project.
     floresta-flake.url = "github:getfloresta/floresta-nix/stable_building"; # Using the
     # decoupled nix flake, this one that contains all the nix heavy work to

@@ -74,7 +74,7 @@ bench:
 
 # Generate the public documentation for all crates
 doc:
-    RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --workspace --no-deps --lib --all-features
+    RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --workspace --no-deps --lib --all-features --exclude metrics
 
 # Generate and open the public documentation for all crates
 open-doc:

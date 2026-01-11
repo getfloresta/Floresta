@@ -18,7 +18,7 @@ Para compilar, você precisa da toochain do Rust e o Cargo, mais informações [
 Você pode obter o código-fonte baixando do Github ou clonando com
 
 ```bash
-git clone https://github.com/vinteumorg/Floresta.git
+git clone https://github.com/getfloresta/Floresta.git
 ```
 
 Navegue para dentro da pasta com

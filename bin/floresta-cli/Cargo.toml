@@ -10,7 +10,7 @@ A command line interface for Florestad.
 You can use this client to interact with a running Florestad node. Check out doc/rpc/ or run `floresta-cli --help` for more information
 on how to use the CLI.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 readme = "README.md"
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]
 categories = ["cryptography::cryptocurrencies", "command-line-utilities"]

@@ -8,7 +8,7 @@ description = """
     Electrum protocol specification and works out of the box with any wallet
     that supports Electrum servers.
 """
-repository = "https://github.com/vinteumorg/Floresta"
+repository = "https://github.com/getfloresta/Floresta"
 license = "MIT"
 readme.workspace = true # Floresta/README.md
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]

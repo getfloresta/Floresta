@@ -1,6 +1,6 @@
 [Unit]
 Description=Floresta: A Lightweight Utreexo-powered Bitcoin full node implementation
-Documentation=https://github.com/vinteumorg/Floresta
+Documentation=https://github.com/getfloresta/Floresta
 After=network-online.target time-set.target
 Wants=network-online.target
 
