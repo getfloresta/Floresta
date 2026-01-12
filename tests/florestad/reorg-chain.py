@@ -10,7 +10,7 @@ accumulator to make sure they are the same.
 import re
 import time
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class ChainReorgTest(FlorestaTestFramework):
@@ -19,10 +19,10 @@ class ChainReorgTest(FlorestaTestFramework):
     expected_chain = "regtest"
 
     def set_test_params(self):
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.utreexod = self.add_node(
-            variant="utreexod",
+        self.utreexod = self.add_node_extra_args(
+            variant=NodeType.UTREEXOD,
             extra_args=[
                 "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
                 "--utreexoproofindex",
@@ -40,11 +40,8 @@ class ChainReorgTest(FlorestaTestFramework):
         self.utreexod.rpc.generate(10)
 
         self.log("=== Connect floresta to utreexod")
-        host = self.florestad.get_host()
-        port = self.utreexod.get_port("p2p")
-        self.florestad.rpc.addnode(
-            f"{host}:{port}", command="onetry", v2transport=False
-        )
+        utreexod_url = self.utreexod.p2p_url
+        self.florestad.rpc.addnode(utreexod_url, command="onetry", v2transport=False)
         time.sleep(5)
 
         self.log("=== Waiting for floresta to connect to utreexod.rpc...")

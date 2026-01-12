@@ -5,7 +5,7 @@ This functional test cli utility to interact with a Floresta node with `stop`
 """
 
 import re
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class StopTest(FlorestaTestFramework):
@@ -17,8 +17,8 @@ class StopTest(FlorestaTestFramework):
         """
         Setup a single node
         """
-        self.florestad = self.add_node(variant="florestad")
-        self.bitcoind = self.add_node(variant="bitcoind")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def run_test(self):
         """
@@ -44,8 +44,8 @@ class StopTest(FlorestaTestFramework):
             self.assertMatch(res, re.compile(r"^(Floresta|Bitcoin Core) stopping$"))
 
         # Check that the node is stopped
-        self.florestad.rpc.wait_for_connections(opened=False)
-        self.bitcoind.rpc.wait_for_connections(opened=False)
+        self.florestad.rpc.wait_for_connection(opened=False)
+        self.bitcoind.rpc.wait_for_connection(opened=False)
 
 
 if __name__ == "__main__":

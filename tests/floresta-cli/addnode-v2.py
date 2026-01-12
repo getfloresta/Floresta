@@ -11,9 +11,8 @@ in context of the v2 transport protocol.
 import re
 import time
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
 TIMEOUT = 15
 PING_TIMEOUT = 45
 
@@ -28,18 +27,12 @@ class AddnodeTestV2(FlorestaTestFramework):
         in the same regtest network.
         """
         self.v2transport = True
-        self.data_dirs = AddnodeTestV2.create_data_dirs(
-            DATA_DIR, "addnode_v2_transport", 2
-        )
 
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[f"--data-dir={self.data_dirs[0]}"],
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
-            extra_args=[f"-datadir={self.data_dirs[1]}", "-v2transport=1"],
+        self.bitcoind = self.add_node_extra_args(
+            variant=NodeType.BITCOIND,
+            extra_args=[f"-v2transport=1"],
         )
 
     def start_both_nodes(self):
@@ -68,9 +61,8 @@ class AddnodeTestV2(FlorestaTestFramework):
         self.log("=========== Testing should_floresta_add_bitcoind...")
 
         # Floresta adds the bitcoind node
-        bitcoind_port = self.bitcoind.get_port("p2p")
         result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
+            node=self.bitcoind.p2p_url,
             command="add",
             v2transport=self.v2transport,
         )
@@ -90,7 +82,7 @@ class AddnodeTestV2(FlorestaTestFramework):
         # now we expect the node to be in Ready state
         # with some expressive information. The node
         # should be in the `getpeerinfo` list.
-        self.assertEqual(peer_info[0]["address"], f"127.0.0.1:{bitcoind_port}")
+        self.assertEqual(peer_info[0]["address"], self.bitcoind.p2p_url)
         self.assertEqual(peer_info[0]["initial_height"], 0)
         self.assertEqual(peer_info[0]["kind"], "regular")
 
@@ -163,7 +155,7 @@ class AddnodeTestV2(FlorestaTestFramework):
 
         # reconnect the bitcoind node
         self.run_node(self.bitcoind)
-        self.bitcoind.rpc.wait_for_connections(opened=True)
+        self.bitcoind.rpc.wait_for_connection(opened=True)
 
         self.ensure_see_connection_closed(self.florestad)
         time.sleep(30)
@@ -183,7 +175,7 @@ class AddnodeTestV2(FlorestaTestFramework):
         """
         self.log("=========== Testing should floresta not add bitcoind again...")
         result = self.florestad.rpc.addnode(
-            node="127.0.0.1:18444", command="add", v2transport=self.v2transport
+            node=self.bitcoind.p2p_url, command="add", v2transport=self.v2transport
         )
 
         # `addnode` bitcoin-core compliant command
@@ -207,9 +199,8 @@ class AddnodeTestV2(FlorestaTestFramework):
         """
         self.log("=========== Testing should floresta remove bitcoind...")
 
-        bitcoind_port = self.bitcoind.get_port("p2p")
         result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
+            node=self.bitcoind.p2p_url,
             command="remove",
         )
 
@@ -228,8 +219,7 @@ class AddnodeTestV2(FlorestaTestFramework):
 
         # to check if removed, let's stop the bitcoind
         # restart it and check the `getpeerinfo` again
-        self.bitcoind.rpc.stop()
-        self.bitcoind.rpc.wait_for_connections(opened=False)
+        self.bitcoind.stop()
 
         self.run_node(self.bitcoind)
 
@@ -268,9 +258,8 @@ class AddnodeTestV2(FlorestaTestFramework):
         self.log(
             "=========== Testing should floresta onetry connection with bitcoind..."
         )
-        bitcoind_port = self.bitcoind.get_port("p2p")
         result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
+            node=self.bitcoind.p2p_url,
             command="onetry",
             v2transport=self.v2transport,
         )
@@ -286,9 +275,8 @@ class AddnodeTestV2(FlorestaTestFramework):
         # to the peers list with the `getpeerinfo` command
         # but should be in the "Awaiting" state
         peer_info = self.florestad.rpc.get_peerinfo()
-        bitcoind_port = self.bitcoind.get_port("p2p")
         self.assertEqual(len(peer_info), 1)
-        self.assertEqual(peer_info[0]["address"], f"127.0.0.1:{bitcoind_port}")
+        self.assertEqual(peer_info[0]["address"], self.bitcoind.p2p_url)
         self.assertEqual(peer_info[0]["initial_height"], 0)
         self.assertEqual(peer_info[0]["kind"], "regular")
 

@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, List, Tuple
 from OpenSSL import SSL
 
+from test_framework.electrum import ConfigElectrum
+
 
 # pylint: disable=too-few-public-methods
 class BaseClient:
@@ -17,19 +19,15 @@ class BaseClient:
     Helper class to connect to Floresta's Electrum server.
     """
 
-    def __init__(self, host, port=8080, tls=False):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((host, port))
-
-        if tls:
-            context = SSL.Context(SSL.TLS_METHOD)
-            context.set_verify(SSL.VERIFY_NONE, lambda *args: True)
-            tls_conn = SSL.Connection(context, s)
-            tls_conn.set_connect_state()
-            tls_conn.do_handshake()  # Perform the TLS handshake
-            self._conn = tls_conn
+    def __init__(self, config: ConfigElectrum):
+        self._conn = None
+        self._host = config.host
+        if config.tls is None:
+            self._port = config.port
+            self._tls = False
         else:
-            self._conn = s
+            self._port = config.tls.port
+            self._tls = True
 
     @property
     def conn(self) -> socket.socket:
@@ -45,6 +43,30 @@ class BaseClient:
         """
         self._conn = value
 
+    @property
+    def is_connected(self) -> bool:
+        """
+        Check if the client is connected to the server.
+        """
+        return self._conn is not None
+
+    def create_connection(self):
+        """
+        Create a connection to the server.
+        """
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((self._host, self._port))
+
+        if self._tls:
+            context = SSL.Context(SSL.TLS_METHOD)
+            context.set_verify(SSL.VERIFY_NONE, lambda *args: True)
+            tls_conn = SSL.Connection(context, s)
+            tls_conn.set_connect_state()
+            tls_conn.do_handshake()  # Perform the TLS handshake
+            self._conn = tls_conn
+        else:
+            self._conn = s
+
     def log(self, msg):
         """
         Log a message to the console
@@ -55,6 +77,11 @@ class BaseClient:
         """
         Request something to Floresta server
         """
+        if not self.is_connected:
+            self.create_connection()
+            if not self.is_connected:
+                raise ConnectionError("Could not connect to Electrum server")
+
         request = json.dumps(
             {"jsonrpc": "2.0", "id": 0, "method": method, "params": params}
         )

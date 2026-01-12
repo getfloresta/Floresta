@@ -5,15 +5,15 @@ send a ping to bitcoind and check if bitcoind receives it, by calling
 """
 
 import time
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class PingTest(FlorestaTestFramework):
     expected_chain = "regtest"
 
     def set_test_params(self):
-        self.florestad = self.add_node(variant="florestad")
-        self.bitcoind = self.add_node(variant="bitcoind")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def run_test(self):
         # Start the nodes
@@ -21,9 +21,7 @@ class PingTest(FlorestaTestFramework):
         self.run_node(self.bitcoind)
 
         # Connect floresta to bitcoind
-        host = self.bitcoind.get_host()
-        port = self.bitcoind.get_port("p2p")
-        self.florestad.rpc.addnode(f"{host}:{port}", "onetry")
+        self.florestad.rpc.addnode(self.bitcoind.p2p_url, "onetry")
 
         time.sleep(1)
 

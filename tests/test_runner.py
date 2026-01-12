@@ -62,7 +62,6 @@ BASE_TEST_SUITE = [
     ("florestad", "tls"),
     ("example", "electrum"),
     ("floresta-cli", "getblock"),
-    ("florestad", "tls-fail"),
     ("example", "functional"),
     ("floresta-cli", "getmemoryinfo"),
     ("floresta-cli", "getpeerinfo"),

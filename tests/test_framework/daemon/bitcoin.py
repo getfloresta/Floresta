@@ -7,6 +7,9 @@ A test framework for testing bitcoind daemon in regtest mode.
 from typing import List
 
 from test_framework.daemon.base import BaseDaemon
+from test_framework.rpc import ConfigRPC
+from test_framework.daemon import ConfigP2P
+from test_framework.electrum import ConfigElectrum
 
 
 class BitcoinDaemon(BaseDaemon):
@@ -15,136 +18,42 @@ class BitcoinDaemon(BaseDaemon):
     regtest mode for tests.
     """
 
-    def create(self, target: str):
+    def get_cmd_network(self) -> List[str]:
         """
-        Create a new instance of Florestad.
-        Args:
-            target: The path to the executable.
+        Return the network configuration flags for the node.
         """
-        self.name = "bitcoind"
-        self.target = target
-
-    def valid_daemon_args(self) -> List[str]:
         return [
-            "-allowignoredconf",
-            "-assumevalid",
-            "-blockfilterindex",
-            "-blocknotify",
-            "-blockreconstructionextratxn",
-            "-blocksdir",
-            "-blocksonly",
-            "-blocksxor",
-            "-coinstatsindex",
-            "-datadir",
-            "-dbcache",
-            "-debuglogfile",
-            "-includeconf",
-            "-loadblock",
-            "-maxmempool",
-            "-maxorphantx",
-            "-mempoolexpiry",
-            "-par",
-            "-persistmempool",
-            "-persistmempoolv1",
-            "-prune",
-            "-reindex",
-            "-chainstate",
-            "-settings",
-            "-shutdownnotify",
-            "-startupnotify",
-            "-txindex",
-            "-version",
-            "-addnode",
-            "-asmap",
-            "-bantime",
-            "-bind",
-            "-cjdnsreachable",
-            "-connect",
-            "-discover",
-            "-dns",
-            "-dnsseed",
-            "-externalip",
-            "-fixedseeds",
-            "-forcednsseed",
-            "-maxconnections",
-            "-maxreceivebuffer",
-            "-maxsendbuffer",
-            "-maxuploadtarget",
-            "-natpmp",
-            "-networkactive",
-            "-peerblockfilters",
-            "-peerbloomfilters",
-            "-port",
-            "-proxyrandomize",
-            "-seednode",
-            "-timeout",
-            "-v2transport",
-            "-whitebind",
-            "-whitelist",
-            "-addresstype",
-            "-avoidpartialspends",
-            "-changetype",
-            "-consolidatefeerate",
-            "-disablewallet",
-            "-discardfee",
-            "-fallbackfee",
-            "-keypool",
-            "-maxapsfee",
-            "-mintxfee",
-            "-paytxfee",
-            "-signer",
-            "-spendzeroconfchange",
-            "-txconfirmtarget",
-            "-wallet",
-            "-walletbroadcast",
-            "-walletdir",
-            "-walletnotify",
-            "-walletrbf",
-            "-zmqpubhashblock",
-            "-zmqpubhashblockhwm",
-            "-zmqpubhashtx",
-            "-zmqpubhashtxhwm",
-            "-zmqpubrawblock",
-            "-zmqpubrawblockhwm",
-            "-zmqpubrawtx",
-            "-zmqpubrawtxhwm",
-            "-zmqpubsequence",
-            "-zmqpubsequencehwm",
-            "-debug",
-            "-debugexclude",
-            "-help",
-            "-debug",
-            "-logips",
-            "-loglevelalways",
-            "-logsourcelocations",
-            "-logthreadnames",
-            "-logtimestamps",
-            "-maxtxfee",
-            "-printtoconsole",
-            "-shrinkdebugfile",
-            "-uacomment",
-            "-chain",
-            "-bytespersigop",
-            "-datacarrier",
-            "-datacarriersize",
-            "-minrelaytxfee",
-            "-permitbaremultisig",
-            "-whitelistforcerelay",
-            "-whitelistrelay",
-            "-blockmaxweight",
-            "-blockmintxfee",
-            "-blockreservedweight",
-            "-rest",
-            "-rpcallowip",
-            "-rpcauth",
-            "-rpcbind",
-            "-rpccookiefile",
-            "-rpccookieperms",
-            "-rpcpassword",
-            "-rpcport",
-            "-rpcthreads",
-            "-rpcuser",
-            "-rpcwhitelist",
-            "-rpcwhitelistdefault",
-            "-server",
+            "-chain=regtest",
         ]
+
+    def get_cmd_data_dir(self, data_dir: str) -> List[str]:
+        """
+        Return the data directory configuration flags for the node.
+        """
+        return [f"-datadir={data_dir}"]
+
+    def get_cmd_rpc(self, config: ConfigRPC) -> List[str]:
+        """
+        Return the RPC configuration flags for the node.
+        """
+        if config.user is None or config.password is None:
+            raise ValueError("RPC user and password must be set for bitcoind")
+        return [
+            f"-rpcuser={config.user}",
+            f"-rpcpassword={config.password}",
+            f"-rpcport={config.port}",
+            f"-rpcbind={config.host}",
+            "-rpcthreads=1",
+        ]
+
+    def get_cmd_p2p(self, config: ConfigP2P) -> List[str]:
+        """
+        Return the P2P configuration flags for the node.
+        """
+        return [f"-port={config.port}", f"-bind={config.host}"]
+
+    def get_cmd_electrum(self, config: ConfigElectrum) -> List[str]:
+        """
+        Return the Electrum configuration flags for the node.
+        """
+        return []
