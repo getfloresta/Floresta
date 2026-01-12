@@ -308,7 +308,7 @@ pub enum Error {
     /// An error while deserializing our response
     Serde(serde_json::Error),
 
-    #[cfg(feature = "with-jsonrpc")]
+    #[cfg(feature = "json-rpc")]
     /// An internal reqwest error
     JsonRpc(jsonrpc::Error),
 
@@ -334,7 +334,7 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-#[cfg(feature = "with-jsonrpc")]
+#[cfg(feature = "json-rpc")]
 impl From<jsonrpc::Error> for Error {
     fn from(value: jsonrpc::Error) -> Self {
         Error::JsonRpc(value)
@@ -344,7 +344,7 @@ impl From<jsonrpc::Error> for Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(feature = "with-jsonrpc")]
+            #[cfg(feature = "json-rpc")]
             Error::JsonRpc(e) => write!(f, "JsonRpc returned an error {e}"),
             Error::Api(e) => write!(f, "general jsonrpc error: {e}"),
             Error::Serde(e) => write!(f, "error while deserializing the response: {e}"),
