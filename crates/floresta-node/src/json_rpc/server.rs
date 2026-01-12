@@ -268,7 +268,12 @@ async fn handle_json_rpc_request(
 
         "getblock" => {
             let hash = get_hash(&params, 0, "block_hash")?;
-            let verbosity = get_numeric(&params, 1, "verbosity")?;
+            // Default value in case of missing parameter is 1
+            let verbosity = match get_numeric(&params, 1, "verbosity") {
+                Ok(value) => value,
+                Err(JsonRpcError::MissingParameter(_)) => 1,
+                Err(e) => return Err(e),
+            };
 
             match verbosity {
                 0 => {

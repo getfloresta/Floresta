@@ -160,3 +160,31 @@ class BitcoinRPC(BaseRPC):
             The transaction output information
         """
         return self.perform_request("gettxout", params=[txid, vout, include_mempool])
+
+    def generate_block_to_address(self, nblocks: int, address: str) -> list:
+        """
+        Mine blocks immediately to a specific address by using
+        `perform_request('generatetoaddress', params=[int, str])`
+
+        Args:
+            nblocks: The number of blocks to mine
+            address: The address to mine the blocks to
+
+        Returns:
+            A list of block hashes of the newly mined blocks
+        """
+        return self.perform_request("generatetoaddress", params=[nblocks, address])
+
+    def generate_block(self, nblocks: int) -> list:
+        """
+        Mine blocks immediately to a address(bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch) using
+        `generate_block_to_address(nblocks, address)`
+
+        Args:
+            nblocks: The number of blocks to mine
+
+        Returns:
+            A list of block hashes of the newly mined blocks
+        """
+        address = "bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch"
+        return self.generate_block_to_address(nblocks, address)

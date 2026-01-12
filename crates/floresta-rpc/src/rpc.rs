@@ -224,7 +224,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
-        let verbosity = verbosity.unwrap_or(0);
+        let verbosity = verbosity.unwrap_or(1);
 
         match verbosity {
             0 => {

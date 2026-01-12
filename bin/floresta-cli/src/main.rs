@@ -262,7 +262,13 @@ pub enum Methods {
     GetRoots,
 
     /// Returns a block
-    #[command(name = "getblock")]
+    #[doc = include_str!("../../../doc/rpc/getblock.md")]
+    #[command(
+        name = "getblock",
+        about = "Returns information about a block",
+        long_about = Some(include_str!("../../../doc/rpc/getblock.md")),
+        disable_help_subcommand = true
+    )]
     GetBlock {
         hash: BlockHash,
         verbosity: Option<u32>,
