@@ -21,7 +21,7 @@ class ElectrumTest(FlorestaTestFramework):
     """
 
     index = [-1]
-    expected_version = ["Floresta 0.4.0", "1.4"]
+    expected_version = ["Floresta 0.4.1", "1.4"]
 
     def set_test_params(self):
         """

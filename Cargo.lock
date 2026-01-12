@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "floresta"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcoin 0.32.6",
  "floresta",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-chain"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcoin 0.32.6",
  "bitcoinconsensus 0.106.0+26.0",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "bitcoin 0.32.6",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-common"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcoin 0.32.6",
  "hashbrown 0.15.3",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-compact-filters"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcoin 0.32.6",
  "floresta-chain",
@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-electrum"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcoin 0.32.6",
  "floresta-chain",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-watch-only"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcoin 0.32.6",
  "floresta-chain",
@@ -1189,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "floresta-wire"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ahash",
  "bip324",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "florestad"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "axum",
