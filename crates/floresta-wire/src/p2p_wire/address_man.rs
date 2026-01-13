@@ -119,24 +119,26 @@ impl FromStr for LocalAddress {
     type Err = std::net::AddrParseError;
 }
 
+// Note that, since we can't know the network we are operating in, this code
+// can't know what's the default port. Therefore, it will only work if you give
+// a SocketAddr, i.e. <IP:PORT>
 impl TryFrom<&str> for LocalAddress {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let split = value.split(':').collect::<Vec<_>>();
-        let address = split[0].parse::<Ipv4Addr>()?;
-        let port = if let Some(port) = split.get(1) {
-            port.parse().unwrap_or(8333)
-        } else {
-            8333
+        let address = value.parse::<SocketAddr>()?;
+        let ip = match address {
+            SocketAddr::V4(ipv4) => AddrV2::Ipv4(*ipv4.ip()),
+            SocketAddr::V6(ipv6) => AddrV2::Ipv6(*ipv6.ip()),
         };
+
         Ok(LocalAddress::new(
-            AddrV2::Ipv4(address),
+            ip,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
             super::address_man::AddressState::NeverTried,
             ServiceFlags::NONE,
-            port,
+            address.port(),
             rand::random::<usize>(),
         ))
     }
@@ -162,10 +164,12 @@ impl LocalAddress {
             id,
         }
     }
+
     /// Returns this address's port
     pub fn get_port(&self) -> u16 {
         self.port
     }
+
     /// Return an IP address associated with this peer address
     pub fn get_net_address(&self) -> IpAddr {
         match self.address {
@@ -176,6 +180,7 @@ impl LocalAddress {
             _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
     }
+
     /// Returns the actual address, as defined in AddrV2. This is useful
     /// if we are trying a peer that needs a proxy like Tor.
     pub fn get_address(&self) -> AddrV2 {
@@ -1112,6 +1117,59 @@ mod test {
 
         Ok(addresses)
     }
+
+    #[test]
+    fn test_local_addr_from_str() {
+        // v4
+        let ips = [
+            "127.146.182.45",
+            "2.212.31.248",
+            "6.108.160.10",
+            "151.43.223.99",
+            "216.20.167.190",
+            "188.33.163.249",
+            "227.237.60.84",
+            "8.104.121.145",
+            "100.119.250.124",
+        ];
+
+        for addr_str in ips {
+            let local_address = LocalAddress::try_from(format!("{addr_str}:8333").as_str())
+                .unwrap_or_else(|_| panic!("failed to parse {addr_str}"));
+
+            assert_eq!(
+                local_address.address,
+                AddrV2::Ipv4(addr_str.parse().unwrap())
+            );
+            assert_eq!(local_address.port, 8333);
+        }
+
+        // v6
+        let ips = [
+            "67db:3727:f145:5c59:718f:d3b9:6e56:d937",
+            "7813:70c7:ea5d:f78a:7920:33d8:1da0:f9d7",
+            "4a08:75e4:893f:d5a1:e2e2:3c99:8d20:22cf",
+            "8da0:6b59:1494:bc7f:b217:51eb:c5fb:29c6",
+            "cb1a:5104:57a9:0616:f6e0:191f:9224:4f35",
+            "259a:ddc7:44a2:b5ec:f1ff:6024:50e8:928d",
+            "46eb:cab1:bd48:c461:1775:c64e:c11b:3e77",
+            "142b:a452:dff7:a41c:6cc6:317e:cc94:bb10",
+            "0f8d:6d08:de58:017a:cd92:c868:023a:86e6",
+            "8a80:5cfd:ccac:3e63:a243:d89f:d5e1:8e4c",
+        ];
+
+        for addr_str in ips {
+            let local_address = LocalAddress::try_from(format!("[{addr_str}]:8333").as_str())
+                .unwrap_or_else(|_| panic!("failed to parse {addr_str}"));
+
+            assert_eq!(
+                local_address.address,
+                AddrV2::Ipv6(addr_str.parse().unwrap())
+            );
+            assert_eq!(local_address.port, 8333);
+        }
+    }
+
     #[test]
     fn test_parse() {
         let signet_address =
