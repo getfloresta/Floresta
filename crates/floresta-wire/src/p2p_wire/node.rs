@@ -9,6 +9,7 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::slice;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -538,6 +539,10 @@ where
             return Err(WireError::PeerAlreadyExists(addr, port));
         }
 
+        // Add this address to our address manager for later
+        self.address_man
+            .push_addresses(&[LocalAddress::from(address.clone())]);
+
         // Add a simple reference to the peer
         self.added_peers.push(AddedPeerInfo {
             address,
@@ -608,6 +613,8 @@ where
             port,
             peer_id as usize,
         );
+
+        self.address_man.push_addresses(slice::from_ref(&address));
 
         // Return true if exists or false if anything fails during connection
         // We allow V1 fallback iff the `v2` flag is not set
