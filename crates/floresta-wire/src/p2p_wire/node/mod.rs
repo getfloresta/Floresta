@@ -53,6 +53,9 @@ use super::transport::TransportProtocol;
 use super::UtreexoNodeConfig;
 use crate::node_context::PeerId;
 
+/// As per BIP 155, limit the number of addresses to 1,000
+pub const MAX_ADDRV2_ADDRESSES: usize = 1_000;
+
 #[derive(Debug)]
 pub enum NodeNotification {
     DnsSeedAddresses(Vec<LocalAddress>),
