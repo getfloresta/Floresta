@@ -79,6 +79,9 @@ use crate::node_context::PeerId;
 /// such as hard-coded peers
 const HARDCODED_ADDRESSES_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
+/// As per BIP 155, limit the number of addresses to 1,000
+pub const MAX_ADDRV2_ADDRESSES: usize = 1_000;
+
 /// How long before we try to get addresses from DNS seeds again (5 minutes)
 const DNS_SEED_RETRY_PERIOD: Duration = Duration::from_secs(5 * 60);
 
