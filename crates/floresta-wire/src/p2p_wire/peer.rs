@@ -40,6 +40,7 @@ use super::transport::TransportProtocol;
 use super::transport::WriteTransport;
 use crate::block_proof::UtreexoProofMask;
 use crate::node::ConnectionKind;
+use crate::node::MAX_ADDRV2_ADDRESSES;
 use crate::p2p_wire::block_proof::GetUtreexoProof;
 use crate::p2p_wire::block_proof::UtreexoProof;
 use crate::p2p_wire::transport::ReadTransport;
@@ -445,6 +446,11 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     self.write(NetworkMessage::FeeFilter(1000)).await?;
                 }
                 NetworkMessage::AddrV2(addresses) => {
+                    // As per BIP 155, limit the number of addresses to 1,000
+                    if addresses.len() > MAX_ADDRV2_ADDRESSES {
+                        return Err(PeerError::MessageTooBig);
+                    }
+
                     self.send_to_node(PeerMessages::Addr(addresses), time);
                 }
                 NetworkMessage::GetBlocks(_) => {
