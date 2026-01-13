@@ -165,6 +165,16 @@ impl LocalAddress {
         }
     }
 
+    /// Sets the port used by this node
+    pub fn set_port(&mut self, port: u16) {
+        self.port = port;
+    }
+
+    /// Sets the services advertised by this node
+    pub fn set_services(&mut self, services: ServiceFlags) {
+        self.services = services;
+    }
+
     /// Returns this address's port
     pub fn get_port(&self) -> u16 {
         self.port
@@ -242,7 +252,7 @@ impl AddressMan {
             let id = address.id;
             // don't add addresses that don't have the minimum required services
             if !address.services.has(ServiceFlags::WITNESS)
-                | !address.services.has(ServiceFlags::NETWORK)
+                | !address.services.has(ServiceFlags::NETWORK_LIMITED)
             {
                 continue;
             }

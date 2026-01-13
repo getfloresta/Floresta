@@ -803,6 +803,13 @@ where
             return Err(WireError::PeerAlreadyExists(addr, port));
         }
 
+        // Add this address to our address manager for later
+        // assume it has the bare-minimum services, otherwise `push_addresses` will ignore it
+        let mut local_address = LocalAddress::from(address.clone());
+        local_address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
+
+        self.address_man.push_addresses(&[local_address]);
+
         // Add a simple reference to the peer
         self.added_peers.push(AddedPeerInfo {
             address,
@@ -880,18 +887,18 @@ where
         }
 
         let kind = ConnectionKind::Regular(ServiceFlags::NONE);
-        let peer_id = self.peer_id_count;
-        let address = LocalAddress::new(
-            self.to_addr_v2(addr),
-            0,
-            AddressState::NeverTried,
-            ServiceFlags::NONE,
-            port,
-            peer_id as usize,
-        );
 
+        // Add this address to our address manager for later
+        // assume it has the bare-minimum services, otherwise `push_addresses` will ignore it
+        let address_v2 = self.to_addr_v2(addr);
+        let mut local_address = LocalAddress::from(address_v2.clone());
+
+        local_address.set_port(port);
+        local_address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
+
+        self.address_man.push_addresses(&[local_address.clone()]);
         // Return true if exists or false if anything fails during connection
         // We allow V1 fallback iff the `v2` flag is not set
-        self.open_connection(kind, peer_id as usize, address, !v2_transport)
+        self.open_connection(kind, local_address.id, local_address, !v2_transport)
     }
 }
