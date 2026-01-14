@@ -30,7 +30,7 @@ ureq = { version = "3.1", features = ["socks-proxy", "json", "rustls-no-provider
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
-floresta-compact-filters = { workspace = true }
+floresta-compact-filters = { workspace = true, optional = true }
 floresta-common = { workspace = true }
 metrics = { workspace = true,  optional = true }
 
@@ -40,6 +40,7 @@ zstd = { workspace = true }
 [features]
 default = []
 metrics = ["dep:metrics"]
+compact-filters = ["floresta-compact-filters"]
 
 [lints]
 workspace = true

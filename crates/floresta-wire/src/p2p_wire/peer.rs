@@ -13,10 +13,12 @@ use bitcoin::hashes::Hash;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message::NetworkMessage;
 use bitcoin::p2p::message_blockdata::Inventory;
+use bitcoin::p2p::message_filter::GetCFHeaders;
 use bitcoin::p2p::message_network::VersionMessage;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::FilterHeader;
 use bitcoin::Transaction;
 use floresta_common::impl_error_from;
 use tokio::io::AsyncRead;
@@ -334,6 +336,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
                 let _ = self.write(NetworkMessage::GetData(inv)).await;
             }
+
             NodeRequest::GetUtreexoState((block_hash, height)) => {
                 let get_filter = bitcoin::p2p::message_filter::GetCFilters {
                     filter_type: 1,
@@ -343,6 +346,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
                 let _ = self.write(NetworkMessage::GetCFilters(get_filter)).await;
             }
+
             NodeRequest::GetHeaders(locator) => {
                 let _ = self
                     .write(NetworkMessage::GetHeaders(
@@ -354,24 +358,30 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     ))
                     .await;
             }
+
             NodeRequest::Shutdown => {
                 self.shutdown = true;
                 self.writer.shutdown().await?;
             }
+
             NodeRequest::GetAddresses => {
                 self.write(NetworkMessage::GetAddr).await?;
             }
+
             NodeRequest::BroadcastTransaction(tx) => {
                 self.write(NetworkMessage::Inv(vec![Inventory::Transaction(tx)]))
                     .await?;
             }
+
             NodeRequest::MempoolTransaction(txid) => {
                 self.write(NetworkMessage::GetData(vec![Inventory::Transaction(txid)]))
                     .await?;
             }
+
             NodeRequest::SendAddresses(addresses) => {
                 self.write(NetworkMessage::AddrV2(addresses)).await?;
             }
+
             NodeRequest::GetFilter((stop_hash, start_height)) => {
                 let get_filter = bitcoin::p2p::message_filter::GetCFilters {
                     filter_type: 0,
@@ -381,11 +391,13 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
                 self.write(NetworkMessage::GetCFilters(get_filter)).await?;
             }
+
             NodeRequest::Ping => {
                 let nonce = rand::random();
                 self.last_ping = Some(Instant::now());
                 self.write(NetworkMessage::Ping(nonce)).await?;
             }
+
             NodeRequest::GetBlockProof((block_hash, proof_hashes_bitmap, leaf_index_bitmap)) => {
                 let get_block_proof = GetUtreexoProof {
                     block_hash,
@@ -400,6 +412,17 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     payload: serialize(&get_block_proof),
                 })
                 .await?;
+            }
+
+            NodeRequest::GetFilterHeaders(start_height, stop_hash) => {
+                let get_headers = GetCFHeaders {
+                    filter_type: 0,
+                    start_height,
+                    stop_hash,
+                };
+
+                self.write(NetworkMessage::GetCFHeaders(get_headers))
+                    .await?;
             }
         }
         Ok(())
@@ -657,6 +680,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         let _ = self.node_tx.send(message);
     }
 }
+
 pub(super) mod peer_utils {
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
@@ -717,6 +741,7 @@ pub(super) mod peer_utils {
         })
     }
 }
+
 #[derive(Debug)]
 pub struct Version {
     pub user_agent: String,
@@ -728,10 +753,27 @@ pub struct Version {
     pub kind: ConnectionKind,
     pub transport_protocol: TransportProtocol,
 }
+
+#[derive(Debug)]
+/// A BIP-0157 Filter Header message
+pub struct FiltersHeaderMessage {
+    /// The filter type, currently only 0 (basic) is supported
+    pub filter_type: u8,
+
+    /// The block hash corresponding to the latest filter header
+    pub stop_hash: BlockHash,
+
+    /// The previous filter header, or the genesis block filter header if this is the first
+    pub prev_filter_header: FilterHeader,
+
+    /// The filter headers, in order
+    pub filter_headers: Vec<FilterHeader>,
+}
+
+#[derive(Debug)]
 /// Messages passed from different modules to the main node to process. They should minimal
 /// and only if it requires global states, everything else should be handled by the module
 /// itself.
-#[derive(Debug)]
 pub enum PeerMessages {
     /// A new block just arrived, we should ask for it and update our chain
     NewBlock(BlockHash),
@@ -751,7 +793,7 @@ pub enum PeerMessages {
     /// Remote peer disconnected
     Disconnected(usize),
 
-    /// Remote peer doesn't know the data we asked for
+    /// Remote peer doesn't known the data we asked for
     NotFound(Inventory),
 
     /// Remote peer sent us a transaction
@@ -761,8 +803,12 @@ pub enum PeerMessages {
     UtreexoState(Vec<u8>),
 
     /// Remote peer sent us a compact block filter
+    #[allow(dead_code)]
     BlockFilter((BlockHash, BlockFilter)),
 
     /// Remote peer sent us a Utreexo proof,
     UtreexoProof(UtreexoProof),
+
+    /// A BIP-0157 Block Filter Header
+    FilterHeader(FiltersHeaderMessage),
 }

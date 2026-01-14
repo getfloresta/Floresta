@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
-use floresta_chain::proof_util;
-use floresta_chain::ThreadSafeChain;
+use floresta_chain::proof_util::UtreexoLeafError;
+use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use rand::seq::SliceRandom;
@@ -52,9 +52,9 @@ impl NodeContext for SyncNode {
 /// See [node](crates/floresta-wire/src/p2p_wire/node.rs) for more information.
 impl<Chain> UtreexoNode<Chain, SyncNode>
 where
-    Chain: ThreadSafeChain,
+    Chain: ChainBackend + 'static,
+    Chain::Error: From<UtreexoLeafError>,
     WireError: From<Chain::Error>,
-    Chain::Error: From<proof_util::UtreexoLeafError>,
 {
     /// Computes the next blocks to request, and sends a GETDATA request
     ///

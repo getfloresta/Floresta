@@ -15,12 +15,18 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+#[cfg(feature = "compact-filters")]
+use bitcoin::bip158;
+#[cfg(feature = "compact-filters")]
+use bitcoin::bip158::BlockFilter;
 use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
+#[cfg(feature = "compact-filters")]
+use bitcoin::OutPoint;
 use bitcoin::Txid;
 use floresta_chain::proof_util;
 use floresta_chain::proof_util::UtreexoLeafError;
@@ -28,11 +34,15 @@ use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
+#[cfg(feature = "compact-filters")]
+use floresta_chain::UtxoData;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use floresta_common::FractionAvg;
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-use floresta_compact_filters::network_filters::NetworkFilters;
+#[cfg(feature = "compact-filters")]
+use floresta_compact_filters::FilterHeadersStore;
+#[cfg(feature = "compact-filters")]
+use floresta_compact_filters::FlatFilterStore;
 use rand::seq::SliceRandom;
 use rustreexo::accumulator::proof::Proof;
 use serde::Deserialize;
@@ -131,9 +141,14 @@ pub enum NodeRequest {
     /// Proof hashes are the hashes needed to reconstruct the proof, while
     /// leaf data are the actual data of the leaves (i.e., the txouts).
     GetBlockProof((BlockHash, Bitmap, Bitmap)),
+
+    /// Tells this peer to request for filter headers
+    GetFilterHeaders(u32, BlockHash),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
+/// This struct represents requests that we've made, but haven't received a response yet.
+/// We keep track of these, so we can retry them if a peer is unresponsive or disconnects.
 pub(crate) enum InflightRequests {
     /// Requests the peer to send us the next block headers in their main chain
     Headers,
@@ -148,10 +163,15 @@ pub(crate) enum InflightRequests {
     Connect(PeerId),
 
     /// Requests the peer to send us the compact filters for blocks
+    #[allow(dead_code)]
     GetFilters,
 
     /// Requests the peer to send us the utreexo proof for a given block
     UtreexoProof(BlockHash),
+
+    /// Requesting filter headers from a peer
+    #[allow(dead_code)]
+    GetFilterHeaders,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -239,6 +259,7 @@ impl Default for RunningNode {
         RunningNode {
             last_address_rearrange: Instant::now(),
             last_invs: HashMap::default(),
+            #[allow(dead_code)]
             inflight_filters: BTreeMap::new(),
         }
     }
@@ -271,8 +292,11 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) chain: Chain,
     pub(crate) blocks: HashMap<BlockHash, InflightBlock>,
     pub(crate) mempool: Arc<tokio::sync::Mutex<Mempool>>,
-    pub(crate) block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
+    #[allow(dead_code)]
     pub(crate) last_filter: BlockHash,
+    #[allow(dead_code)]
+    #[cfg(feature = "compact-filters")]
+    pub(crate) filter_store: Option<FlatFilterStore>,
 
     // 2. Peer Management
     pub(crate) peer_id_count: u32,
@@ -334,6 +358,7 @@ impl<Chain: ChainBackend, T> Deref for UtreexoNode<Chain, T> {
     fn deref(&self) -> &Self::Target {
         &self.common
     }
+
     type Target = NodeCommon<Chain>;
 }
 
@@ -373,8 +398,8 @@ where
         config: UtreexoNodeConfig,
         chain: Chain,
         mempool: Arc<Mutex<Mempool>>,
-        block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         kill_signal: Arc<tokio::sync::RwLock<bool>>,
+        #[cfg(feature = "compact-filters")] filter_store: Option<FlatFilterStore>,
         address_man: AddressMan,
     ) -> Result<Self, WireError> {
         let (node_tx, node_rx) = unbounded_channel();
@@ -388,11 +413,12 @@ where
 
         Ok(UtreexoNode {
             common: NodeCommon {
+                #[cfg(feature = "compact-filters")]
+                filter_store,
                 last_dns_seed_call: Instant::now(),
                 startup_time: Instant::now(),
                 block_sync_avg: FractionAvg::new(0, 0),
                 last_filter: chain.get_block_hash(0).unwrap(),
-                block_filters,
                 inflight: HashMap::new(),
                 inflight_user_requests: HashMap::new(),
                 peer_id_count: 0,
@@ -918,7 +944,10 @@ where
                 self.chain.get_block_hash(h)
             })?;
 
-        if let Err(e) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
+        if let Err(e) = self
+            .chain
+            .connect_block(&block, proof, inputs.clone(), del_hashes)
+        {
             error!(
                 "Invalid block {:?} received by peer {} reason: {:?}",
                 block.header, peer, e
@@ -978,7 +1007,47 @@ where
             return Err(WireError::PeerMisbehaving);
         }
 
+        #[cfg(feature = "compact-filters")]
+        self.index_filter(block_height, &block, &inputs)?;
         self.last_tip_update = Instant::now();
+        Ok(())
+    }
+
+    #[cfg(feature = "compact-filters")]
+    fn index_filter(
+        &mut self,
+        block_height: u32,
+        block: &Block,
+        inputs: &HashMap<OutPoint, UtxoData>,
+    ) -> Result<(), WireError> {
+        // We don't have a filter store, nothing to do
+        let Some(ref mut cfilters) = self.filter_store else {
+            return Ok(());
+        };
+
+        // FIXME(@davidson): handle errors properly
+        let filter = BlockFilter::new_script_filter(block, |coin| {
+            Ok(inputs
+                .get(coin)
+                .ok_or(bip158::Error::UtxoMissing(*coin))?
+                .txout
+                .script_pubkey
+                .clone())
+        })
+        .unwrap();
+
+        let previous_filter_header = cfilters.get_filter_header(block_height - 1).unwrap();
+        let header = filter.filter_header(&previous_filter_header);
+
+        let filters_height = cfilters.get_height().unwrap();
+        if (filters_height + 1) > block_height {
+            // this is a reorg, so we have to update the filter header, rather than add a new one
+            cfilters.update_filter_header(block_height, header).unwrap();
+            return Ok(());
+        }
+        // FIXME(@davidson): handle errors properly
+        cfilters.put_filter_header(header).unwrap();
+
         Ok(())
     }
 
@@ -1320,6 +1389,7 @@ where
             InflightRequests::Blocks(block) => {
                 self.request_blocks(vec![block])?;
             }
+
             InflightRequests::Headers => {
                 let peer = self.send_to_fastest_peer(
                     NodeRequest::GetHeaders(vec![]),
@@ -1329,6 +1399,7 @@ where
                 self.inflight
                     .insert(InflightRequests::Headers, (peer, Instant::now()));
             }
+
             InflightRequests::UtreexoState(_) => {
                 let peer = self.send_to_fastest_peer(
                     NodeRequest::GetUtreexoState((self.chain.get_block_hash(0).unwrap(), 0)),
@@ -1337,6 +1408,7 @@ where
                 self.inflight
                     .insert(InflightRequests::UtreexoState(peer), (peer, Instant::now()));
             }
+
             InflightRequests::GetFilters => {
                 if !self.has_compact_filters_peer() {
                     return Ok(());
@@ -1349,9 +1421,12 @@ where
                 self.inflight
                     .insert(InflightRequests::GetFilters, (peer, Instant::now()));
             }
+
             InflightRequests::Connect(_) => {
                 // We don't need to do anything here
             }
+
+            InflightRequests::GetFilterHeaders => {}
         }
 
         Ok(())
