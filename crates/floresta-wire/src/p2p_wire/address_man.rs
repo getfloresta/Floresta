@@ -29,6 +29,10 @@ use tracing::warn;
 /// How long we'll wait before trying to connect to a peer that failed
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
 
+/// If we haven't heard from a peer in this amount of time, we consider its info stale
+/// and add it to the NeverTried bucket
+const ASSUME_STALE: u64 = 24 * 60 * 60; // 24 hours
+
 /// How many addresses we keep in our address manager
 const MAX_ADDRESSES: usize = 50_000;
 
@@ -630,7 +634,7 @@ impl AddressMan {
                     }
                 }
                 AddressState::Tried(tried_time) => {
-                    if tried_time + RETRY_TIME < now {
+                    if tried_time + ASSUME_STALE < now {
                         address.state = AddressState::NeverTried;
                     }
                 }
