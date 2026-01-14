@@ -57,7 +57,6 @@ use super::block_proof::Bitmap;
 use super::error::AddrParseError;
 use super::error::WireError;
 use super::mempool::Mempool;
-use super::mempool::MempoolProof;
 use super::node_context::NodeContext;
 use super::node_interface::NodeInterface;
 use super::node_interface::NodeResponse;
@@ -300,7 +299,6 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) last_peer_db_dump: Instant,
     pub(crate) last_block_request: u32,
     pub(crate) last_get_address_request: Instant,
-    pub(crate) last_broadcast: Instant,
     pub(crate) last_send_addresses: Instant,
     pub(crate) block_sync_avg: FractionAvg,
     pub(crate) last_feeler: Instant,
@@ -409,7 +407,6 @@ where
                 last_tip_update: Instant::now(),
                 last_connection: Instant::now(),
                 last_peer_db_dump: Instant::now(),
-                last_broadcast: Instant::now(),
                 last_feeler: Instant::now(),
                 blocks: HashMap::new(),
                 last_get_address_request: Instant::now(),
@@ -622,7 +619,7 @@ where
     ///
     /// These are requests made by some consumer of `floresta-wire` using the [`NodeInterface`], and may
     /// be a mempool transaction, a block, or a connection request.
-    pub(crate) fn perform_user_request(
+    pub(crate) async fn perform_user_request(
         &mut self,
         user_req: UserRequest,
         responder: oneshot::Sender<NodeResponse>,
@@ -698,6 +695,22 @@ where
                 };
 
                 let _ = responder.send(node_response);
+                return;
+            }
+            UserRequest::SendTransaction(transaction) => {
+                let txid = transaction.compute_txid();
+                let mut mempool = self.mempool.lock().await;
+
+                if let Err(e) = mempool.accept_to_mempool(transaction) {
+                    warn!("Could not broadcast transaction {txid} due to {e}");
+                    let _ = responder.send(NodeResponse::TransactionBroadcastResult(Err(e)));
+                    return;
+                }
+
+                drop(mempool);
+
+                self.broadcast_to_peers(NodeRequest::BroadcastTransaction(txid));
+                let _ = responder.send(NodeResponse::TransactionBroadcastResult(Ok(txid)));
                 return;
             }
         };
@@ -1637,68 +1650,6 @@ where
         }
         try_and_log!(self.save_peers());
         try_and_log!(self.chain.flush());
-    }
-
-    pub(crate) async fn handle_broadcast(&self) -> Result<(), WireError> {
-        for (_, peer) in self.peers.iter() {
-            if peer.services.has(ServiceFlags::from(1 << 24)) {
-                continue;
-            }
-
-            let transactions = self.chain.get_unbroadcasted();
-
-            for transaction in transactions {
-                let txid = transaction.compute_txid();
-                let mut mempool = self.mempool.lock().await;
-
-                if self.network == Network::Regtest {
-                    match mempool.try_prove(&transaction, &self.chain) {
-                        Ok(proof) => {
-                            let MempoolProof {
-                                proof,
-                                target_hashes,
-                                leaves,
-                            } = proof;
-
-                            let leaves = transaction
-                                .input
-                                .iter()
-                                .map(|input| input.previous_output)
-                                .zip(leaves.into_iter())
-                                .collect::<Vec<_>>();
-
-                            let targets = proof.targets.clone();
-                            try_and_log!(mempool.accept_to_mempool(
-                                transaction,
-                                proof,
-                                &leaves,
-                                &target_hashes,
-                                &targets,
-                            ));
-                        }
-                        Err(e) => {
-                            error!(
-                                "Could not prove tx {} because: {:?}",
-                                transaction.compute_txid(),
-                                e
-                            );
-                        }
-                    }
-
-                    peer.channel
-                        .send(NodeRequest::BroadcastTransaction(txid))
-                        .map_err(WireError::ChannelSend)?;
-                }
-
-                let stale = self.mempool.lock().await.get_stale();
-                for tx in stale {
-                    peer.channel
-                        .send(NodeRequest::BroadcastTransaction(tx))
-                        .map_err(WireError::ChannelSend)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     pub(crate) fn ask_for_addresses(&mut self) -> Result<(), WireError> {

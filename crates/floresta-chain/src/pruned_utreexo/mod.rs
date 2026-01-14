@@ -26,7 +26,6 @@ use bitcoin::hashes::sha256;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::OutPoint;
-use bitcoin::Transaction;
 use rustreexo::accumulator::node_hash::BitcoinNodeHash;
 use rustreexo::accumulator::proof::Proof;
 use rustreexo::accumulator::stump::Stump;
@@ -43,42 +42,53 @@ pub trait BlockchainInterface {
     type Error: Error + Send + Sync + 'static;
     /// Returns the block with a given height in our current tip.
     fn get_block_hash(&self, height: u32) -> Result<bitcoin::BlockHash, Self::Error>;
-    /// Returns a bitcoin [Transaction] given it's txid.
+
+    /// Returns a bitcoin [`bitcoin::Transaction`] given it's txid.
     fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Option<bitcoin::Transaction>, Self::Error>;
+
     /// Get the height of our best know chain.
     fn get_height(&self) -> Result<u32, Self::Error>;
-    /// Broadcasts a transaction to the network.
-    fn broadcast(&self, tx: &bitcoin::Transaction) -> Result<(), Self::Error>;
+
     /// Returns fee estimation for inclusion in `target` blocks.
     fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error>;
+
     /// Returns a block with a given `hash` if any.
     fn get_block(&self, hash: &BlockHash) -> Result<Block, Self::Error>;
+
     /// Returns the best known block
     fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error>;
+
     /// Returns associated header for block with `hash`
     fn get_block_header(&self, hash: &BlockHash) -> Result<BlockHeader, Self::Error>;
+
     /// Register for receiving notifications for some event. Right now it only works for
     /// new blocks, but may work with transactions in the future too.
     /// if a module performs some heavy-lifting on the block's data, it should pass in a
     /// vector or a channel where data can be transferred to the actual worker, otherwise
     /// chainstate will be stuck for as long as you have work to do.
     fn subscribe(&self, tx: Arc<dyn BlockConsumer>);
+
     /// Tells whether or not we are on IBD
     fn is_in_ibd(&self) -> bool;
-    /// Returns the list of unbroadcasted transactions.
-    fn get_unbroadcasted(&self) -> Vec<Transaction>;
+
     /// Checks if a coinbase is mature
     fn is_coinbase_mature(&self, height: u32, block: BlockHash) -> Result<bool, Self::Error>;
+
     /// Returns a block locator
     fn get_block_locator(&self) -> Result<Vec<BlockHash>, Self::Error>;
+
     /// Returns a block locator from a given tip
     ///
     /// This method may be used to get the locator from a tip that's not the best one
     fn get_block_locator_for_tip(&self, tip: BlockHash) -> Result<Vec<BlockHash>, BlockchainError>;
+
     /// Returns the last block we validated
     fn get_validation_index(&self) -> Result<u32, Self::Error>;
+
     /// Returns the height of a block, given it's hash
     fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error>;
+
+    /// Apply a changeset to an accumulator and returns the resulting one
     fn update_acc(
         &self,
         acc: Stump,
@@ -88,8 +98,10 @@ pub trait BlockchainInterface {
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error>;
 
+    /// Returns all known chain tips, including the best one and forks
     fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error>;
 
+    /// Validates a block according to Bitcoin's rules, without modifying our chain
     fn validate_block(
         &self,
         block: &Block,
@@ -99,8 +111,13 @@ pub trait BlockchainInterface {
         acc: Stump,
     ) -> Result<(), Self::Error>;
 
+    /// Find the last common ancestor between the current best chain and `block`
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error>;
+
+    /// Returns this chain's params
     fn get_params(&self) -> bitcoin::params::Params;
+
+    /// Returns our current acc
     fn acc(&self) -> Stump;
 }
 
@@ -250,10 +267,6 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::acc(self)
     }
 
-    fn broadcast(&self, tx: &bitcoin::Transaction) -> Result<(), Self::Error> {
-        T::broadcast(self, tx)
-    }
-
     fn get_block(&self, hash: &BlockHash) -> Result<Block, Self::Error> {
         T::get_block(self, hash)
     }
@@ -288,10 +301,6 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
         T::get_block_height(self, hash)
-    }
-
-    fn get_unbroadcasted(&self) -> Vec<Transaction> {
-        T::get_unbroadcasted(self)
     }
 
     fn get_block_locator(&self) -> Result<Vec<BlockHash>, Self::Error> {

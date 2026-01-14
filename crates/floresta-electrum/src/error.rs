@@ -1,4 +1,6 @@
+use floresta_wire::mempool::AcceptToMempoolError;
 use thiserror::Error;
+use tokio::sync::oneshot;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -13,4 +15,10 @@ pub enum Error {
 
     #[error("IO error")]
     Io(#[from] std::io::Error),
+
+    #[error("Mempool accept error")]
+    Mempool(AcceptToMempoolError),
+
+    #[error("Node isn't working")]
+    NodeInterface(#[from] oneshot::error::RecvError),
 }

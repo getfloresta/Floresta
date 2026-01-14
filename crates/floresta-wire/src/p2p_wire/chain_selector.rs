@@ -780,7 +780,7 @@ where
             {
                 match notification {
                     Some(NodeNotification::FromUser(request, responder)) => {
-                        self.perform_user_request(request, responder);
+                        self.perform_user_request(request, responder).await;
                     }
 
                     Some(NodeNotification::FromPeer(peer, notification)) => {
@@ -894,7 +894,7 @@ where
                     }
 
                     NodeNotification::FromUser(request, responder) => {
-                        self.perform_user_request(request, responder);
+                        self.perform_user_request(request, responder).await;
                     }
                 }
             }
