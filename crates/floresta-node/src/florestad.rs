@@ -27,6 +27,7 @@ use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_wire::address_man::AddressMan;
+use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::mempool::Mempool;
 use floresta_wire::node::UtreexoNode;
 use floresta_wire::running_node::RunningNode;
@@ -440,7 +441,7 @@ impl Florestad {
             Arc::new(tokio::sync::Mutex::new(Mempool::new(acc, 300_000_000))),
             cfilters.clone(),
             kill_signal.clone(),
-            AddressMan::default(),
+            AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]),
         )
         .map_err(|e| FlorestadError::CouldNotCreateChainProvider(format!("{e}")))?;
 

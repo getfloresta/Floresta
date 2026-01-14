@@ -18,6 +18,7 @@ use floresta_chain::AssumeValidArg;
 use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
 use floresta_wire::address_man::AddressMan;
+use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::running_node::RunningNode;
 use floresta_wire::UtreexoNodeConfig;
 use rustreexo::accumulator::pollard::Pollard;
@@ -66,7 +67,7 @@ async fn main() {
         Arc::new(Mutex::new(Mempool::new(Pollard::default(), 1000))),
         None,
         Arc::new(tokio::sync::RwLock::new(false)),
-        AddressMan::default(),
+        AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]),
     )
     .unwrap();
     // A handle is a simple way to interact with the node. It implements a queue of requests

@@ -313,6 +313,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) last_feeler: Instant,
     pub(crate) startup_time: Instant,
     pub(crate) last_dns_seed_call: Instant,
+    pub(crate) used_fixed_peers: bool,
 
     // 6. Configuration and Metadata
     pub(crate) config: UtreexoNodeConfig,
@@ -413,6 +414,7 @@ where
                 node_rx,
                 node_tx,
                 address_man,
+                used_fixed_peers: false,
                 last_tip_update: Instant::now(),
                 last_connection: Instant::now(),
                 last_peer_db_dump: Instant::now(),
@@ -1812,6 +1814,11 @@ where
     /// can't find a Utreexo peer in a context we need them. This function
     /// won't do anything if `--connect` was used
     fn maybe_use_hadcoded_addresses(&mut self, needs_utreexo: bool) {
+        // No need to do this more than once
+        if self.used_fixed_peers {
+            return;
+        }
+
         if self.fixed_peer.is_some() {
             return;
         }
@@ -1831,6 +1838,8 @@ where
         if self.startup_time.elapsed() < wait {
             return;
         }
+
+        self.used_fixed_peers = true;
 
         info!("No peers found, using hardcoded addresses");
         let net = self.network;

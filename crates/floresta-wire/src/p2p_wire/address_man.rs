@@ -3,6 +3,7 @@
 //! attacks, like eclipse attacks.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::read_to_string;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -55,6 +56,16 @@ pub enum AddressState {
 
     /// We tried connecting, but failed
     Failed(u64),
+}
+
+/// All the networks we might receive addresses for
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ReachableNetworks {
+    IPv4,
+    IPv6,
+    TorV2,
+    TorV3,
+    I2P,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -204,12 +215,9 @@ pub struct AddressMan {
 
     /// The maximum number of entries this address manager can hold
     max_size: usize,
-}
 
-impl Default for AddressMan {
-    fn default() -> Self {
-        AddressMan::new(None)
-    }
+    /// The networks we can reach
+    reachable_networks: HashSet<ReachableNetworks>,
 }
 
 impl AddressMan {
@@ -217,13 +225,17 @@ impl AddressMan {
     ///
     /// `max_size` is the maximum number of addresses to keep in memory. If None is provided,
     /// a default of 50,000 addresses is used.
-    pub fn new(max_size: Option<usize>) -> Self {
+    pub fn new(max_size: Option<usize>, reachable_networks: &[ReachableNetworks]) -> Self {
+        let reachable_networks: HashSet<ReachableNetworks> =
+            reachable_networks.iter().cloned().collect();
+
         AddressMan {
             addresses: HashMap::new(),
             good_addresses: Vec::new(),
             good_peers_by_service: HashMap::new(),
             peers_by_service: HashMap::new(),
             max_size: max_size.unwrap_or(MAX_ADDRESSES),
+            reachable_networks,
         }
     }
 
@@ -240,6 +252,11 @@ impl AddressMan {
 
             // don't add private addresses
             if Self::is_localhost(address) || Self::is_private(address) {
+                continue;
+            }
+
+            // Don't add addresses that we can't reach, given our configured networks
+            if !self.is_reachable(address) {
                 continue;
             }
 
@@ -266,6 +283,18 @@ impl AddressMan {
 
         // Open up space by pruning old addresses
         self.prune_addresses();
+    }
+
+    /// Check if we can reach this address based on our reachable networks
+    fn is_reachable(&self, address: &LocalAddress) -> bool {
+        match address.address {
+            AddrV2::Ipv4(_) => self.reachable_networks.contains(&ReachableNetworks::IPv4),
+            AddrV2::Ipv6(_) => self.reachable_networks.contains(&ReachableNetworks::IPv6),
+            AddrV2::TorV2(_) => self.reachable_networks.contains(&ReachableNetworks::TorV2),
+            AddrV2::TorV3(_) => self.reachable_networks.contains(&ReachableNetworks::TorV3),
+            AddrV2::I2p(_) => self.reachable_networks.contains(&ReachableNetworks::I2P),
+            _ => false,
+        }
     }
 
     /// Remove addresses that we last heard of, until we are under the limit
@@ -1021,6 +1050,7 @@ mod test {
     use super::AddressState;
     use super::LocalAddress;
     use crate::address_man::AddressMan;
+    use crate::address_man::ReachableNetworks;
 
     /// Seed Data for paesing in tests.
     #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1147,7 +1177,8 @@ mod test {
 
     #[test]
     fn test_address_man() {
-        let mut address_man = AddressMan::default();
+        let mut address_man =
+            AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]);
 
         let signet_address =
             load_addresses_from_json("./src/p2p_wire/seeds/signet_seeds.json").unwrap();
@@ -1252,7 +1283,7 @@ mod test {
 
     #[test]
     fn test_rearrange_buckets() {
-        let mut address_man = AddressMan::default();
+        let mut address_man = AddressMan::new(None, &[]);
         let addresses = get_addresses_and_random_times();
         address_man.addresses.extend(
             addresses
@@ -1273,8 +1304,65 @@ mod test {
     }
 
     #[test]
+    fn test_is_reachable() {
+        let v4 = "127.146.182.45";
+        let v6 = "142b:a452:dff7:a41c:6cc6:317e:cc94:bb10";
+
+        let addr_v4 = AddrV2::Ipv4(v4.parse().unwrap());
+        let addr_v6 = AddrV2::Ipv6(v6.parse().unwrap());
+        let addr_onionv3 = AddrV2::TorV3([
+            0x89, 0x6c, 0x6a, 0x71, 0x70, 0x6b, 0x67, 0x61, 0x62, 0x67, 0x34, 0x68, 0x72, 0x63,
+            0x68, 0x62, 0x6f, 0x7a, 0x77, 0x6f, 0x76, 0x66, 0x66, 0x79, 0x6b, 0x37, 0x66, 0x6f,
+            0x62, 0x70, 0x6f, 0x76,
+        ]);
+        let addr_i2p = AddrV2::I2p([
+            0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e,
+            0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x66, 0x6f,
+            0x62, 0x70, 0x6f, 0x76,
+        ]);
+
+        let address_man =
+            AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]);
+        assert!(address_man.is_reachable(&LocalAddress {
+            address: addr_v4,
+            last_connected: 0,
+            state: AddressState::NeverTried,
+            services: ServiceFlags::default(),
+            port: 8333,
+            id: 0,
+        }));
+
+        assert!(address_man.is_reachable(&LocalAddress {
+            address: addr_v6,
+            last_connected: 0,
+            state: AddressState::NeverTried,
+            services: ServiceFlags::default(),
+            port: 8333,
+            id: 0,
+        }));
+
+        assert!(!address_man.is_reachable(&LocalAddress {
+            address: addr_onionv3,
+            last_connected: 0,
+            state: AddressState::NeverTried,
+            services: ServiceFlags::default(),
+            port: 8333,
+            id: 0,
+        }));
+
+        assert!(!address_man.is_reachable(&LocalAddress {
+            address: addr_i2p,
+            last_connected: 0,
+            state: AddressState::NeverTried,
+            services: ServiceFlags::default(),
+            port: 8333,
+            id: 0,
+        }));
+    }
+
+    #[test]
     fn test_prune_addresses() {
-        let mut address_man = AddressMan::new(Some(10));
+        let mut address_man = AddressMan::new(Some(10), &[]);
         let addresses = get_addresses_and_random_times();
         address_man.addresses.extend(
             addresses
@@ -1292,7 +1380,7 @@ mod test {
 
     #[test]
     fn test_update_address_state() {
-        let mut address_man = AddressMan::default();
+        let mut address_man = AddressMan::new(None, &[]);
         let addresses = get_addresses_and_random_times();
         address_man.addresses.extend(
             addresses
@@ -1313,7 +1401,7 @@ mod test {
 
     #[test]
     fn test_update_service_flags() {
-        let mut address_man = AddressMan::default();
+        let mut address_man = AddressMan::new(None, &[]);
         let addresses = get_addresses_and_random_times();
 
         address_man.addresses.extend(
@@ -1335,7 +1423,8 @@ mod test {
 
     #[test]
     fn test_add_fixed_addresses() {
-        let mut address_man = AddressMan::default();
+        let mut address_man =
+            AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]);
         address_man.add_fixed_addresses(Network::Signet);
         assert!(!address_man.addresses.is_empty());
     }
