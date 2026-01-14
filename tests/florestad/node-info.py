@@ -36,12 +36,7 @@ class NodeInfoTest(FlorestaTestFramework):
 
         self.assertIsNone(result)
 
-        end_time = time.time() + 5
-        while time.time() < end_time:
-            result = self.florestad.rpc.get_peerinfo()
-            if len(result) == 1:
-                break
-            time.sleep(0.5)
+        self.wait_for_peers_connections(self.florestad, self.bitcoind)
 
         peer_info = self.bitcoind.rpc.get_peerinfo()
 

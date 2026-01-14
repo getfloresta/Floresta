@@ -81,12 +81,7 @@ class GetTxoutTest(FlorestaTestFramework):
         )
 
         self.log("=== Waiting for floresta to connect to utreexod...")
-        time.sleep(5)
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertHasAny(
-            peer_info,
-            re.compile(r"/btcwire:\d+\.\d+\.\d+/utreexod:\d+\.\d+\.\d+/"),
-        )
+        self.wait_for_peers_connections(self.florestad, self.utreexod)
 
         self.log("=== Connect bitcoind to utreexod")
         host = self.utreexod.get_host()
@@ -94,12 +89,7 @@ class GetTxoutTest(FlorestaTestFramework):
         self.bitcoind.rpc.addnode(f"{host}:{port}", command="onetry", v2transport=False)
 
         self.log("=== Waiting for bitcoind to connect to utreexod...")
-        time.sleep(5)
-        peer_info = self.bitcoind.rpc.get_peerinfo()
-        self.assertHasAny(
-            peer_info,
-            re.compile(r"/btcwire:\d+\.\d+\.\d+/utreexod:\d+\.\d+\.\d+/"),
-        )
+        self.wait_for_peers_connections(self.bitcoind, self.utreexod)
 
         self.log("=== Wait for the nodes to sync...")
         time.sleep(5)

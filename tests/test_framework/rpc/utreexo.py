@@ -129,3 +129,9 @@ class UtreexoRPC(BaseRPC):
             A dictionary containing the outpoint information.
         """
         return self.perform_request("gettxout", params=[txid, vout, include_mempool])
+
+    def ping(self) -> None:
+        """
+        Perform the `ping` RPC that checks if our peers are alive.
+        """
+        self.perform_request("ping")
