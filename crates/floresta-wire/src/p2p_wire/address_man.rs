@@ -38,6 +38,10 @@ const MIN_ADDRESSES_CBF: usize = 5;
 /// The minimum amount of Utreexo-capable addresses we need to have on the [`AddressMan`].
 const MIN_ADDRESSES_UTREEXO: usize = 2;
 
+/// If we haven't heard from a peer in this amount of time, we consider its info stale
+/// and add it to the NeverTried bucket
+const ASSUME_STALE: u64 = 24 * 60 * 60; // 24 hours
+
 /// How many addresses we keep in our address manager
 const MAX_ADDRESSES: usize = 50_000;
 
@@ -766,7 +770,7 @@ impl AddressMan {
                     }
                 }
                 AddressState::Tried(tried_time) => {
-                    if tried_time + RETRY_TIME < now {
+                    if tried_time + ASSUME_STALE < now {
                         address.state = AddressState::NeverTried;
                     }
                 }
