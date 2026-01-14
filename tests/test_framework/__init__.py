@@ -624,10 +624,8 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             )
         return self._nodes[index]
 
-    def run_node(self, node: Node, timeout: int = 180):
+    def run_node(self, node: Node):
         """Start a node and initialize its RPC connection."""
-        node.daemon.start()
-
         if node.variant == "florestad":
             node.rpc = FlorestaRPC(node.daemon.process, node.rpc_config)
         elif node.variant == "utreexod":
@@ -635,8 +633,19 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         elif node.variant == "bitcoind":
             node.rpc = BitcoinRPC(node.daemon.process, node.rpc_config)
 
-        node.rpc.wait_for_connections(opened=True, timeout=timeout)
-        self.log(f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}")
+        for _ in range(3):
+            try:
+                node.start()
+                self.log(
+                    f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}"
+                )
+                return
+            # pylint: disable=broad-exception-caught
+            except Exception as e:
+                node.stop()
+                error = e
+
+        raise RuntimeError(f"Error starting node '{node.variant}': {error}")
 
     def stop_node(self, index: int):
         """
