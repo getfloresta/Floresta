@@ -513,6 +513,10 @@ where
             return;
         }
 
+        if self.used_fixed_addresses {
+            return;
+        }
+
         let has_peers = !self.peers.is_empty();
         // Return if we have peers and utreexo isn't needed OR we have utreexo peers
         if has_peers && (!needs_utreexo || self.has_utreexo_peers()) {
@@ -528,6 +532,8 @@ where
         if self.startup_time.elapsed() < wait {
             return;
         }
+
+        self.used_fixed_addresses = true;
 
         info!("No peers found, using hardcoded addresses");
         let net = self.network;
