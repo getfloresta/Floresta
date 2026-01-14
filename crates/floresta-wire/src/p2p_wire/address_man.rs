@@ -325,7 +325,7 @@ impl AddressMan {
         }
     }
 
-    fn is_good_peer(address: &LocalAddress) -> bool {
+    const fn is_good_peer(address: &LocalAddress) -> bool {
         if Self::is_private(address) {
             return false;
         }
@@ -334,15 +334,15 @@ impl AddressMan {
             || matches!(address.state, AddressState::Tried(_))
     }
 
-    fn is_private(address: &LocalAddress) -> bool {
+    const fn is_private(address: &LocalAddress) -> bool {
         match address.address {
-            AddrV2::Ipv4(ip) => ip.is_private(),
+            AddrV2::Ipv4(ip) => ip.is_private() || ip.octets()[0] == 0,
             AddrV2::Ipv6(ip) => ip.octets()[0] == 0xfd || ip.octets()[0] == 0xfe,
             _ => false,
         }
     }
 
-    fn is_localhost(address: &LocalAddress) -> bool {
+    const fn is_localhost(address: &LocalAddress) -> bool {
         match address.address {
             AddrV2::Ipv4(ip) => ip.is_loopback(),
             AddrV2::Ipv6(ip) => ip.is_loopback(),
@@ -830,7 +830,7 @@ impl AddressMan {
     }
 
     /// Returns the file path to the seeds file for the given network
-    fn get_net_seeds(network: Network) -> &'static str {
+    const fn get_net_seeds(network: Network) -> &'static str {
         match network {
             Network::Bitcoin => include_str!("seeds/mainnet_seeds.json"),
             Network::Signet => include_str!("seeds/signet_seeds.json"),
@@ -1235,6 +1235,7 @@ mod test {
             "172.31.201.77:8333",
             "192.168.1.14:8333",
             "192.168.203.250:8333",
+            "0.9.85.249:8333",
             "[fd3a:9f2b:4c10:1a2b::1]:8333",
             "[fd12:3456:789a:1::dead]:8333",
             "[fdff:ab23:9012:beef::42]:8333",
