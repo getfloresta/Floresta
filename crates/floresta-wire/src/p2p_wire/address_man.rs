@@ -211,6 +211,105 @@ impl LocalAddress {
     pub fn get_address(&self) -> AddrV2 {
         self.address.clone()
     }
+
+    /// Return whether the address can be reached from our node
+    ///
+    /// Some addresses are not reachable from the global internet,
+    /// those includes documentation, reserved and private ones ranges.
+    /// Since we can't connect with them, there's no point into keeping them
+    const fn is_routable(&self) -> bool {
+        match self.address {
+            AddrV2::Ipv4(ipv4) => Self::is_routable_ipv4(&ipv4),
+            AddrV2::Ipv6(ipv6) => Self::is_routable_ipv6(&ipv6),
+            AddrV2::Cjdns(address) => {
+                let octets = address.octets();
+                // CJDNS addresses use a special range for local addresses (FC00::/8)
+                // See: https://github.com/cjdelisle/cjdns/tree/master/doc#what-is-notable-about-cjdns-why-should-i-use-it
+                if octets[0] == 0xFC {
+                    return true;
+                }
+
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// Returns whether an ipv4 address is publicly routable
+    const fn is_routable_ipv4(ip: &Ipv4Addr) -> bool {
+        // Code taken from bitcoinfuzz commit: 7619d400bbd8078b8dc51d077c900f0b54f9cfcf/
+        let octets = ip.octets();
+
+        // 0.0.0.0/8 - "This" network
+        if octets[0] == 0 {
+            return false;
+        }
+
+        // Loopback, broadcast, private (RFC 1918)
+        if ip.is_loopback() || ip.is_broadcast() || ip.is_private() {
+            return false;
+        }
+
+        // RFC 2544 - Benchmarking - 198.18.0.0/15
+        if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
+            return false;
+        }
+
+        // RFC 3927 - Link-Local - 169.254.0.0/16
+        if ip.is_link_local() {
+            return false;
+        }
+
+        // RFC 6598 - Shared Address Space (CGNAT) - 100.64.0.0/10
+        if octets[0] == 100 && (octets[1] >= 64 && octets[1] <= 127) {
+            return false;
+        }
+
+        // RFC 5737 - Documentation (TEST-NET-1, TEST-NET-2, TEST-NET-3)
+        if ip.is_documentation() {
+            return false;
+        }
+
+        true
+    }
+
+    /// Returns whether an ipv6 address is publicly routable
+    #[rustfmt::skip]
+    const fn is_routable_ipv6(ip: &Ipv6Addr) -> bool {
+        let octets = ip.octets();
+
+        // Unspecified, loopback, unique local (RFC 4193 - fc00::/7)
+        if ip.is_unspecified() || ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00 {
+            return false;
+        }
+
+        // RFC 4843 - ORCHID - 2001:10::/28
+        if octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x00 && (octets[3] & 0xF0) == 0x10 {
+            return false;
+        }
+
+        // RFC 4862 - Link-local - fe80::/64
+        if octets[0] == 0xFE && (octets[1] & 0xC0) == 0x80 {
+            return false;
+        }
+
+        // RFC 7343 - ORCHIDv2 - 2001:20::/28
+        if octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x00 && (octets[3] & 0xf0) == 0x20 {
+            return false;
+        }
+
+        true
+    }
+
+    /// Return whether an address is good to connect to
+    pub fn is_good_address(&self) -> bool {
+        if !self.is_routable() {
+            return false;
+        }
+
+        matches!(self.state, AddressState::Connected)
+            || matches!(self.state, AddressState::Tried(_))
+    }
 }
 
 #[derive(Clone)]
@@ -273,23 +372,6 @@ impl AddressMan {
                 continue;
             }
 
-            // don't unreachable addresses
-            match address.address {
-                AddrV2::Ipv4(ipv4) => {
-                    if !Self::is_routable_ipv4(&ipv4) {
-                        continue;
-                    }
-                }
-
-                AddrV2::Ipv6(ipv6) => {
-                    if !Self::is_routable_ipv6(&ipv6) {
-                        continue;
-                    }
-                }
-
-                _ => {}
-            }
-
             // don't add addresses from networks we can't reach
             if !self.is_net_reachable(address) {
                 continue;
@@ -310,7 +392,7 @@ impl AddressMan {
 
             if let std::collections::hash_map::Entry::Vacant(e) = self.addresses.entry(id) {
                 e.insert(address.clone());
-                if Self::is_good_peer(address) {
+                if address.is_good_address() {
                     self.good_addresses.push(id);
                 }
 
@@ -394,107 +476,8 @@ impl AddressMan {
         true
     }
 
-    fn is_good_peer(address: &LocalAddress) -> bool {
-        if !Self::is_routable(address) {
-            return false;
-        }
-
-        matches!(address.state, AddressState::Connected)
-            || matches!(address.state, AddressState::Tried(_))
-    }
-
-    const fn is_routable(address: &LocalAddress) -> bool {
-        match address.address {
-            AddrV2::Ipv4(ipv4) => Self::is_routable_ipv4(&ipv4),
-            AddrV2::Ipv6(ipv6) => Self::is_routable_ipv6(&ipv6),
-            AddrV2::Cjdns(address) => {
-                let octets = address.octets();
-                // CJDNS addresses use a special range for local addresses (FC00::/8)
-                // See: https://github.com/cjdelisle/cjdns/tree/master/doc#what-is-notable-about-cjdns-why-should-i-use-it
-                if octets[0] == 0xFC {
-                    return true;
-                }
-
-                false
-            }
-            _ => true,
-        }
-    }
-
-    const fn is_routable_ipv4(ip: &Ipv4Addr) -> bool {
-        // Code taken from bitcoinfuzz commit: 7619d400bbd8078b8dc51d077c900f0b54f9cfcf/
-        let octets = ip.octets();
-
-        // 0.0.0.0/8 - "This" network
-        if octets[0] == 0 {
-            return false;
-        }
-
-        // Loopback, broadcast, private (RFC 1918)
-        if ip.is_loopback() || ip.is_broadcast() || ip.is_private() {
-            return false;
-        }
-
-        // RFC 2544 - Benchmarking - 198.18.0.0/15
-        if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
-            return false;
-        }
-
-        // RFC 3927 - Link-Local - 169.254.0.0/16
-        if ip.is_link_local() {
-            return false;
-        }
-
-        // RFC 6598 - Shared Address Space (CGNAT) - 100.64.0.0/10
-        if octets[0] == 100 && (octets[1] >= 64 && octets[1] <= 127) {
-            return false;
-        }
-
-        // RFC 5737 - Documentation (TEST-NET-1, TEST-NET-2, TEST-NET-3)
-        if ip.is_documentation() {
-            return false;
-        }
-
-        true
-    }
-
-    const fn is_routable_ipv6(ip: &Ipv6Addr) -> bool {
-        let octets = ip.octets();
-
-        // Unspecified, loopback, unique local (RFC 4193 - fc00::/7)
-        if ip.is_unspecified() || ip.is_loopback() || ip.is_unique_local() {
-            return false;
-        }
-
-        // RFC 4843 - ORCHID - 2001:10::/28
-        if octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x00 && (octets[3] & 0xF0) == 0x10
-        {
-            return false;
-        }
-
-        // RFC 4862 - Link-local - fe80::/64
-        if octets[0] == 0xFE && (octets[1] & 0xC0) == 0x80 {
-            return false;
-        }
-
-        // RFC 7343 - ORCHIDv2 - 2001:20::/28
-        if octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x00 && (octets[3] & 0xf0) == 0x20
-        {
-            return false;
-        }
-
-        true
-    }
-
     fn push_if_has_service(&mut self, address: &LocalAddress, service: ServiceFlags) {
         if address.services.has(service) {
-            if Self::is_good_peer(address) {
-                self.good_peers_by_service
-                    .entry(service)
-                    .or_default()
-                    .push(address.id);
-            }
-
             self.peers_by_service
                 .entry(service)
                 .or_default()
@@ -966,7 +949,7 @@ impl AddressMan {
     }
 
     /// Returns the file path to the seeds file for the given network
-    fn get_net_seeds(network: Network) -> &'static str {
+    const fn get_net_seeds(network: Network) -> &'static str {
         match network {
             Network::Bitcoin => include_str!("seeds/mainnet_seeds.json"),
             Network::Signet => include_str!("seeds/signet_seeds.json"),
@@ -1371,6 +1354,7 @@ mod test {
             "172.31.201.77:8333",
             "192.168.1.14:8333",
             "192.168.203.250:8333",
+            "0.9.85.249:8333",
             "[fd3a:9f2b:4c10:1a2b::1]:8333",
             "[fd12:3456:789a:1::dead]:8333",
             "[fdff:ab23:9012:beef::42]:8333",
@@ -1384,7 +1368,7 @@ mod test {
         .collect::<Vec<_>>();
 
         for address in addresses {
-            assert!(!AddressMan::is_routable(&address));
+            assert!(!address.is_routable());
         }
 
         // now load the signet seeds and ensure none are private
@@ -1392,7 +1376,7 @@ mod test {
             load_addresses_from_json("./src/p2p_wire/seeds/signet_seeds.json").unwrap();
 
         for address in signet_address {
-            assert!(AddressMan::is_routable(&address));
+            assert!(address.is_routable());
         }
     }
 
@@ -1444,7 +1428,7 @@ mod test {
     }
 
     #[test]
-    fn test_is_reachable() {
+    fn test_is_net_reachable() {
         let v4 = "127.146.182.45";
         let v6 = "142b:a452:dff7:a41c:6cc6:317e:cc94:bb10";
 
@@ -1463,6 +1447,7 @@ mod test {
 
         let address_man =
             AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]);
+
         assert!(address_man.is_net_reachable(&LocalAddress {
             address: addr_v4,
             last_connected: 0,
