@@ -32,3 +32,9 @@ class FlorestaRPC(BaseRPC):
             raise ValueError(f"Invalid getmemoryinfo mode: '{mode}'")
 
         return self.perform_request("getmemoryinfo", params=[mode])
+
+    def load_descriptor(self, descriptor: str):
+        """
+        Load a script descriptor into the wallet.
+        """
+        return self.perform_request("loaddescriptor", params=[descriptor])

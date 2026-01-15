@@ -25,6 +25,20 @@ GENESIS_BLOCK_LEAF_COUNT = 0
 TEST_CHAIN = "regtest"
 FLORESTA_TEMP_DIR = os.getenv("FLORESTA_TEMP_DIR")
 
+# Wallets information,
+# Mnemonics = useless ritual arm slow mention dog force almost sudden pulp rude eager
+# pylint: disable = line-too-long
+WALLET_XPRIV = "tprv8hCwaWbnCTeqSXMmEgtYqC3tjCHQTKphfXBG5MfWgcA6pif3fAUqCuqwphSyXmVFhd8b5ep5krkRxF6YkuQfxSAhHMTGeRA8rKPzQd9BMre"
+WALLET_DESCRIPTOR_PRIV_INTERNAL = f"wpkh({WALLET_XPRIV}/1/*)#v08p3aj4"
+WALLET_DESCRIPTOR_PRIV_EXTERNAL = f"wpkh({WALLET_XPRIV}/0/*)#amzqvgzd"
+# pylint: disable = line-too-long
+WALLET_XPUB = "tpubDDtyive2LqLWKzPZ8LZ9Ebi1JDoLcf1cEpn3Mshp6sxVfCupHZJRPQTozp2EpTF76vJcyQBN7VP7CjUntEJxeADnuTMNTYKoSWNae8soVyv"
+WALLET_DESCRIPTOR_INTERNAL = f"wpkh({WALLET_XPUB}/1/*)#0rlhs7rw"
+WALLET_DESCRIPTOR_EXTERNAL = f"wpkh({WALLET_XPUB}/0/*)#7h6kdtnk"
+# pylint: disable = line-too-long
+WALLET_XPUB_BIP_84 = "vpub5ZrpbMUWLCJ6MbpU1RzocWBddAQnk2XYry9JSXrtzxSqoicei28CzqUhiN2HJ8z2VjY6rsUNf4qxjym43ydhAFQJ7BDDcC2bK6et6x9hc4D"
+WALLET_ADDRESS = "bcrt1q427ze5mrzqupzyfmqsx9gxh7xav538yk2j4cft"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def validate_and_check_environment():
@@ -150,7 +164,7 @@ def utreexod_node(node_manager) -> Node:
     node = node_manager.add_node_extra_args(
         variant=NodeType.UTREEXOD,
         extra_args=[
-            "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
+            f"--miningaddr={WALLET_ADDRESS}",
             "--utreexoproofindex",
             "--prune=0",
         ],
@@ -189,6 +203,25 @@ def florestad_bitcoind(
     node_manager.connect_nodes(florestad, bitcoind)
 
     return florestad, bitcoind
+
+
+@pytest.fixture
+def florestad_bitcoind_utreexod(
+    florestad_node, bitcoind_node, utreexod_node, node_manager
+) -> tuple[Node, Node, Node]:
+    """
+    Creates and starts a `florestad` node, a `bitcoind` node, and a `utreexod` node.
+    All nodes are automatically connected to each other and are ready for testing.
+    """
+    florestad = florestad_node
+    utreexod = utreexod_node
+    bitcoind = bitcoind_node
+
+    node_manager.connect_nodes(florestad, utreexod)
+    node_manager.connect_nodes(florestad, bitcoind)
+    node_manager.connect_nodes(bitcoind, utreexod)
+
+    return florestad, bitcoind, utreexod
 
 
 @pytest.fixture
