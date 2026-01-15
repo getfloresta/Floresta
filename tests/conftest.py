@@ -7,7 +7,6 @@ This module provides fixtures for creating and managing test nodes
 
 # pylint: disable=redefined-outer-name
 
-import builtins
 import os
 import logging
 import pytest
@@ -67,28 +66,6 @@ def validate_and_check_environment():
             pytest.fail(f"{binary_name} binary not found at {binary_path}")
 
 
-# pylint: disable=W0511
-# TODO: remove this function after all tests are migrated to the pytest standard
-# so that instead of other functions using print they should use logging directly
-def redirect_print_to_logger(logger):
-    """
-    Replace the built-in print function to redirect messages to the logger.
-    """
-    original_print = builtins.print
-
-    # pylint: disable=unused-argument
-    def custom_print(*args, **kwargs):
-        # Convert print arguments into a single string
-        message = " ".join(map(str, args))
-        # Redirect to the logger at DEBUG level
-        logger.debug(message)
-
-    # Replace the print function with custom_print
-    builtins.print = custom_print
-
-    return original_print  # Return the original print function in case it needs to be restored
-
-
 @pytest.fixture(scope="function")
 def setup_logging(request):
     """
@@ -98,7 +75,7 @@ def setup_logging(request):
 
     # Log format to include the file and line
     formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+        "%(asctime)s - %(levelname)s - %(pathname)s:%(lineno)d - %(message)s"
     )
 
     # Configure console handler
@@ -119,13 +96,7 @@ def setup_logging(request):
         logger.addHandler(console_handler)
         logger.addHandler(file_handler)
 
-    # Redirect print to the logger
-    original_print = redirect_print_to_logger(logger)
-
     yield logger
-
-    # Restore the original print after the test
-    builtins.print = original_print
 
     # Clear handlers after the test
     logger.handlers.clear()

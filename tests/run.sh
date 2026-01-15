@@ -15,14 +15,10 @@ check_installed uv
 
 set -e
 
-USE_TEST_RUNNER=true
-USE_PYTEST=true
 PRESERVE_DATA=false
 TEST_RUNNER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
-  --pytest) USE_TEST_RUNNER=false ;;
-  --test-runner) USE_PYTEST=false ;;
   --preserve-data-dir) PRESERVE_DATA=true ;;
   --)
     shift
@@ -51,14 +47,5 @@ if [ "$PRESERVE_DATA" = false ]; then
     rm -rf "$FLORESTA_TEMP_DIR/logs"
 fi
 
-# Run pytest
-if [ "$USE_PYTEST" = true ]; then
-  echo "FLORESTA_TEMP_DIR=$FLORESTA_TEMP_DIR uv run pytest ${TEST_RUNNER_ARGS[@]}"
-  uv run pytest "${TEST_RUNNER_ARGS[@]}"
-fi
-
-# Run test runner
-if [ "$USE_TEST_RUNNER" = true ]; then
-  echo "FLORESTA_TEMP_DIR=$FLORESTA_TEMP_DIR uv run ./tests/test_runner.py ${TEST_RUNNER_ARGS[@]}"
-  uv run ./tests/test_runner.py "${TEST_RUNNER_ARGS[@]}"
-fi
+# Run the tests
+uv run pytest "${TEST_RUNNER_ARGS[@]}"
