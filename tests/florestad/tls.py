@@ -10,7 +10,7 @@ from test_framework.electrum.client import ElectrumClient
 
 
 @pytest.mark.florestad
-def test_tls(add_node_with_tls):
+def test_tls(setup_logging, add_node_with_tls):
     """
     Test initialization florestad with TLS and test Electrum client connection.
     """
@@ -19,6 +19,7 @@ def test_tls(add_node_with_tls):
     assert florestad.get_port("electrum-server-tls") is not None
 
     electrum = ElectrumClient(
+        setup_logging,
         florestad.get_host(),
         florestad.get_port("electrum-server-tls"),
         tls=True,

@@ -123,129 +123,31 @@ class Node:
             os.kill(pid, getattr(signal, sigcode, signal.SIGTERM))
 
 
-class FlorestaTestMetaClass(type):
-    """
-    Metaclass for FlorestaTestFramework.
-
-    This metaclass ensures that any subclass of `FlorestaTestFramework`
-    adheres to a standard whereby the subclass overrides `set_test_params` and
-    `run_test, but DOES NOT override `__init__` or `main`. If those standards
-    are violated, a `TypeError` is raised.
-    """
-
-    def __new__(mcs, clsname, bases, dct):
-        if not clsname == "FlorestaTestFramework":
-            if not ("run_test" in dct and "set_test_params" in dct):
-                raise TypeError(
-                    "FlorestaTestFramework subclasses must override 'run_test'"
-                    "and 'set_test_params'"
-                )
-
-            if "__init__" in dct or "main" in dct:
-                raise TypeError(
-                    "FlorestaTestFramework subclasses may not override "
-                    "'__init__' or 'main'"
-                )
-
-        return super().__new__(mcs, clsname, bases, dct)
-
-
 # pylint: disable=too-many-public-methods
-class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
+class FlorestaTestFramework:
     """
-    Base class for a floresta test script. Individual floresta
-    test scripts should:
+    A utility framework designed to manage and simplify the setup, execution,
+    and teardown of nodes in Floresta's testing environment.
 
-    - subclass FlorestaTestFramework;
-    - not override the __init__() method;
-    - not override the main() method;
-    - implement set_test_params();
-    - implement run_test();
+     This framework provides tools to:
+    - Start and stop nodes (`florestad`, `utreexod`, and `bitcoind`) with custom configurations.
+    - Manage node connections, ensuring proper communication between nodes.
+    - Create TLS certificates for secure communication when required.
+    - Facilitate integration and functional tests by providing reusable methods
+      to interact with nodes and their RPC interfaces.
 
-    The `set_test_params` method is called before the test starts
-    and aims to configure the node variant, its daemon parameters
-    or whatever you think should be defined. It is a good practice
-    to set the number of nodes and their configuration in this method
-    with `self.add_node`.
-
-    The `run_test` method is the test itself, where one (or more) node(s)
-    are started with the `self.run_node` method. This method will return
-    a index integer for a `Node` object stored in a `self.nodes` property,
-    each node containing the initialized `daemon` process, a `rpc` and
-    `rpc_config` objects. The `rpc` object can be a `FlorestaRPC` or
-    `UtreexoRPC` object, depending on the node variant defined.
-
-    When a node start, it will wait for ALL node's socket ports to be opened.
-    Inversely, the method `self.stop_node` will wait for ALL node's ports to
-    be closed (you could also use `self.stop` to stop all nodes). Internally,
-    it uses `node.rpc.wait_for_connections(opened=True)` to wait for all ports
-    to be opened, or `node.rpc.wait_for_connections(opened=False)` to wait for
-    all ports to be closed. You could use them if you want more control.
-
-    Also, the `self.run_test` method is where you should call for assertions
-    like `self.assertIsNone`, `self.assertIsSome`, `self.assertEqual`,
-    `self.assertIn`, `self.assertMatch`, `self.assertTrue` and
-    `self.assertRaises`. If the assertion passes, the test will continue.
-    If it fails, the test will stop all nodes and raise an `AssertionError`.
-
-    The `self.assertRaises` method is a special case. It should be used in a
-    context manager, i.e., the `with self.assertRaises(<SomeException>)`
-    clause. The context will expect for some exception to be raised and,
-    if it raises, the script will continue. If it does not raise, it will stop
-    all nodes and raise an `AssertionError`.
-
-    In both methods, you can use `self.log` to log messages.
-
-    At the end of file, you should execute `MyTest().main()` method.
-
-    For more details, see the tests/example/*.py file to see how
-    the Floresta team thought the test framework should be used and
-    test/test_framework/{crypto,daemon,rpc,electrum}/*.py to see
-    how the test framework was structured.
+    This class is intended to be used as a base for Floresta's test scripts,
+    providing a consistent and extensible structure for managing nodes and
+    running tests.
     """
 
-    class _AssertRaisesContext:
-        """
-        Context manager for testing that an exception is raised.
-
-        This keeps the assertRaises functionality neatly contained within our test framework
-        """
-
-        def __init__(self, test_framework, expected_exception):
-            """Initialize the context manager with the expected exception type."""
-            self.test_framework = test_framework
-            self.expected_exception = expected_exception
-            self.exception = None
-
-        def __enter__(self):
-            """Enter the context manager."""
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            """Exit the context manager and check if the expected exception was raised."""
-            if exc_type is None:
-                self.test_framework.stop_all_nodes()
-                trace = traceback.format_exc()
-                message = f"{self.expected_exception} was not raised"
-                raise AssertionError(f"{message}: {trace}")
-
-            if not issubclass(exc_type, self.expected_exception):
-                trace = traceback.format_exc()
-                message = f"Expected {self.expected_exception} but got {exc_type}"
-                raise AssertionError(f"{message}: {trace}")
-
-            self.exception = exc_value
-            return True
-
-    def __init__(self, logger=None, test_name: str = None):
+    def __init__(self, logger, test_name):
         """
         Sets test framework defaults.
-
-        Do not override this method. Instead, override the set_test_params() method
         """
         self._test_name = test_name
         self._nodes = []
-        self.logger = logger
+        self.log = logger
 
     @property
     def test_name(self) -> str:
@@ -259,72 +161,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         self._test_name = self.__class__.__name__.lower()
         return self._test_name
 
-    # pylint: disable=R0801
-    def log(self, msg: str):
-        """Log a message with the class caller"""
-        if self.logger is not None:
-            self.logger.debug(msg)
-            return
-
-        now = (
-            datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .strftime("%Y-%m-%d %H:%M:%S")
-        )
-        print(f"[{self.test_name} {now}] {msg}")
-
-    def main(self):
-        """
-        Main function.
-
-        This should not be overridden by the subclass test scripts.
-        """
-        try:
-            self.set_test_params()
-            self.run_test()
-            self.stop()
-        except Exception as err:
-            processes = []
-            for node in self._nodes:
-
-                # If the node has an RPC server, stop it gracefully
-                # otherwise (maybe the error occurred before the RPC server
-                # is started), try to kill the process with SIGTERM. If that
-                # fails, try to force kill it with SIGKILL.
-                processes.append(str(node.daemon.process.pid))
-                is_node_process_running = True
-                try:
-                    if getattr(node, "rpc", None):
-                        node.stop()
-                        is_node_process_running = False
-                # pylint: disable=broad-exception-caught
-                except Exception:
-                    pass
-
-                if is_node_process_running:
-                    # pylint: disable=broad-exception-caught
-                    try:
-                        node.send_kill_signal("SIGTERM")
-                    except Exception:
-                        node.send_kill_signal("SIGKILL")
-
-            raise RuntimeError(
-                f"Process with pids {', '.join(processes)} failed to start: {err}"
-            ) from err
-
-    # Should be overridden by individual tests
-    def set_test_params(self):
-        """
-        Tests must override this method to change default values for number of nodes, topology, etc
-        """
-        raise NotImplementedError
-
-    def run_test(self):
-        """
-        Tests must override this method to run nodes, etc.
-        """
-        raise NotImplementedError
-
     @staticmethod
     def get_integration_test_dir():
         """
@@ -337,28 +173,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
                 + " Please set it to the path of the integration test directory."
             )
         return os.getenv("FLORESTA_TEMP_DIR")
-
-    @staticmethod
-    def get_logs_dir():
-        """
-        Get the logs directory path for the project.
-
-        Note: This directory is based on the git describe value to
-        separate logs from different commits.
-        """
-        try:
-            git_describe = subprocess.check_output(
-                ["git", "describe", "--tags", "--always"], text=True
-            ).strip()
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                "Failed to run 'git describe'. Run this at the Floresta directory."
-            ) from exc
-
-        base_dir = FlorestaTestFramework.get_integration_test_dir()
-        logs_data_dir = os.path.join(base_dir, "logs", git_describe)
-
-        return logs_data_dir
 
     @staticmethod
     def create_data_dirs(data_dir: str, base_name: str, nodes: int) -> list[str]:
@@ -388,15 +202,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """Get a random port in the range [2000, 65535]"""
         return FlorestaTestFramework.get_available_random_port(2000, 65535)
 
-    def get_test_log_path(self) -> str:
-        """
-        Get the path for the test name log file, which is the class name in lowercase.
-        This is used to create a log file for the test.
-        """
-        tempdir = str(FlorestaTestFramework.get_logs_dir())
-
-        return os.path.join(tempdir, f"{self.test_name}.log")
-
     def create_tls_key_cert(self) -> tuple[str, str]:
         """
         Create a PKCS#8 formatted private key and a self-signed certificate.
@@ -417,12 +222,12 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
 
         # Create certificates
         pk_path, private_key = create_pkcs8_private_key(tls_path)
-        self.log(f"Created PKCS#8 key at {pk_path}")
+        self.log.debug(f"Created PKCS#8 key at {pk_path}")
 
         cert_path = create_pkcs8_self_signed_certificate(
             tls_path, private_key, common_name="florestad", validity_days=365
         )
-        self.log(f"Created self-signed certificate at {cert_path}")
+        self.log.debug(f"Created self-signed certificate at {cert_path}")
 
         return (pk_path, cert_path)
 
@@ -483,7 +288,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             datadir = data_dir_arg.split("=", 1)[1]
 
         if not os.path.exists(datadir):
-            self.log(f"Creating data directory for {data_dir_arg} in {datadir}")
+            self.log.debug(f"Creating data directory for {data_dir_arg} in {datadir}")
             os.makedirs(datadir, exist_ok=True)
 
     # pylint: disable=too-many-positional-arguments,too-many-arguments
@@ -496,7 +301,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         tls: bool,
     ) -> Node:
         """Add default args to a florestad node settings to be run and return a Node object."""
-        daemon = FlorestaDaemon()
+        daemon = FlorestaDaemon(self.log)
         daemon.create(target=targetdir)
         default_args = []
         ports = {}
@@ -552,7 +357,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         tls: bool,
     ) -> Node:
         """Add default args to a utreexod node settings to be run and return a Node object."""
-        daemon = UtreexoDaemon()
+        daemon = UtreexoDaemon(self.log)
         daemon.create(target=targetdir)
         default_args = []
         ports = {}
@@ -606,7 +411,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         extra_args: List[str],
     ) -> Node:
         """Add default args to a bitcoind node settings to be run and return a Node object."""
-        daemon = BitcoinDaemon()
+        daemon = BitcoinDaemon(self.log)
         daemon.create(target=targetdir)
         default_args = []
         ports = {}
@@ -683,14 +488,16 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         node.daemon.start()
 
         if node.variant == "florestad":
-            node.rpc = FlorestaRPC(node.daemon.process, node.rpc_config)
+            node.rpc = FlorestaRPC(self.log, node.daemon.process, node.rpc_config)
         elif node.variant == "utreexod":
-            node.rpc = UtreexoRPC(node.daemon.process, node.rpc_config)
+            node.rpc = UtreexoRPC(self.log, node.daemon.process, node.rpc_config)
         elif node.variant == "bitcoind":
-            node.rpc = BitcoinRPC(node.daemon.process, node.rpc_config)
+            node.rpc = BitcoinRPC(self.log, node.daemon.process, node.rpc_config)
 
         node.rpc.wait_for_connections(opened=True, timeout=timeout)
-        self.log(f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}")
+        self.log.debug(
+            f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}"
+        )
 
     def stop_node(self, index: int):
         """
@@ -725,7 +532,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         for florestad_index, florestad_node in enumerate(florestads):
             for other_node_index, other_node in enumerate(other_nodes):
                 florestad_node.connect(other_node)
-                self.log(
+                self.log.debug(
                     f"Connected Floresta node {florestad_index} to node {other_node_index}"
                 )
 
@@ -746,119 +553,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
                     continue
                 source_node.connect(target_node)
                 connected_pairs.add(pair)
-                self.log(
+                self.log.debug(
                     f"Connected non-Floresta node {source_node_index} to node {target_node_index}"
                 )
-
-    # pylint: disable=invalid-name
-    def assertTrue(self, condition: bool):
-        """
-        Assert if the condition is True, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-        if not condition:
-            self.stop()
-            raise AssertionError(f"Actual: {condition}\nExpected: True")
-
-    def assertFalse(self, condition: bool):
-        """
-        Assert if the condition is False, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-        if condition:
-            self.stop()
-            raise AssertionError(f"Actual: {condition}\nExpected: False")
-
-    # pylint: disable=invalid-name
-    def assertIsNone(self, thing: Any):
-        """
-        Assert if the condition is None, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-        if thing is not None:
-            self.stop()
-            raise AssertionError(f"Actual: {thing}\nExpected: None")
-
-    # pylint: disable=invalid-name
-    def assertIsSome(self, thing: Any):
-        """
-        Assert if the condition is not None, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-        if thing is None:
-            self.stop()
-            raise AssertionError(f"Actual: {thing}\nExpected: not None")
-
-    # pylint: disable=invalid-name
-    def assertEqual(self, condition: Any, expected: Any):
-        """
-        Assert if the condition is True, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-
-        if not condition == expected:
-            self.stop()
-            raise AssertionError(f"Actual: {condition}\nExpected: {expected}")
-
-    # pylint: disable=invalid-name
-    def assertNotEqual(self, condition: Any, expected: Any):
-        """
-        Assert if the condition is True, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-
-        if condition == expected:
-            self.stop()
-            raise AssertionError(f"Actual: {condition}\nExpected: !{expected}")
-
-    # pylint: disable=invalid-name
-    def assertIn(self, element: Any, listany: List[Any]):
-        """
-        Assert if the element is in listany , otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-
-        if element not in listany:
-            self.stop()
-            raise AssertionError(
-                f"Actual: {element} not in {listany}\nExpected: {element} in {listany}"
-            )
-
-    # pylint: disable=invalid-name
-    def assertMatch(self, actual: Any, pattern: Pattern):
-        """
-        Assert if the element fully matches a pattern, otherwise
-        all nodes will be stopped and an AssertionError will
-        be raised
-        """
-
-        if not re.fullmatch(pattern, actual):
-            self.stop()
-            raise AssertionError(
-                f"Actual: {actual} !~ {pattern} \nExpected: {actual} ~ {pattern}"
-            )
-
-    def assertRaises(self, expected_exception):
-        """Assert that the expected exception is raised."""
-        return self._AssertRaisesContext(self, expected_exception)
-
-    def assertHasAny(self, actual: Any, pattern: Pattern) -> None:
-        """
-        Assert if the actual has any fully matched pattern,
-        otherwise all nodes will be stopped and an AssertionError will
-        be raised.
-        """
-        values = [str(v) for obj in actual for v in obj.values()]
-
-        if not any(re.fullmatch(pattern, v) for v in values):
-            self.stop()
-            raise AssertionError(
-                f"Actual: any({values}) !~ {pattern}\n Expected: any({values}) ~ {pattern}"
-            )

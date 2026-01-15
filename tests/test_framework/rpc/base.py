@@ -8,7 +8,6 @@ Define a base class for making RPC calls to a
 import json
 import socket
 import time
-from datetime import datetime, timezone
 from subprocess import Popen
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -132,7 +131,10 @@ class BaseRPC(metaclass=BaseRpcMetaClass):
     stop_msg = myrpc.stop()
     """
 
-    def __init__(self, process: Popen[str], rpcserver: Dict[str, str | Dict[str, str]]):
+    def __init__(
+        self, log, process: Popen[str], rpcserver: Dict[str, str | Dict[str, str]]
+    ):
+        self.log = log
         self._rpcserver = RPCServerConfig(**rpcserver)
         self._process = process
         self._rpcconn = None
@@ -169,15 +171,9 @@ class BaseRPC(metaclass=BaseRpcMetaClass):
         self._rpcserver = value
 
     # pylint: disable=R0801
-    def log(self, message: str):
-        """Log a message to the console"""
-        now = (
-            datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .strftime("%Y-%m-%d %H:%M:%S")
-        )
-
-        print(f"[{self.__class__.__name__.upper()} {now}] {message}")
+    def log_msg(self, message: str):
+        """Format a log message for the console"""
+        return f"[{self.__class__.__name__.upper()}] {message}"
 
     @staticmethod
     def build_log_message(
@@ -260,7 +256,7 @@ class BaseRPC(metaclass=BaseRpcMetaClass):
             kwargs["url"], method, params, user, password
         )
 
-        self.log(logmsg)
+        self.log.debug(self.log_msg(logmsg))
         response = post(**kwargs)
 
         # If response isnt 200, raise an HTTPError
@@ -279,7 +275,7 @@ class BaseRPC(metaclass=BaseRpcMetaClass):
                 message=result["error"]["message"],
             )
 
-        self.log(result["result"])
+        self.log.debug(self.log_msg(result["result"]))
         return result["result"]
 
     def is_connection_open(self, host: str, port: int) -> bool:
@@ -301,18 +297,22 @@ class BaseRPC(metaclass=BaseRpcMetaClass):
         while time.time() - start < timeout:
             if self.is_connection_open(host, port) == opened:
                 state = "open" if opened else "closed"
-                self.log(f"{host}:{port} {state}")
+                self.log.debug(self.log_msg(f"{host}:{port} {state}"))
                 return
             time.sleep(0.5)
 
         state = "open" if opened else "closed"
-        raise TimeoutError(f"{host}:{port} not {state} after {timeout} seconds")
+        raise TimeoutError(
+            self.log_msg(f"{host}:{port} not {state} after {timeout} seconds")
+        )
 
     def wait_for_connections(self, opened: bool = True, timeout: int = 180):
         """Wait for all port connections in the host reach the desired state."""
         host = getattr(self.rpcserver, "host")
         for _, port in getattr(self.rpcserver, "ports").items():
-            self.log(
-                f"Waiting for {host}:{port} to be {'open' if opened else 'closed'}"
+            self.log.debug(
+                self.log_msg(
+                    f"Waiting for {host}:{port} to be {'open' if opened else 'closed'}"
+                )
             )
             self.wait_for_connection(host, port, opened, timeout)

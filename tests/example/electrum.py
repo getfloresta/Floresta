@@ -13,14 +13,14 @@ EXPECTED_VERSION = ["Floresta 0.4.0", "1.4"]
 
 
 @pytest.mark.example
-def test_electrum(florestad_node):
+def test_electrum(setup_logging, florestad_node):
     """
     This test demonstrates how to set up and run an Electrum client,
     and verifies that the Electrum server responds with the expected version.
     """
     host = florestad_node.get_host()
     port = florestad_node.get_port("electrum-server")
-    electrum = ElectrumClient(host, port)
+    electrum = ElectrumClient(setup_logging, host, port)
 
     rpc_response = electrum.get_version()
 

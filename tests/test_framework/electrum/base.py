@@ -6,7 +6,6 @@ Base client to connect to Floresta's Electrum server.
 
 import json
 import socket
-from datetime import datetime, timezone
 from typing import Any, List, Tuple
 from OpenSSL import SSL
 
@@ -17,7 +16,8 @@ class BaseClient:
     Helper class to connect to Floresta's Electrum server.
     """
 
-    def __init__(self, host, port=8080, tls=False):
+    def __init__(self, log, host, port=8080, tls=False):
+        self.log = log
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((host, port))
 
@@ -45,11 +45,10 @@ class BaseClient:
         """
         self._conn = value
 
-    def log(self, msg):
-        """
-        Log a message to the console
-        """
-        print(f"[{self.__class__.__name__.upper()} {datetime.now(timezone.utc)}] {msg}")
+    # pylint: disable=R0801
+    def log_msg(self, message: str):
+        """Format a log message for the console"""
+        return f"[{self.__class__.__name__.upper()}] {message}"
 
     def request(self, method, params) -> object:
         """
@@ -60,7 +59,7 @@ class BaseClient:
         )
 
         mnt_point = "/".join(method.split("."))
-        self.log(f"GET electrum://{mnt_point}?params={params}")
+        self.log.debug(self.log_msg(f"GET electrum://{mnt_point}?params={params}"))
         self.conn.sendall(request.encode("utf-8") + b"\n")
 
         response = b""
@@ -72,7 +71,7 @@ class BaseClient:
             if b"\n" in response:
                 break
         response = response.decode("utf-8").strip()
-        self.log(response)
+        self.log.debug(self.log_msg(response))
 
         return json.loads(response)
 
@@ -86,10 +85,12 @@ class BaseClient:
         }
 
         request_list = list(request_map.values())
-        self.log(
-            "BATCH "
-            + ", ".join(
-                f"electrum://{'/'.join(m.split('.'))}?params={p}" for m, p in calls
+        self.log.debug(
+            self.log_msg(
+                "BATCH "
+                + ", ".join(
+                    f"electrum://{'/'.join(m.split('.'))}?params={p}" for m, p in calls
+                )
             )
         )
         self.conn.sendall(json.dumps(request_list).encode("utf-8") + b"\n")
@@ -104,5 +105,5 @@ class BaseClient:
                 break
 
         response = response.decode("utf-8").strip()
-        self.log(response)
+        self.log.debug(self.log_msg(response))
         return response

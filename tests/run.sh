@@ -19,14 +19,10 @@ check_installed uv
 
 set -e
 
-USE_TEST_RUNNER=true
-USE_PYTEST=true
 PRESERVE_DATA=false
 TEST_RUNNER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
-  --test-runner) USE_PYTEST=false ;;
-  --pytest) USE_TEST_RUNNER=false ;;
   --preserve-data-dir) PRESERVE_DATA=true ;;
   --)
     shift
@@ -48,16 +44,8 @@ fi
 # Clean existing data/logs directories before running the tests
 rm -rf "$FLORESTA_TEMP_DIR/data"
 
-# Run the re-freshed tests
-if [ "$USE_TEST_RUNNER" = true ]; then
-  echo "FLORESTA_TEMP_DIR=$FLORESTA_TEMP_DIR uv run ./tests/test_runner.py ${TEST_RUNNER_ARGS[@]}"
-  uv run ./tests/test_runner.py "${TEST_RUNNER_ARGS[@]}"
-fi
-
-if [ "$USE_PYTEST" = true ]; then
-  echo "FLORESTA_TEMP_DIR=$FLORESTA_TEMP_DIR uv run pytest ${TEST_RUNNER_ARGS[@]}"
-  uv run pytest "${TEST_RUNNER_ARGS[@]}"
-fi
+# Run the tests
+uv run pytest "${TEST_RUNNER_ARGS[@]}"
 
 # Clean up the data dir if we succeeded and --preserve-data-dir was not passed
 if [ "$PRESERVE_DATA" = false ]; then
