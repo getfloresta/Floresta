@@ -52,6 +52,6 @@ timeout_method = "thread"
 minversion = "9.0"
 
 filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::pytest.PytestCollectionWarning"
+    "error::DeprecationWarning",
+    "error::pytest.PytestCollectionWarning"
 ]
