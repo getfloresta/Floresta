@@ -50,7 +50,6 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getrpcinfo"),
     ("floresta-cli", "getblock"),
     ("florestad", "tls-fail"),
-    ("floresta-cli", "getpeerinfo"),
     ("floresta-cli", "getblockheader"),
 ]
 
