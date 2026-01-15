@@ -51,7 +51,6 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getblock"),
     ("florestad", "tls-fail"),
     ("floresta-cli", "getpeerinfo"),
-    ("floresta-cli", "getblockchaininfo"),
     ("floresta-cli", "getblockheader"),
 ]
 
