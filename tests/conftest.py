@@ -176,6 +176,22 @@ def florestad_utreexod(
 
 
 @pytest.fixture
+def florestad_bitcoind(
+    florestad_node, bitcoind_node, node_manager
+) -> tuple[Node, Node]:
+    """
+    Creates and starts a `florestad` node and a `bitcoind` node.
+    The nodes are automatically connected to each other and are ready for testing.
+    """
+    florestad = florestad_node
+    bitcoind = bitcoind_node
+
+    node_manager.connect_nodes(florestad, bitcoind)
+
+    return florestad, bitcoind
+
+
+@pytest.fixture
 def add_node_with_tls(node_manager):
     """Creates and starts a node with TLS enabled, based on the specified variant."""
 
