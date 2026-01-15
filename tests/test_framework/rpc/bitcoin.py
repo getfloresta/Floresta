@@ -83,6 +83,14 @@ class BitcoinRPC(BaseRPC):
         """
         return self.perform_request("getblockcount")
 
+    # pylint: disable=R0801
+    def get_block_from_peer(self, block_hash, peer_id):
+        """
+        Get a block from a specific peer by performing
+        `perform_request('getblockfrompeer', params=[<str>, <str>])`
+        """
+        return self.perform_request("getblockfrompeer", params=[block_hash, peer_id])
+
     def stop(self):
         """
         Perform the `stop` RPC command to utreexod and some cleanup on process and files
