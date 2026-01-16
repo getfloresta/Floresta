@@ -44,11 +44,20 @@ class Node:
     It contains the `daemon`, `rpc` and `rpc_config` objects.
     """
 
-    def __init__(self, daemon, rpc, rpc_config, variant):
+    # pylint: disable=too-many-arguments too-many-positional-arguments
+    def __init__(self, daemon, rpc, rpc_config, variant, data_dir):
         self.daemon = daemon
         self.rpc = rpc
         self.rpc_config = rpc_config
         self.variant = variant
+        self._data_dir = data_dir
+
+    @property
+    def data_dir(self):
+        """
+        Get the data directory of the node.
+        """
+        return self._data_dir
 
     def start(self):
         """
@@ -264,39 +273,30 @@ class FlorestaTestFramework:
             for opt in electrum_listener_options
         )
 
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def create_data_dir_for_daemon(
-        self,
-        data_dir_arg: str,
-        default_args: list[str],
-        extra_args: list[str],
-        tempdir: str,
-        testname: str,
-    ):
+    def create_data_dir_for_daemon(self, node_type) -> str:
         """
         Create a data directory for the daemon to be run.
         """
-        # Add a default data-dir if not set
-        if not self.is_option_set(extra_args, data_dir_arg):
-            datadir = os.path.normpath(os.path.join(tempdir, "data", testname))
-            default_args.append(f"{data_dir_arg}={datadir}")
-
-        else:
-            data_dir_arg = next(
-                (arg for arg in extra_args if arg.startswith(f"{data_dir_arg}="))
+        path_name = node_type + str(self.count_nodes_by_variant(node_type))
+        datadir = os.path.normpath(
+            os.path.join(
+                self.get_integration_test_dir(), "data", self.test_name, path_name
             )
-            datadir = data_dir_arg.split("=", 1)[1]
+        )
+        os.makedirs(datadir, exist_ok=True)
 
-        if not os.path.exists(datadir):
-            self.log.debug(f"Creating data directory for {data_dir_arg} in {datadir}")
-            os.makedirs(datadir, exist_ok=True)
+        return datadir
+
+    def count_nodes_by_variant(self, variant) -> int:
+        """
+        Count the number of nodes of a given variant.
+        """
+        return sum(1 for node in self._nodes if node.variant == variant)
 
     # pylint: disable=too-many-positional-arguments,too-many-arguments
     def setup_florestad_daemon(
         self,
         targetdir: str,
-        tempdir: str,
-        testname: str,
         extra_args: List[str],
         tls: bool,
     ) -> Node:
@@ -306,9 +306,8 @@ class FlorestaTestFramework:
         default_args = []
         ports = {}
 
-        self.create_data_dir_for_daemon(
-            "--data-dir", default_args, extra_args, tempdir, testname
-        )
+        data_dir = self.create_data_dir_for_daemon("florestad")
+        default_args.append(f"--data-dir={data_dir}")
 
         if not self.is_option_set(extra_args, "--rpc-address"):
             ports["rpc"] = self.get_random_port()
@@ -345,14 +344,12 @@ class FlorestaTestFramework:
         daemon.add_daemon_settings(default_args + extra_args)
         rpcserver = copy.deepcopy(florestad_rpc_server)
         rpcserver["ports"] = ports
-        return Node(daemon, None, rpcserver, "florestad")
+        return Node(daemon, None, rpcserver, "florestad", data_dir)
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     def setup_utreexod_daemon(
         self,
         targetdir: str,
-        tempdir: str,
-        testname: str,
         extra_args: List[str],
         tls: bool,
     ) -> Node:
@@ -362,9 +359,9 @@ class FlorestaTestFramework:
         default_args = []
         ports = {}
 
-        self.create_data_dir_for_daemon(
-            "--datadir", default_args, extra_args, tempdir, testname
-        )
+        data_dir = self.create_data_dir_for_daemon("utreexod")
+        default_args.append(f"--datadir={data_dir}")
+
         if not self.is_option_set(extra_args, "--listen"):
             ports["p2p"] = self.get_random_port()
             default_args.append(f"--listen=127.0.0.1:{ports['p2p']}")
@@ -400,14 +397,12 @@ class FlorestaTestFramework:
         daemon.add_daemon_settings(default_args + extra_args)
         rpcserver = copy.deepcopy(utreexod_rpc_server)
         rpcserver["ports"] = ports
-        return Node(daemon, None, rpcserver, "utreexod")
+        return Node(daemon, None, rpcserver, "utreexod", data_dir)
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     def setup_bitcoind_daemon(
         self,
         targetdir: str,
-        tempdir: str,
-        testname: str,
         extra_args: List[str],
     ) -> Node:
         """Add default args to a bitcoind node settings to be run and return a Node object."""
@@ -416,9 +411,8 @@ class FlorestaTestFramework:
         default_args = []
         ports = {}
 
-        self.create_data_dir_for_daemon(
-            "-datadir", default_args, extra_args, tempdir, testname
-        )
+        data_dir = self.create_data_dir_for_daemon("bitcoind")
+        default_args.append(f"-datadir={data_dir}")
 
         if not self.is_option_set(extra_args, "-bind"):
             ports["p2p"] = self.get_random_port()
@@ -437,7 +431,7 @@ class FlorestaTestFramework:
         daemon.add_daemon_settings(default_args + extra_args)
         rpcserver = copy.deepcopy(bitcoind_rpc_server)
         rpcserver["ports"] = ports
-        return Node(daemon, None, rpcserver, "bitcoind")
+        return Node(daemon, None, rpcserver, "bitcoind", data_dir)
 
     # pylint: disable=dangerous-default-value
     def add_node(
@@ -454,18 +448,13 @@ class FlorestaTestFramework:
         """
         tempdir = str(self.get_integration_test_dir())
         targetdir = os.path.join(tempdir, "binaries")
-        testname = self.test_name
 
         if variant == "florestad":
-            node = self.setup_florestad_daemon(
-                targetdir, tempdir, testname, extra_args, tls
-            )
+            node = self.setup_florestad_daemon(targetdir, extra_args, tls)
         elif variant == "utreexod":
-            node = self.setup_utreexod_daemon(
-                targetdir, tempdir, testname, extra_args, tls
-            )
+            node = self.setup_utreexod_daemon(targetdir, extra_args, tls)
         elif variant == "bitcoind":
-            node = self.setup_bitcoind_daemon(targetdir, tempdir, testname, extra_args)
+            node = self.setup_bitcoind_daemon(targetdir, extra_args)
         else:
             raise ValueError(f"Unsupported variant: {variant}")
 
