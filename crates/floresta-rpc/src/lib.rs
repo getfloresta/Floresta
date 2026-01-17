@@ -33,10 +33,10 @@ mod tests {
 
     use bitcoin::BlockHash;
     use bitcoin::Txid;
+    use jsonrpc::Client;
     use rcgen::generate_simple_self_signed;
     use rcgen::CertifiedKey;
 
-    use crate::jsonrpc_client::Client;
     use crate::rpc::FlorestaRPC;
     use crate::rpc_types::GetBlockRes;
 
@@ -102,7 +102,7 @@ mod tests {
             .spawn()
             .unwrap_or_else(|e| panic!("Couldn't launch florestad at {florestad_path}: {e}"));
 
-        let client = Client::new(format!("http://127.0.0.1:{port}"));
+        let client = Client::simple_http(&format!("http://127.0.0.1:{port}"), None, None).unwrap();
 
         let mut retries = 10;
         loop {

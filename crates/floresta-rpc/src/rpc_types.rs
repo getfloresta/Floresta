@@ -312,6 +312,10 @@ pub enum Error {
     /// An internal reqwest error
     JsonRpc(jsonrpc::Error),
 
+    #[cfg(feature = "with-jsonrpc")]
+    /// An internal reqwest error
+    Http(jsonrpc::http::simple_http::Error),
+
     /// An error internal to our jsonrpc server
     Api(serde_json::Value),
 
@@ -341,11 +345,19 @@ impl From<jsonrpc::Error> for Error {
     }
 }
 
+impl From<jsonrpc::http::simple_http::Error> for Error {
+    fn from(value: jsonrpc::http::simple_http::Error) -> Self {
+        Error::Http(value)
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             #[cfg(feature = "with-jsonrpc")]
             Error::JsonRpc(e) => write!(f, "JsonRpc returned an error {e}"),
+            #[cfg(feature = "with-jsonrpc")]
+            Error::Http(e) => write!(f, "Http error: {e}"),
             Error::Api(e) => write!(f, "general jsonrpc error: {e}"),
             Error::Serde(e) => write!(f, "error while deserializing the response: {e}"),
             Error::EmptyResponse => write!(f, "got an empty response from server"),
