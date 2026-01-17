@@ -6,6 +6,8 @@ use floresta_common::impl_error_from;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::json_rpc::request::arg_parser::ArgGetterError;
+
 #[derive(Deserialize, Serialize)]
 pub struct GetBlockchainInfoRes {
     pub best_block: String,
@@ -245,13 +247,6 @@ pub enum JsonRpcError {
     /// There was a rescan request with invalid values
     InvalidRescanVal,
 
-    /// Missing parameter, e.g., if a required parameter is not provided in the request
-    MissingParameter(String),
-
-    /// The provided parameter is of the wrong type, e.g., if a string is expected but a number is
-    /// provided
-    InvalidParameterType(String),
-
     /// Verbosity level is not 0 or 1
     InvalidVerbosityLevel,
 
@@ -313,6 +308,9 @@ pub enum JsonRpcError {
 
     /// Raised if when the rescanblockchain command, with the timestamp flag activated, contains some timestamp thats less than the genesis one and not zero which is the default value for this arg.
     InvalidTimestamp,
+
+    /// We had a problem while parsing received arguments on a json request.
+    ArgParse(ArgGetterError),
 }
 
 impl Display for JsonRpcError {
@@ -321,8 +319,6 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidTimestamp => write!(f, "Invalid timestamp, ensure that it is between the genesis and the tip."),
             JsonRpcError::InvalidRescanVal => write!(f, "Your rescan request contains invalid values"),
             JsonRpcError::NoAddressesToRescan => write!(f, "You do not have any address to proceed with the rescan"),
-            JsonRpcError::MissingParameter(opt) => write!(f, "Missing parameter: {opt}"),
-            JsonRpcError::InvalidParameterType(opt) => write!(f, "Invalid parameter type for: {opt}"),
             JsonRpcError::InvalidRequest => write!(f, "Invalid request"),
             JsonRpcError::InvalidHex =>  write!(f, "Invalid hex"),
             JsonRpcError::MethodNotFound =>  write!(f, "Method not found"),
@@ -341,6 +337,7 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidMemInfoMode => write!(f, "Invalid meminfo mode, should be stats or mallocinfo"),
             JsonRpcError::Wallet(e) => write!(f, "Wallet error: {e}"),
             JsonRpcError::Filters(e) => write!(f, "Error with filters: {e}"),
+            JsonRpcError::ArgParse(e) => write!(f, "Error parsing request: {e}"),
             JsonRpcError::ChainWorkOverflow => write!(f, "Overflow while calculating the chain work"),
             JsonRpcError::InvalidAddnodeCommand => write!(f, "Invalid addnode command"),
         }
@@ -373,6 +370,8 @@ impl From<HeaderExtError> for JsonRpcError {
 }
 
 impl_error_from!(JsonRpcError, miniscript::Error, InvalidDescriptor);
+
+impl_error_from!(JsonRpcError, ArgGetterError, ArgParse);
 
 impl<T: std::fmt::Debug> From<floresta_watch_only::WatchOnlyError<T>> for JsonRpcError {
     fn from(e: floresta_watch_only::WatchOnlyError<T>) -> Self {

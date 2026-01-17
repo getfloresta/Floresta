@@ -13,6 +13,57 @@ use crate::rpc_types::*;
 
 type Result<T> = std::result::Result<T, rpc_types::Error>;
 
+#[cfg(test)]
+pub trait Test {
+    fn named_get_block(&self) -> GetBlockRes;
+    fn wrongly_named_get_block(&self) -> std::result::Result<GetBlockRes, jsonrpc::Error>;
+}
+#[cfg(test)]
+impl Test for Client {
+    fn named_get_block(&self) -> GetBlockRes {
+        use jsonrpc::Request;
+        use serde_json::json;
+        use serde_json::value::RawValue;
+
+        let params_string = json!({
+            "blockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+        })
+        .to_string();
+
+        let params = RawValue::from_string(params_string).unwrap();
+
+        let named_req = Request {
+            method: "getblock",
+            params: Some(&params),
+            id: serde_json::to_value(67).unwrap(),
+            jsonrpc: Some("2.0"),
+        };
+
+        GetBlockRes::Verbose(self.send_request(named_req).unwrap().result().unwrap())
+    }
+
+    fn wrongly_named_get_block(&self) -> std::result::Result<GetBlockRes, jsonrpc::Error> {
+        use jsonrpc::Request;
+        use serde_json::json;
+        use serde_json::value::RawValue;
+
+        let params_string = json!({
+            "notblockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+        })
+        .to_string();
+
+        let params = RawValue::from_string(params_string).unwrap();
+
+        let named_req = Request {
+            method: "getblock",
+            params: Some(&params),
+            id: serde_json::to_value(67).unwrap(),
+            jsonrpc: Some("2.0"),
+        };
+
+        self.send_request(named_req).unwrap().result()
+    }
+}
 impl FlorestaRPC for Client {
     fn find_tx_out(
         &self,
@@ -27,6 +78,7 @@ impl FlorestaRPC for Client {
             Value::String(script),
             Value::Number(Number::from(height_hint)),
         ]);
+
         Ok(self.call("findtxout", Some(&args))?)
     }
 
@@ -134,7 +186,7 @@ impl FlorestaRPC for Client {
     }
 
     fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
-        let args = arg(Value::Number(Number::from(height)));
+        let args = arg([Value::Number(Number::from(height))]);
         Ok(self.call("getblockhash", Some(&args))?)
     }
 

@@ -254,213 +254,205 @@ async fn handle_json_rpc_request(
     }
 
     state.inflight.write().await.insert(
-        id.clone(),
+        id,
         InflightRpc {
-            method: method.clone(),
+            method: method.to_string(),
             when: Instant::now(),
         },
     );
 
-    match method.as_str() {
-        // blockchain
-        "getbestblockhash" => {
-            let hash = state.get_best_block_hash()?;
-            Ok(serde_json::to_value(hash).unwrap())
-        }
+    match params.clone() {
+        Some(params) => match method.as_str() {
+            "getblock" => {
+                let hash = get_hash(&params, 0, "blockhash")?;
+                let verbosity =
+                    get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1u64);
 
-        "getblock" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
-            let verbosity = get_numeric(&params, 1, "verbosity")?;
+                match verbosity {
+                    0 => {
+                        let block = state.get_block_serialized(hash).await?;
 
-            match verbosity {
-                0 => {
-                    let block = state.get_block_serialized(hash).await?;
+                        let block = GetBlockRes::Serialized(block);
+                        Ok(serde_json::to_value(block).unwrap())
+                    }
 
-                    let block = GetBlockRes::Serialized(block);
-                    Ok(serde_json::to_value(block).unwrap())
+                    1 => {
+                        let block = state.get_block(hash).await?;
+
+                        let block = GetBlockRes::Verbose(block.into());
+                        Ok(serde_json::to_value(block).unwrap())
+                    }
+
+                    _ => Err(JsonRpcError::InvalidVerbosityLevel),
                 }
-
-                1 => {
-                    let block = state.get_block(hash).await?;
-
-                    let block = GetBlockRes::Verbose(block.into());
-                    Ok(serde_json::to_value(block).unwrap())
-                }
-
-                _ => Err(JsonRpcError::InvalidVerbosityLevel),
             }
-        }
-
-        "getblockchaininfo" => state
-            .get_blockchain_info()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        "getblockcount" => state
-            .get_block_count()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        "getblockfrompeer" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
-            state
-                .get_block(hash)
-                .await
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "getblockhash" => {
-            let height = get_numeric(&params, 0, "block_height")?;
-            state
-                .get_block_hash(height)
-                .map(|h| serde_json::to_value(h).unwrap())
-        }
-
-        "getblockheader" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
-            state
-                .get_block_header(hash)
-                .map(|h| serde_json::to_value(h).unwrap())
-        }
-
-        "gettxout" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let vout = get_numeric(&params, 1, "vout")?;
-            let include_mempool =
-                get_optional_field(&params, 2, "include_mempool", get_bool)?.unwrap_or(false);
-
-            state
-                .get_tx_out(txid, vout, include_mempool)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "gettxoutproof" => {
-            let txids = get_hashes_array(&params, 0, "txids")?;
-            let block_hash = get_optional_field(&params, 1, "block_hash", get_hash)?;
-
-            Ok(serde_json::to_value(
+            "getblockfrompeer" => {
+                let hash = get_hash(&params, 0, "blockhash")?;
                 state
-                    .get_txout_proof(&txids, block_hash)
-                    .await?
-                    .0
-                    .to_lower_hex_string(),
-            )
-            .expect("GetTxOutProof implements serde"))
-        }
+                    .get_block(hash)
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
 
-        "getrawtransaction" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
+            "getblockhash" => {
+                let height: u32 = get_numeric(&params, 0, "height")?;
+                state
+                    .get_block_hash(height)
+                    .map(|h| serde_json::to_value(h).unwrap())
+            }
 
-            state
-                .get_transaction(txid, verbosity)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
+            "getblockheader" => {
+                let hash = get_hash(&params, 0, "blockhash")?;
+                state
+                    .get_block_header(hash)
+                    .map(|h| serde_json::to_value(h).unwrap())
+            }
 
-        "getroots" => state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
+            "gettxout" => {
+                let txid = get_hash(&params, 0, "txid")?;
+                let vout = get_numeric(&params, 1, "n")?;
+                let include_mempool =
+                    get_optional_field(&params, 2, "include_mempool", get_bool)?.unwrap_or(false);
 
-        "findtxout" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let vout = get_numeric(&params, 1, "vout")?;
-            let script = get_string(&params, 2, "script")?;
-            let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_numeric(&params, 3, "height")?;
+                state
+                    .get_tx_out(txid, vout, include_mempool)
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
 
-            let state = state.clone();
-            state.find_tx_out(txid, vout, script, height).await
-        }
+            "gettxoutproof" => {
+                let txids = get_hashes_array(&params, 0, "txids")?;
+                let block_hash = get_optional_field(&params, 1, "blockhash", get_hash)?;
 
-        // control
-        "getmemoryinfo" => {
-            let mode =
-                get_optional_field(&params, 0, "mode", get_string)?.unwrap_or("stats".into());
+                Ok(serde_json::to_value(
+                    state
+                        .get_txout_proof(&txids, block_hash)
+                        .await?
+                        .0
+                        .to_lower_hex_string(),
+                )
+                .expect("GetTxOutProof implements serde"))
+            }
 
-            state
-                .get_memory_info(&mode)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
+            "getrawtransaction" => {
+                let txid = get_hash(&params, 0, "txid")?;
+                let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
 
-        "getrpcinfo" => state
-            .get_rpc_info()
-            .await
-            .map(|v| serde_json::to_value(v).unwrap()),
+                state
+                    .get_transaction(txid, verbosity)
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
+            "addnode" => {
+                let node = get_string(&params, 0, "node")?;
+                let command = get_string(&params, 1, "command")?;
+                let v2transport =
+                    get_optional_field(&params, 2, "v2transport", get_bool)?.unwrap_or(false);
 
-        // help
-        // logging
-        "stop" => state.stop().await.map(|v| serde_json::to_value(v).unwrap()),
+                state
+                    .add_node(node, command, v2transport)
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
+            "loaddescriptor" => {
+                let descriptor = get_string(&params, 0, "descriptor")?;
 
-        "uptime" => {
-            let uptime = state.uptime();
-            Ok(serde_json::to_value(uptime).unwrap())
-        }
+                state
+                    .load_descriptor(descriptor)
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
 
-        // network
-        "getpeerinfo" => state
-            .get_peer_info()
-            .await
-            .map(|v| serde_json::to_value(v).unwrap()),
+            "rescanblockchain" => {
+                let start_height = get_optional_field(&params, 0, "start_height", get_numeric)?;
+                let stop_height = get_optional_field(&params, 1, "stop_height", get_numeric)?;
+                let use_timestamp =
+                    get_optional_field(&params, 2, "use_timestamp", get_bool)?.unwrap_or(false);
+                let confidence_str = get_optional_field(&params, 3, "confidence", get_string)?
+                    .unwrap_or("medium".into());
 
-        "addnode" => {
-            let node = get_string(&params, 0, "node")?;
-            let command = get_string(&params, 1, "command")?;
-            let v2transport =
-                get_optional_field(&params, 2, "V2transport", get_bool)?.unwrap_or(false);
+                let confidence = match confidence_str.as_str() {
+                    "low" => RescanConfidence::Low,
+                    "medium" => RescanConfidence::Medium,
+                    "high" => RescanConfidence::High,
+                    "exact" => RescanConfidence::Exact,
+                    _ => return Err(JsonRpcError::InvalidRescanVal),
+                };
 
-            state
-                .add_node(node, command, v2transport)
+                state
+                    .rescan_blockchain(start_height, stop_height, use_timestamp, Some(confidence))
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
+
+            "sendrawtransaction" => {
+                let tx = get_string(&params, 0, "hexstring")?;
+                state
+                    .send_raw_transaction(tx)
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
+            "getmemoryinfo" => {
+                let mode =
+                    get_optional_field(&params, 0, "mode", get_string)?.unwrap_or("stats".into());
+
+                state
+                    .get_memory_info(&mode)
+                    .map(|v| serde_json::to_value(v).unwrap())
+            }
+            "findtxout" => {
+                let txid = get_hash(&params, 0, "txid")?;
+                let vout = get_numeric(&params, 1, "vout")?;
+                let script = get_string(&params, 2, "script")?;
+                let script =
+                    ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
+                let height = get_numeric(&params, 3, "height")?;
+
+                let state = state.clone();
+                state.find_tx_out(txid, vout, script, height).await
+            }
+            _ => Err(JsonRpcError::MethodNotFound),
+        },
+        None => match method.as_str() {
+            "getbestblockhash" => {
+                let hash = state.get_best_block_hash()?;
+                Ok(serde_json::to_value(hash).unwrap())
+            }
+            "getblockchaininfo" => state
+                .get_blockchain_info()
+                .map(|v| serde_json::to_value(v).unwrap()),
+
+            "getblockcount" => state
+                .get_block_count()
+                .map(|v| serde_json::to_value(v).unwrap()),
+            "getroots" => state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
+
+            // control
+            "getrpcinfo" => state
+                .get_rpc_info()
                 .await
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
+                .map(|v| serde_json::to_value(v).unwrap()),
 
-        "ping" => {
-            state.ping().await?;
+            // help
+            // logging
+            "stop" => state.stop().await.map(|v| serde_json::to_value(v).unwrap()),
 
-            Ok(serde_json::json!(null))
-        }
+            "uptime" => {
+                let uptime = state.uptime();
+                Ok(serde_json::to_value(uptime).unwrap())
+            }
 
-        // wallet
-        "loaddescriptor" => {
-            let descriptor = get_string(&params, 0, "descriptor")?;
+            // network
+            "getpeerinfo" => state
+                .get_peer_info()
+                .await
+                .map(|v| serde_json::to_value(v).unwrap()),
+            "ping" => {
+                state.ping().await?;
 
-            state
-                .load_descriptor(descriptor)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
+                Ok(serde_json::json!(null))
+            }
+            "listdescriptors" => state
+                .list_descriptors()
+                .map(|v| serde_json::to_value(v).unwrap()),
 
-        "rescanblockchain" => {
-            let start_height = get_optional_field(&params, 0, "start_height", get_numeric)?;
-            let stop_height = get_optional_field(&params, 1, "stop_height", get_numeric)?;
-            let use_timestamp =
-                get_optional_field(&params, 2, "use_timestamp", get_bool)?.unwrap_or(false);
-            let confidence_str = get_optional_field(&params, 3, "confidence", get_string)?
-                .unwrap_or("medium".into());
-
-            let confidence = match confidence_str.as_str() {
-                "low" => RescanConfidence::Low,
-                "medium" => RescanConfidence::Medium,
-                "high" => RescanConfidence::High,
-                "exact" => RescanConfidence::Exact,
-                _ => return Err(JsonRpcError::InvalidRescanVal),
-            };
-
-            state
-                .rescan_blockchain(start_height, stop_height, use_timestamp, Some(confidence))
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "sendrawtransaction" => {
-            let tx = get_string(&params, 0, "hex")?;
-            state
-                .send_raw_transaction(tx)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "listdescriptors" => state
-            .list_descriptors()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        _ => {
-            let error = JsonRpcError::MethodNotFound;
-            Err(error)
-        }
+            _ => Err(JsonRpcError::MethodNotFound),
+        },
     }
 }
 
@@ -481,8 +473,7 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
         | JsonRpcError::InvalidTimestamp
         | JsonRpcError::InvalidRescanVal
         | JsonRpcError::NoAddressesToRescan
-        | JsonRpcError::InvalidParameterType(_)
-        | JsonRpcError::MissingParameter(_)
+        | JsonRpcError::ArgParse(_)
         | JsonRpcError::ChainWorkOverflow
         | JsonRpcError::Wallet(_) => 400,
 
@@ -502,11 +493,10 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
 fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
     match err {
         // Parse Error
-        JsonRpcError::Decode(_) | JsonRpcError::InvalidParameterType(_) => -32700,
+        JsonRpcError::Decode(_) | JsonRpcError::ArgParse(_) => -32700,
 
         // Invalid Request
         JsonRpcError::InvalidHex
-        | JsonRpcError::MissingParameter(_)
         | JsonRpcError::InvalidAddress
         | JsonRpcError::InvalidScript
         | JsonRpcError::MethodNotFound
