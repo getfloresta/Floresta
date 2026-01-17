@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use corepc_types::v29::GetBlockVerboseOne;
+use corepc_types::v30::GetBlockVerboseOne;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -181,7 +181,7 @@ pub struct PeerInfo {
     pub transport_protocol: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub enum GetBlockRes {
     Zero(String),
     One(Box<GetBlockVerboseOne>),
