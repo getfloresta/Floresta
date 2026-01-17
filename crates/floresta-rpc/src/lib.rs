@@ -13,8 +13,7 @@
 #[cfg(feature = "with-jsonrpc")]
 pub mod jsonrpc_client;
 
-pub mod rpc;
-pub mod rpc_types;
+pub mod typed_rpc;
 
 // Those tests doesn't work on windowns
 // TODO (Davidson): work on windows?
@@ -37,8 +36,8 @@ mod tests {
     use rcgen::generate_simple_self_signed;
     use rcgen::CertifiedKey;
 
-    use crate::rpc::FlorestaRPC;
-    use crate::rpc_types::GetBlockRes;
+    use crate::typed_rpc::command_def::FlorestaRPC;
+    use crate::typed_rpc::response::GetBlockRes;
 
     struct Florestad {
         proc: Child,

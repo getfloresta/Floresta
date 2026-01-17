@@ -7,14 +7,14 @@ use bitcoin::Txid;
 use clap::Parser;
 use clap::Subcommand;
 use floresta_rpc::jsonrpc_client::Client;
-use floresta_rpc::rpc::FlorestaRPC;
-use floresta_rpc::rpc_types::AddNodeCommand;
-use floresta_rpc::rpc_types::Error;
-use floresta_rpc::rpc_types::GetBlockRes;
-use floresta_rpc::rpc_types::RescanConfidence;
+use floresta_rpc::typed_rpc::command_def::FlorestaRPC;
+use floresta_rpc::typed_rpc::command_def::RpcError;
+use floresta_rpc::typed_rpc::response::AddNodeCommand;
+use floresta_rpc::typed_rpc::response::GetBlockRes;
+use floresta_rpc::typed_rpc::response::RescanConfidence;
 
 // Main function that runs the CLI application
-fn main() -> Result<(), Error> {
+fn main() -> Result<(), RpcError> {
     // Parse command line arguments into a Cli struct
     let cli = Cli::parse();
 
@@ -56,7 +56,7 @@ fn get_host(cmd: &Cli) -> String {
 }
 
 // Function to perform the requested RPC call based on CLI arguments
-fn do_request(cmd: &Cli, client: Client) -> Result<String, Error> {
+fn do_request(cmd: &Cli, client: Client) -> Result<String, RpcError> {
     Ok(match cmd.methods.clone() {
         // Handle each possible RPC method and serialize the result to a pretty JSON string
         Methods::GetBlockchainInfo => serde_json::to_string_pretty(&client.get_blockchain_info()?)?,

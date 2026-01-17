@@ -7,11 +7,16 @@ pub use jsonrpc::Client;
 use serde_json::Number;
 use serde_json::Value;
 
-use crate::rpc::FlorestaRPC;
-use crate::rpc_types;
-use crate::rpc_types::*;
-
-type Result<T> = std::result::Result<T, rpc_types::Error>;
+use crate::typed_rpc::command_def::FlorestaRPC;
+use crate::typed_rpc::command_def::Result;
+use crate::typed_rpc::command_def::RpcError;
+use crate::typed_rpc::response::AddNodeCommand;
+use crate::typed_rpc::response::GetBlockRes;
+use crate::typed_rpc::response::GetBlockchainInfoRes;
+use crate::typed_rpc::response::GetMemInfoRes;
+use crate::typed_rpc::response::GetRpcInfoRes;
+use crate::typed_rpc::response::PeerInfo;
+use crate::typed_rpc::response::RescanConfidence;
 
 impl FlorestaRPC for Client {
     fn find_tx_out(
@@ -96,7 +101,7 @@ impl FlorestaRPC for Client {
 
             1 => Ok(GetBlockRes::Verbose(self.call("getblock", Some(&args))?)),
 
-            _ => Err(rpc_types::Error::InvalidVerbosity),
+            _ => Err(RpcError::InvalidVerbosity),
         }
     }
 
