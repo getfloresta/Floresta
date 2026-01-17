@@ -19,6 +19,7 @@ import socket
 import shutil
 import signal
 import contextlib
+import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Pattern
 
@@ -302,6 +303,28 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         return os.getenv("FLORESTA_TEMP_DIR")
 
     @staticmethod
+    def get_logs_dir():
+        """
+        Get the logs directory path for the project.
+
+        Note: This directory is based on the git describe value to
+        separate logs from different commits.
+        """
+        try:
+            git_describe = subprocess.check_output(
+                ["git", "describe", "--tags", "--always"], text=True
+            ).strip()
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "Failed to run 'git describe'. Run this at the Floresta directory."
+            ) from exc
+
+        base_dir = FlorestaTestFramework.get_integration_test_dir()
+        logs_data_dir = os.path.join(base_dir, "logs", git_describe)
+
+        return logs_data_dir
+
+    @staticmethod
     def create_data_dirs(data_dir: str, base_name: str, nodes: int) -> list[str]:
         """
         Create the data directories for any nodes to be used in the test.
@@ -334,14 +357,14 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         Get the path for the test name log file, which is the class name in lowercase.
         This is used to create a log file for the test.
         """
-        tempdir = str(FlorestaTestFramework.get_integration_test_dir())
+        tempdir = str(FlorestaTestFramework.get_logs_dir())
 
         # Get the class's base filename
         filename = sys.modules[self.__class__.__module__].__file__
         filename = os.path.basename(filename)
         filename = filename.replace(".py", "")
 
-        return os.path.join(tempdir, "logs", f"{filename}.log")
+        return os.path.join(tempdir, f"{filename}.log")
 
     def create_tls_key_cert(self) -> tuple[str, str]:
         """

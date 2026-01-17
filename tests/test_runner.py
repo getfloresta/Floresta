@@ -243,9 +243,7 @@ def main():
     # Define a global variable for the base log directory
     # so it can be used in the test framework. But if we just
     # want to list suites or want see the help, we don't need it.
-    base_log_dir = os.path.normpath(
-        os.path.join(FlorestaTestFramework.get_integration_test_dir(), "logs")
-    )
+    base_log_dir = FlorestaTestFramework.get_logs_dir()
 
     # Structure the CLI
     parser = argparse.ArgumentParser(prog="run_tests")
