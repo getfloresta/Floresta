@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 mod parsers;
 
-use anyhow::Ok;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin::Txid;
@@ -10,16 +9,21 @@ use clap::Subcommand;
 use floresta_rpc::jsonrpc_client::Client;
 use floresta_rpc::rpc::FlorestaRPC;
 use floresta_rpc::rpc_types::AddNodeCommand;
+use floresta_rpc::rpc_types::Error;
 use floresta_rpc::rpc_types::GetBlockRes;
 use floresta_rpc::rpc_types::RescanConfidence;
 
 // Main function that runs the CLI application
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Error> {
     // Parse command line arguments into a Cli struct
     let cli = Cli::parse();
 
+    let rpc_user = cli.rpc_user.clone();
+
+    let rpc_password = cli.rpc_password.clone();
+
     // Create a new JSON-RPC client using the host from the CLI arguments
-    let client = Client::new(get_host(&cli));
+    let client = Client::simple_http(&get_host(&cli), rpc_user, rpc_password)?;
 
     // Perform the requested RPC call and get the result
     let res = do_request(&cli, client)?;
@@ -28,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     println!("{res}");
 
     // Return Ok to indicate the program ran successfully
-    anyhow::Ok(())
+    Ok(())
 }
 
 // Function to determine the RPC host based on CLI arguments and network type
@@ -52,7 +56,7 @@ fn get_host(cmd: &Cli) -> String {
 }
 
 // Function to perform the requested RPC call based on CLI arguments
-fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
+fn do_request(cmd: &Cli, client: Client) -> Result<String, Error> {
     Ok(match cmd.methods.clone() {
         // Handle each possible RPC method and serialize the result to a pretty JSON string
         Methods::GetBlockchainInfo => serde_json::to_string_pretty(&client.get_blockchain_info()?)?,
@@ -65,7 +69,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.get_tx_out(txid, vout)?)?
         }
         Methods::GetTxOutProof { txids, blockhash } => {
-            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash))?
+            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash)?)?
         }
         Methods::GetTransaction { txid, .. } => {
             serde_json::to_string_pretty(&client.get_transaction(txid, Some(true))?)?
