@@ -12,6 +12,8 @@
 
 #[cfg(feature = "with-jsonrpc")]
 pub mod jsonrpc_client;
+#[cfg(feature = "with-jsonrpc")]
+pub use jsonrpc;
 
 pub mod rpc;
 pub mod rpc_types;
@@ -136,6 +138,29 @@ mod tests {
         sleep(Duration::from_millis(100));
 
         port
+    }
+
+    #[test]
+    #[cfg(test)]
+    fn test_named() {
+        use crate::jsonrpc_client::Test;
+
+        let (mut _proc, client) = start_florestad();
+
+        let GetBlockRes::Verbose(res) = client.named_get_block() else {
+            panic!("Server misinterpreted the verbosity")
+        };
+
+        assert_eq!(
+            res.hash,
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206".to_owned()
+        );
+
+        let error = client.wrongly_named_get_block().err().unwrap().to_string();
+
+        assert!(error.contains(
+            "Error parsing request: The blockhash parameter is missing and is not optional"
+        ))
     }
 
     #[test]
