@@ -67,6 +67,16 @@ impl NodeContext for RunningNode {
     }
 }
 
+impl Default for RunningNode {
+    fn default() -> Self {
+        RunningNode {
+            last_address_rearrange: Instant::now(),
+            last_invs: HashMap::default(),
+            inflight_filters: BTreeMap::new(),
+        }
+    }
+}
+
 impl<Chain> UtreexoNode<Chain, RunningNode>
 where
     Chain: ThreadSafeChain + Clone,
