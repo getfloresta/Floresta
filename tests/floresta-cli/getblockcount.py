@@ -6,9 +6,7 @@ of utreexod/bitcoind and floresta, respectively"""
 
 import re
 import time
-from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class GetBlockCountTest(FlorestaTestFramework):
@@ -26,23 +24,17 @@ class GetBlockCountTest(FlorestaTestFramework):
         """
         name = self.__class__.__name__.lower()
         self.v2transport = False
-        self.data_dirs = GetBlockCountTest.create_data_dirs(DATA_DIR, name, 3)
-        self.florestad = self.add_node(
-            variant="florestad", extra_args=[f"--data-dir={self.data_dirs[0]}"]
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.utreexod = self.add_node(
-            variant="utreexod",
+        self.utreexod = self.add_node_extra_args(
+            variant=NodeType.UTREEXOD,
             extra_args=[
-                f"--datadir={self.data_dirs[1]}",
                 "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
                 "--prune=0",
             ],
         )
 
-        self.bitcoind = self.add_node(
-            variant="bitcoind", extra_args=[f"-datadir={self.data_dirs[2]}"]
-        )
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def run_test(self):
         """
@@ -78,11 +70,8 @@ class GetBlockCountTest(FlorestaTestFramework):
         time.sleep(5)
 
         self.log("=== Connect floresta to utreexod")
-        host = self.utreexod.get_host()
-        port = self.utreexod.get_port("p2p")
-        self.florestad.rpc.addnode(
-            f"{host}:{port}", command="onetry", v2transport=False
-        )
+        utreexod_url = self.utreexod.p2p_url
+        self.florestad.rpc.addnode(utreexod_url, command="onetry", v2transport=False)
 
         self.log("=== Waiting for floresta to connect to utreexod...")
         time.sleep(5)
@@ -93,9 +82,8 @@ class GetBlockCountTest(FlorestaTestFramework):
         )
 
         self.log("=== Connect bitcoind to utreexod")
-        host = self.utreexod.get_host()
-        port = self.utreexod.get_port("p2p")
-        self.bitcoind.rpc.addnode(f"{host}:{port}", command="onetry", v2transport=False)
+        bitcoind_url = self.bitcoind.p2p_url
+        self.bitcoind.rpc.addnode(utreexod_url, command="onetry", v2transport=False)
 
         self.log("=== Waiting for bitcoind to connect to utreexod...")
         time.sleep(5)

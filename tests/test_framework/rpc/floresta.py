@@ -7,43 +7,17 @@ A test framework for testing JsonRPC calls to a floresta node.
 import re
 from test_framework.rpc.base import BaseRPC
 
-REGTEST_RPC_SERVER = {
-    "host": "127.0.0.1",
-    "ports": {
-        "rpc": 18442,
-        "electrum-server": 20001,
-        "electrum-server-tls": 20002,
-    },
-    "jsonrpc": "2.0",
-    "timeout": 10000,
-}
-
 
 class FlorestaRPC(BaseRPC):
     """
     A class for making RPC calls to a floresta node.
     """
 
-    def get_blockchain_info(self) -> dict:
+    def get_jsonrpc_version(self) -> str:
         """
-        Get the blockchain info by performing `perform_request('getblockchaininfo')`
+        Get the JSON-RPC version of the node
         """
-        return self.perform_request("getblockchaininfo")
-
-    def stop(self):
-        """
-        Perform the `stop` RPC command to utreexod and some cleanup on process and files
-        """
-        result = self.perform_request("stop")
-        self.wait_for_connections(opened=False)
-        return result
-
-    def get_blockhash(self, height: int) -> dict:
-        """
-        Get the blockhash associated with a given height performing
-        `perform_request('getblockhash', params=[<int>])`
-        """
-        return self.perform_request("getblockhash", [height])
+        return "2.0"
 
     def get_blockheader(self, blockhash: str) -> dict:
         """
@@ -76,26 +50,6 @@ class FlorestaRPC(BaseRPC):
 
         return self.perform_request("getblock", params=[blockhash, verbosity])
 
-    def get_bestblockhash(self) -> str:
-        """
-        Get the hash of the best block in the chain performing
-        `perform_request('getbestblockhash')`
-        """
-        return self.perform_request("getbestblockhash")
-
-    def get_block_count(self) -> int:
-        """
-        Get block count of the node by performing `perform_request('getblockcount')
-        """
-        return self.perform_request("getblockcount")
-
-    def get_peerinfo(self):
-        """
-        Get the outpoint associated with a given tx and vout performing
-        `perform_request('gettxout', params=[str, int])`
-        """
-        return self.perform_request("getpeerinfo")
-
     def addnode(self, node: str, command: str, v2transport: bool = False):
         """
         Adds a new node to our list of peers performing
@@ -127,12 +81,6 @@ class FlorestaRPC(BaseRPC):
 
         return self.perform_request("addnode", params=[node, command, v2transport])
 
-    def ping(self):
-        """
-        Tells our node to send a ping to all its peers
-        """
-        return self.perform_request("ping")
-
     def get_roots(self):
         """
         Returns the roots of our current floresta state performing
@@ -149,31 +97,3 @@ class FlorestaRPC(BaseRPC):
             raise ValueError(f"Invalid getmemoryinfo mode: '{mode}'")
 
         return self.perform_request("getmemoryinfo", params=[mode])
-
-    def get_rpcinfo(self):
-        """
-        Returns stats about our RPC server performing
-        `perform_request('getrpcinfo')`
-        """
-        return self.perform_request("getrpcinfo")
-
-    def uptime(self):
-        """
-        Returns for how long florestad has been running, in seconds, performing
-        `perform_request('uptime')`
-        """
-        return self.perform_request("uptime")
-
-    def get_txout(self, txid: str, vout: int, include_mempool: bool) -> dict:
-        """
-        Get the outpoint associated with a given tx and vout performing
-        `perform_request('gettxout', params=[str, int])`
-
-        Args:
-            txid: The transaction id (txid) of the transaction.
-            vout: The output index of the transaction.
-
-        Returns:
-            A dictionary containing the outpoint information.
-        """
-        return self.perform_request("gettxout", params=[txid, vout, include_mempool])

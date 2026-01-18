@@ -4,7 +4,7 @@ florestad/tls-test.py
 This functional test tests the proper creation of a TLS port on florestad.
 """
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 from test_framework.electrum.client import ElectrumClient
 
 
@@ -20,7 +20,7 @@ class TestSslInitialization(FlorestaTestFramework):
         """
         Setup a single node and a electrum client at port 20002
         """
-        self.florestad = self.add_node(variant="florestad", tls=True)
+        self.florestad = self.add_node_with_tls(variant=NodeType.FLORESTAD)
 
     def run_test(self):
         """
@@ -29,15 +29,8 @@ class TestSslInitialization(FlorestaTestFramework):
         """
         self.run_node(self.florestad)
 
-        # now create a connection with an electrum client at default port
-        TestSslInitialization.electrum = ElectrumClient(
-            self.florestad.get_host(),
-            self.florestad.get_port("electrum-server-tls"),
-            tls=True,
-        )
-
         # request something to TLS port
-        res = TestSslInitialization.electrum.ping()
+        res = self.florestad.electrum.ping()
         result = res["result"]
         id = res["id"]
         jsonrpc = res["jsonrpc"]

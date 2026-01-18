@@ -7,6 +7,9 @@ A test framework for testing florestad daemon in regtest mode.
 from typing import List
 
 from test_framework.daemon.base import BaseDaemon
+from test_framework.rpc import ConfigRPC
+from test_framework.daemon import ConfigP2P
+from test_framework.electrum import ConfigElectrum
 
 
 class FlorestaDaemon(BaseDaemon):
@@ -15,40 +18,49 @@ class FlorestaDaemon(BaseDaemon):
     regtest mode for tests.
     """
 
-    def create(self, target: str):
+    def get_cmd_network(self) -> List[str]:
         """
-        Create a new instance of Florestad.
-        Args:
-            target: The path to the executable.
+        Return the network configuration flags for the node.
         """
-        self.name = "florestad"
-        self.target = target
-
-    def valid_daemon_args(self) -> List[str]:
         return [
-            "-c",
-            "--config-file",
-            "-d",
-            "--debug",
-            "--log-to-file",
-            "--data-dir",
-            "--no-cfilters",
-            "-p",
-            "--proxy",
-            "--wallet-xpub",
-            "--wallet-descriptor",
-            "--assume-valid",
-            "-z",
-            "--zmq-address",
-            "--connect",
-            "--rpc-address",
-            "--electrum-address",
-            "--filters-start-height",
-            "--assume-utreexo",
-            "--pid-file",
-            "--enable-electrum-tls",
-            "--electrum-address-tls",
-            "--generate-cert",
-            "--tls-cert-path",
-            "--tls-key-path",
+            "--network=regtest",
         ]
+
+    def get_cmd_data_dir(self, data_dir: str) -> List[str]:
+        """
+        Return the data directory configuration flags for the node.
+        """
+        return [f"--data-dir={data_dir}"]
+
+    def get_cmd_rpc(self, config: ConfigRPC) -> List[str]:
+        """
+        Return the RPC configuration flags for the node.
+        """
+        address = f"{config.host}:{config.port}"
+        return [
+            f"--rpc-address={address}",
+        ]
+
+    def get_cmd_p2p(self, config: ConfigP2P) -> List[str]:
+        """
+        Return the P2P configuration flags for the node.
+        """
+        return []
+
+    def get_cmd_electrum(self, config: ConfigElectrum) -> List[str]:
+        """
+        Return the Electrum configuration flags for the node.
+        """
+        electrum_settings = []
+        electrum_settings.append(f"--electrum-address={config.host}:{config.port}")
+        if config.tls:
+            electrum_settings.extend(
+                [
+                    "--enable-electrum-tls",
+                    f"--tls-key-path={config.tls.key_file}",
+                    f"--tls-cert-path={config.tls.cert_file}",
+                    f"--electrum-address-tls={config.host}:{config.tls.port}",
+                ]
+            )
+
+        return electrum_settings

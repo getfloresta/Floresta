@@ -7,35 +7,18 @@ A test framework for testing JsonRPC calls to a bitocoin node.
 import re
 from test_framework.rpc.base import BaseRPC
 
-REGTEST_RPC_SERVER = {
-    "host": "127.0.0.1",
-    "ports": {"rpc": 18443, "p2p": 18444},
-    "user": "bitcoin",
-    "password": "bitcoin",
-    "jsonrpc": "2.0",
-    "timeout": 10000,
-}
-
 
 class BitcoinRPC(BaseRPC):
     """
     A class for making RPC calls to a bitcoin-core node.
     """
 
-    def get_blockchain_info(self) -> dict:
+    def get_jsonrpc_version(self) -> str:
         """
-        Get the blockchain info by performing `perform_request('getblockchaininfo')`
+        Get the JSON-RPC version of the node
         """
-        return self.perform_request("getblockchaininfo")
+        return "1.0"
 
-    def get_blockhash(self, height: int) -> dict:
-        """
-        Get the blockhash associated with a given height performing
-        `perform_request('getblockhash', params=[<int>])`
-        """
-        return self.perform_request("getblockhash", [height])
-
-    # pylint: disable=R0801
     def get_blockheader(self, blockhash: str) -> dict:
         """
         Get the header of a block, giving its hash performing
@@ -69,54 +52,6 @@ class BitcoinRPC(BaseRPC):
         return self.perform_request("getblock", params=[blockhash, verbosity])
 
     # pylint: disable=R0801
-    def get_bestblockhash(self) -> str:
-        """
-        Get the hash of the best block in the chain performing
-        `perform_request('getbestblockhash')`
-        """
-        return self.perform_request("getbestblockhash")
-
-    # pylint: disable=R0801
-    def get_block_count(self) -> int:
-        """
-        Get block count of the node by performing `perform_request('getblockcount')
-        """
-        return self.perform_request("getblockcount")
-
-    def stop(self):
-        """
-        Perform the `stop` RPC command to utreexod and some cleanup on process and files
-        """
-        result = self.perform_request("stop")
-        self.wait_for_connections(opened=False)
-        return result
-
-    def get_peerinfo(self) -> dict:
-        """
-        Get the peer information by performing `perform_request('getpeerinfo')`
-        """
-        return self.perform_request("getpeerinfo")
-
-    def ping(self) -> None:
-        """
-        Perform the `ping` RPC that checks if our peers are alive.
-        """
-        self.perform_request("ping")
-
-    def get_rpcinfo(self):
-        """
-        Returns stats about our RPC server performing
-        `perform_request('getrpcinfo')`
-        """
-        return self.perform_request("getrpcinfo")
-
-    def uptime(self) -> int:
-        """
-        Get the uptime of the node by performing `perform_request('uptime')`
-        """
-        return self.perform_request("uptime")
-
-    # pylint: disable=R0801
     def addnode(self, node: str, command: str, v2transport: bool = False):
         """
         Adds a new node to our list of peers performing
@@ -147,16 +82,3 @@ class BitcoinRPC(BaseRPC):
             raise ValueError(f"Invalid command '{command}'")
 
         return self.perform_request("addnode", params=[node, command, v2transport])
-
-    def get_txout(self, txid: str, vout: int, include_mempool: bool) -> dict:
-        """
-        Get transaction output by performing `perform_request('gettxout', params=[str, int])`
-
-        Args:
-            txid: The transaction ID
-            vout: The output index
-
-        Returns:
-            The transaction output information
-        """
-        return self.perform_request("gettxout", params=[txid, vout, include_mempool])

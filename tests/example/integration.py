@@ -5,7 +5,7 @@ This is an example of how a tests with integrated electrum should look like,
 see `tests/test_framework/test_framework.py` for more info.
 """
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class IntegrationTest(FlorestaTestFramework):
@@ -23,9 +23,9 @@ class IntegrationTest(FlorestaTestFramework):
         """
         Here we define setup for test adding a node definition
         """
-        self.florestad = self.add_node(variant="florestad")
-        self.utreexod = self.add_node(variant="utreexod")
-        self.bitcoind = self.add_node(variant="bitcoind")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
+        self.utreexod = self.add_node_default_args(variant=NodeType.UTREEXOD)
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     # All tests should override the run_test method
     def run_test(self):
