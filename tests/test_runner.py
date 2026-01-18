@@ -70,6 +70,7 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getblockheader"),
     ("example", "bitcoin"),
     ("example", "utreexod"),
+    ("florestad", "node-info"),
 ]
 
 # Before running the tests, we check if the number of tests

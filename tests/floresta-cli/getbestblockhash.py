@@ -63,12 +63,7 @@ class GetBestblockhashTest(FlorestaTestFramework):
         )
 
         self.log("=== Waiting for floresta to connect to utreexod...")
-        time.sleep(5)
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertMatch(
-            peer_info[0]["user_agent"],
-            re.compile(r"/btcwire:\d+\.\d+\.\d+/utreexod:\d+\.\d+\.\d+/"),
-        )
+        self.wait_for_peers_connections(self.florestad, self.utreexod)
 
         self.log("=== Wait for the nodes to sync...")
         time.sleep(20)

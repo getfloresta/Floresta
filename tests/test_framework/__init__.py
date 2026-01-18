@@ -19,8 +19,9 @@ import socket
 import shutil
 import signal
 import contextlib
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Pattern
+from typing import Any, Dict, List, Pattern, Tuple, Optional
 
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
@@ -95,6 +96,55 @@ class Node:
                 f"Port type '{port_type}' not found in node ports: {self.rpc_config['ports']}"
             )
         return self.rpc_config["ports"][port_type]
+
+    def get_connection_info(self) -> Tuple[str, Optional[str]]:
+        """
+        Get the user agent and host for the current node.
+        """
+        address = (
+            f"{self.get_host()}:{self.get_port('p2p')}"
+            if "p2p" in self.rpc_config["ports"]
+            else None  # The p2p port is not configurable in floresta
+        )
+        variants = {
+            "florestad": ("Floresta", address),
+            "utreexod": ("utreexod", address),
+            "bitcoind": ("Satoshi", address),
+        }
+
+        if self.variant not in variants:
+            raise ValueError(f"Unknown peer variant: {self.variant}")
+
+        return variants[self.variant]
+
+    def is_peer_connected(self, peer: "Node") -> bool:
+        """
+        Check if the given peer is connected to this node via RPC.
+        """
+        keys = {
+            "florestad": ("user_agent", "address"),
+            "bitcoind": ("subver", "addr"),
+            "utreexod": ("subver", "addr"),
+        }
+
+        if self.variant not in keys:
+            raise ValueError(f"Unknown peer variant: {self.variant}")
+
+        user_agent_key, address_key = keys[self.variant]
+        peers_info = self.rpc.get_peerinfo()
+        user_agent, address = peer.get_connection_info()
+
+        return any(
+            user_agent in peer_info.get(user_agent_key)
+            and (
+                address == peer_info.get(address_key)
+                # The p2p port is not configurable in floresta
+                or address is None
+                # Utreexo nodes use `addrlocal` instead of `addr` to show connection information.
+                or self.variant == "utreexod"
+            )
+            for peer_info in peers_info
+        )
 
     def send_kill_signal(self, sigcode="SIGTERM"):
         """Send a signal to kill the daemon process."""
@@ -624,10 +674,8 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             )
         return self._nodes[index]
 
-    def run_node(self, node: Node, timeout: int = 180):
+    def run_node(self, node: Node):
         """Start a node and initialize its RPC connection."""
-        node.daemon.start()
-
         if node.variant == "florestad":
             node.rpc = FlorestaRPC(node.daemon.process, node.rpc_config)
         elif node.variant == "utreexod":
@@ -635,8 +683,19 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         elif node.variant == "bitcoind":
             node.rpc = BitcoinRPC(node.daemon.process, node.rpc_config)
 
-        node.rpc.wait_for_connections(opened=True, timeout=timeout)
-        self.log(f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}")
+        for _ in range(3):
+            try:
+                node.start()
+                self.log(
+                    f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}"
+                )
+                return
+            # pylint: disable=broad-exception-caught
+            except Exception as e:
+                node.stop()
+                error = e
+
+        raise RuntimeError(f"Error starting node '{node.variant}': {error}")
 
     def stop_node(self, index: int):
         """
@@ -651,6 +710,65 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         for i in range(len(self._nodes)):
             self.stop_node(i)
+
+    def check_connection(self, peer_one: Node, peer_two: Node, is_connected: bool):
+        """
+        Check if two peers are connected/disconnected to each other.
+        """
+        peer_one_running = peer_one.daemon.is_running
+        peer_two_running = peer_two.daemon.is_running
+
+        if not peer_one_running and not peer_two_running:
+            raise AssertionError(
+                f"Neither peer is running: {peer_one.variant}, {peer_two.variant}"
+            )
+
+        if peer_one_running != peer_two_running and is_connected:
+            raise AssertionError(
+                f"Cannot check connection state: Only one peer is running. "
+                f"Peer one running: {peer_one_running}, Peer two running: {peer_two_running}"
+            )
+
+        peer_two_in_peer_one = (
+            peer_one.is_peer_connected(peer_two) if peer_one_running else False
+        )
+        peer_one_in_peer_two = (
+            peer_two.is_peer_connected(peer_one) if peer_two_running else False
+        )
+
+        return (
+            peer_two_in_peer_one == is_connected
+            and peer_one_in_peer_two == is_connected
+        )
+
+    def wait_for_peers_connections(
+        self, peer_one: Node, peer_two: Node, is_connected: bool = True
+    ):
+        """
+        Wait for two peers to connect/disconnect to each other.
+        """
+        timeout = time.time() + 15
+        while time.time() < timeout:
+            if self.check_connection(peer_one, peer_two, is_connected):
+                self.log(
+                    f"Peers {peer_one.variant} and {peer_two.variant} are in the expected "
+                    f"connection state."
+                )
+                return
+
+            time.sleep(1)
+
+            # Send a ping to both peers to trigger a peer state update
+            if peer_one.daemon.is_running:
+                peer_one.rpc.ping()
+
+            if peer_two.daemon.is_running:
+                peer_two.rpc.ping()
+
+        raise AssertionError(
+            f"Peers {peer_one.variant} and {peer_two.variant} failed to reach the expected "
+            f"connection state within the timeout. Expected connected: {is_connected}."
+        )
 
     # pylint: disable=invalid-name
     def assertTrue(self, condition: bool):
