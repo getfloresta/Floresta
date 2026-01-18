@@ -1,16 +1,22 @@
-use std::fmt::Debug;
+//! Signature definitions for floresta RPCs and error handling
 
-use bitcoin::block::Header as BlockHeader;
+use std::fmt::Display;
+
+use bitcoin::block::Header;
 use bitcoin::BlockHash;
 use bitcoin::Txid;
-use corepc_types::v29::GetTxOut;
-use serde_json::Number;
+use corepc_types::v30::GetTxOut;
 use serde_json::Value;
 
-use crate::rpc_types;
-use crate::rpc_types::*;
+use crate::typed_rpc::response::AddNodeCommand;
+use crate::typed_rpc::response::GetBlockRes;
+use crate::typed_rpc::response::GetBlockchainInfoRes;
+use crate::typed_rpc::response::GetMemInfoRes;
+use crate::typed_rpc::response::GetRpcInfoRes;
+use crate::typed_rpc::response::PeerInfo;
+use crate::typed_rpc::response::RescanConfidence;
 
-type Result<T> = std::result::Result<T, rpc_types::Error>;
+pub type Result<T> = std::result::Result<T, RpcError>;
 
 /// A trait specifying all possible methods for floresta's json-rpc
 pub trait FlorestaRPC {
@@ -40,7 +46,7 @@ pub trait FlorestaRPC {
     /// in the Bitcoin protocol specification. A header contains the block's version,
     /// the previous block hash, the merkle root, the timestamp, the difficulty target,
     /// and the nonce.
-    fn get_block_header(&self, hash: BlockHash) -> Result<BlockHeader>;
+    fn get_block_header(&self, hash: BlockHash) -> Result<Header>;
     /// Gets a transaction from the blockchain
     ///
     /// This method returns a transaction that's cached in our wallet. If the verbosity flag is
@@ -51,7 +57,7 @@ pub trait FlorestaRPC {
     ///
     /// This method returns the Merkle proof, showing that a transaction was included in a block.
     /// The pooof is returned as a vector hexadecimal string.
-    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Option<String>;
+    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Result<String>;
     /// Loads up a descriptor into the wallet
     ///
     /// This method loads up a descriptor into the wallet. If the rescan option is not None,
@@ -61,7 +67,7 @@ pub trait FlorestaRPC {
     /// as old as the oldest transaction this descriptor could have been used in.
     fn load_descriptor(&self, descriptor: String) -> Result<bool>;
 
-    #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
+    #[doc = include_str!("../../../../doc/rpc/rescanblockchain.md")]
     fn rescanblockchain(
         &self,
         start_block: Option<u32>,
@@ -111,7 +117,7 @@ pub trait FlorestaRPC {
     /// You can use this to connect with a given node, providing it's IP address and port.
     /// If the `v2transport` option is set, we won't retry connecting using the old, unencrypted
     /// P2P protocol.
-    #[doc = include_str!("../../../doc/rpc/addnode.md")]
+    #[doc = include_str!("../../../../doc/rpc/addnode.md")]
     fn add_node(&self, node: String, command: AddNodeCommand, v2transport: bool) -> Result<Value>;
     /// Finds an specific utxo in the chain
     ///
@@ -139,199 +145,70 @@ pub trait FlorestaRPC {
     fn ping(&self) -> Result<()>;
 }
 
-/// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
-/// that will let us call any method on the client, and then implement the methods on any
-/// client that implements this trait.
-pub trait JsonRPCClient: Sized {
-    /// Calls a method on the client
-    ///
-    /// This should call the appropriated rpc method and return a parsed response or error.
-    fn call<T>(&self, method: &str, params: &[Value]) -> Result<T>
-    where
-        T: for<'a> serde::de::Deserialize<'a> + serde::de::DeserializeOwned + Debug;
+#[derive(Debug)]
+/// All possible errors returned by the jsonrpc
+pub enum RpcError {
+    /// An error while deserializing our response
+    Serde(serde_json::Error),
+
+    #[cfg(feature = "with-jsonrpc")]
+    /// An internal reqwest error
+    JsonRpc(jsonrpc::Error),
+
+    #[cfg(feature = "with-jsonrpc")]
+    /// An internal reqwest error
+    Http(jsonrpc::http::simple_http::Error),
+
+    /// An error internal to our jsonrpc server
+    Api(serde_json::Value),
+
+    /// The server sent an empty response
+    EmptyResponse,
+
+    /// The provided verbosity level is invalid
+    InvalidVerbosity,
+
+    /// The user requested a rescan based on invalid values.
+    InvalidRescanVal,
+
+    /// The requested transaction output was not found
+    TxOutNotFound,
 }
 
-impl<T: JsonRPCClient> FlorestaRPC for T {
-    fn find_tx_out(
-        &self,
-        tx_id: Txid,
-        outpoint: u32,
-        script: String,
-        height_hint: u32,
-    ) -> Result<Value> {
-        self.call(
-            "findtxout",
-            &[
-                Value::String(tx_id.to_string()),
-                Value::Number(Number::from(outpoint)),
-                Value::String(script),
-                Value::Number(Number::from(height_hint)),
-            ],
-        )
-    }
-
-    fn uptime(&self) -> Result<u32> {
-        self.call("uptime", &[])
-    }
-
-    fn get_memory_info(&self, mode: String) -> Result<GetMemInfoRes> {
-        self.call("getmemoryinfo", &[Value::String(mode)])
-    }
-
-    fn get_rpc_info(&self) -> Result<GetRpcInfoRes> {
-        self.call("getrpcinfo", &[])
-    }
-
-    fn add_node(&self, node: String, command: AddNodeCommand, v2transport: bool) -> Result<Value> {
-        self.call(
-            "addnode",
-            &[
-                Value::String(node),
-                Value::String(command.to_string()),
-                Value::Bool(v2transport),
-            ],
-        )
-    }
-
-    fn stop(&self) -> Result<String> {
-        self.call("stop", &[])
-    }
-
-    fn rescanblockchain(
-        &self,
-        start_height: Option<u32>,
-        stop_height: Option<u32>,
-        use_timestamp: bool,
-        confidence: RescanConfidence,
-    ) -> Result<bool> {
-        let start_height = start_height.unwrap_or(0u32);
-
-        let stop_height = stop_height.unwrap_or(0u32);
-
-        self.call(
-            "rescanblockchain",
-            &[
-                Value::Number(Number::from(start_height)),
-                Value::Number(Number::from(stop_height)),
-                Value::Bool(use_timestamp),
-                serde_json::to_value(&confidence).expect("RescanConfidence implements Ser/De"),
-            ],
-        )
-    }
-
-    fn get_roots(&self) -> Result<Vec<String>> {
-        self.call("getroots", &[])
-    }
-
-    fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
-        let verbosity = verbosity.unwrap_or(0);
-
-        match verbosity {
-            0 => {
-                let block = self.call(
-                    "getblock",
-                    &[
-                        Value::String(hash.to_string()),
-                        Value::Number(Number::from(verbosity)),
-                    ],
-                )?;
-                Ok(GetBlockRes::Serialized(block))
-            }
-
-            1 => {
-                let block = self.call(
-                    "getblock",
-                    &[
-                        Value::String(hash.to_string()),
-                        Value::Number(Number::from(verbosity)),
-                    ],
-                )?;
-                Ok(GetBlockRes::Verbose(block))
-            }
-
-            _ => Err(rpc_types::Error::InvalidVerbosity),
-        }
-    }
-
-    fn get_block_count(&self) -> Result<u32> {
-        self.call("getblockcount", &[])
-    }
-
-    fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut> {
-        let result: serde_json::Value = self.call(
-            "gettxout",
-            &[
-                Value::String(tx_id.to_string()),
-                Value::Number(Number::from(outpoint)),
-            ],
-        )?;
-        if result.is_null() {
-            return Err(Error::TxOutNotFound);
-        }
-        serde_json::from_value(result).map_err(Error::Serde)
-    }
-
-    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Option<String> {
-        let params: Vec<Value> = match blockhash {
-            Some(blockhash) => vec![
-                serde_json::to_value(txids)
-                    .expect("Unreachable, Vec<Txid> can be parsed into a json value"),
-                Value::String(blockhash.to_string()),
-            ],
-            None => {
-                let txids = serde_json::to_value(txids)
-                    .expect("Unreachable, Vec<Txid> can be parsed into a json value");
-                vec![txids]
-            }
-        };
-        self.call("gettxoutproof", &params).ok()
-    }
-
-    fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
-        self.call("getpeerinfo", &[])
-    }
-
-    fn get_best_block_hash(&self) -> Result<BlockHash> {
-        self.call("getbestblockhash", &[])
-    }
-
-    fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
-        self.call("getblockhash", &[Value::Number(Number::from(height))])
-    }
-
-    fn get_transaction(&self, tx_id: Txid, verbosity: Option<bool>) -> Result<Value> {
-        let verbosity = verbosity.unwrap_or(false);
-        self.call(
-            "gettransaction",
-            &[Value::String(tx_id.to_string()), Value::Bool(verbosity)],
-        )
-    }
-
-    fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        self.call("loaddescriptor", &[Value::String(descriptor)])
-    }
-
-    fn get_block_filter(&self, height: u32) -> Result<String> {
-        self.call("getblockfilter", &[Value::Number(Number::from(height))])
-    }
-
-    fn get_block_header(&self, hash: BlockHash) -> Result<BlockHeader> {
-        self.call("getblockheader", &[Value::String(hash.to_string())])
-    }
-
-    fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes> {
-        self.call("getblockchaininfo", &[])
-    }
-
-    fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        self.call("sendrawtransaction", &[Value::String(tx)])
-    }
-
-    fn list_descriptors(&self) -> Result<Vec<String>> {
-        self.call("listdescriptors", &[])
-    }
-
-    fn ping(&self) -> Result<()> {
-        self.call("ping", &[])
+impl From<serde_json::Error> for RpcError {
+    fn from(value: serde_json::Error) -> Self {
+        RpcError::Serde(value)
     }
 }
+
+#[cfg(feature = "with-jsonrpc")]
+impl From<jsonrpc::Error> for RpcError {
+    fn from(value: jsonrpc::Error) -> Self {
+        RpcError::JsonRpc(value)
+    }
+}
+
+impl From<jsonrpc::http::simple_http::Error> for RpcError {
+    fn from(value: jsonrpc::http::simple_http::Error) -> Self {
+        RpcError::Http(value)
+    }
+}
+
+impl Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(feature = "with-jsonrpc")]
+            RpcError::JsonRpc(e) => write!(f, "JsonRpc returned an error {e}"),
+            #[cfg(feature = "with-jsonrpc")]
+            RpcError::Http(e) => write!(f, "Http error: {e}"),
+            RpcError::Api(e) => write!(f, "general jsonrpc error: {e}"),
+            RpcError::Serde(e) => write!(f, "error while deserializing the response: {e}"),
+            RpcError::EmptyResponse => write!(f, "got an empty response from server"),
+            RpcError::InvalidVerbosity => write!(f, "invalid verbosity level"),
+            RpcError::InvalidRescanVal => write!(f, "Invalid rescan values"),
+            RpcError::TxOutNotFound => write!(f, "Transaction output was not found"),
+        }
+    }
+}
+
+impl std::error::Error for RpcError {}

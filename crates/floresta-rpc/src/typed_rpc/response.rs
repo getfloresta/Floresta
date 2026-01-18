@@ -1,3 +1,5 @@
+//! Type definitions that express response schemas for our RPCs.
+
 use std::fmt::Display;
 
 use serde::Deserialize;
@@ -302,60 +304,6 @@ pub enum RescanConfidence {
     Exact,
 }
 
-#[derive(Debug)]
-/// All possible errors returned by the jsonrpc
-pub enum Error {
-    /// An error while deserializing our response
-    Serde(serde_json::Error),
-
-    #[cfg(feature = "with-jsonrpc")]
-    /// An internal reqwest error
-    JsonRpc(jsonrpc::Error),
-
-    /// An error internal to our jsonrpc server
-    Api(serde_json::Value),
-
-    /// The server sent an empty response
-    EmptyResponse,
-
-    /// The provided verbosity level is invalid
-    InvalidVerbosity,
-
-    /// The user requested a rescan based on invalid values.
-    InvalidRescanVal,
-
-    /// The requested transaction output was not found
-    TxOutNotFound,
-}
-
-impl From<serde_json::Error> for Error {
-    fn from(value: serde_json::Error) -> Self {
-        Error::Serde(value)
-    }
-}
-
-#[cfg(feature = "with-jsonrpc")]
-impl From<jsonrpc::Error> for Error {
-    fn from(value: jsonrpc::Error) -> Self {
-        Error::JsonRpc(value)
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            #[cfg(feature = "with-jsonrpc")]
-            Error::JsonRpc(e) => write!(f, "JsonRpc returned an error {e}"),
-            Error::Api(e) => write!(f, "general jsonrpc error: {e}"),
-            Error::Serde(e) => write!(f, "error while deserializing the response: {e}"),
-            Error::EmptyResponse => write!(f, "got an empty response from server"),
-            Error::InvalidVerbosity => write!(f, "invalid verbosity level"),
-            Error::InvalidRescanVal => write!(f, "Invalid rescan values"),
-            Error::TxOutNotFound => write!(f, "Transaction output was not found"),
-        }
-    }
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GetMemInfoStats {
     pub locked: MemInfoLocked,
@@ -427,5 +375,3 @@ impl Display for AddNodeCommand {
         write!(f, "{cmd}")
     }
 }
-
-impl std::error::Error for Error {}
