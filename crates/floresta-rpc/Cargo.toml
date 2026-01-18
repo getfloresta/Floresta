@@ -27,8 +27,8 @@ rand = { workspace = true }
 rcgen = { workspace = true }
 
 [features]
-default = ["with-jsonrpc"]
-with-jsonrpc = ["dep:jsonrpc"]
+default = ["json-rpc"]
+json-rpc = ["dep:jsonrpc"]
 clap = ["dep:clap"]
 
 [lints]

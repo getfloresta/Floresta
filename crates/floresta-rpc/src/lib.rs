@@ -15,7 +15,7 @@
     html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
 )]
 
-#[cfg(feature = "with-jsonrpc")]
+#[cfg(feature = "json-rpc")]
 pub mod jsonrpc_client;
 
 pub mod rpc;
@@ -24,7 +24,7 @@ pub mod rpc_types;
 // Those tests doesn't work on windows
 // TODO (Davidson): work on windows?
 
-#[cfg(all(test, feature = "with-jsonrpc", not(target_os = "windows")))]
+#[cfg(all(test, feature = "json-rpc", not(target_os = "windows")))]
 mod tests {
     use std::fs;
     use std::net::TcpListener;
