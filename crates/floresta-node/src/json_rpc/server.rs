@@ -268,20 +268,21 @@ async fn handle_json_rpc_request(
 
         "getblock" => {
             let hash = get_hash(&params, 0, "block_hash")?;
-            let verbosity = get_numeric(&params, 1, "verbosity")?;
+            // Default value in case of missing parameter is 1
+            let verbosity = get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1);
 
             match verbosity {
                 0 => {
                     let block = state.get_block_serialized(hash).await?;
 
-                    let block = GetBlockRes::Serialized(block);
+                    let block = GetBlockRes::Zero(block);
                     Ok(serde_json::to_value(block).unwrap())
                 }
 
                 1 => {
                     let block = state.get_block(hash).await?;
 
-                    let block = GetBlockRes::Verbose(block.into());
+                    let block = GetBlockRes::One(block.into());
                     Ok(serde_json::to_value(block).unwrap())
                 }
 

@@ -224,7 +224,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
-        let verbosity = verbosity.unwrap_or(0);
+        let verbosity = verbosity.unwrap_or(1);
 
         match verbosity {
             0 => {
@@ -235,7 +235,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                         Value::Number(Number::from(verbosity)),
                     ],
                 )?;
-                Ok(GetBlockRes::Serialized(block))
+                Ok(GetBlockRes::Zero(block))
             }
 
             1 => {
@@ -246,7 +246,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                         Value::Number(Number::from(verbosity)),
                     ],
                 )?;
-                Ok(GetBlockRes::Verbose(block))
+                Ok(GetBlockRes::One(block))
             }
 
             _ => Err(rpc_types::Error::InvalidVerbosity),

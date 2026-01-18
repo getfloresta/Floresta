@@ -21,9 +21,11 @@ pub mod jsonrpc_client;
 pub mod rpc;
 pub mod rpc_types;
 
+#[cfg(test)]
+mod test_data;
+
 // Those tests doesn't work on windows
 // TODO (Davidson): work on windows?
-
 #[cfg(all(test, feature = "with-jsonrpc", not(target_os = "windows")))]
 mod tests {
     use std::fs;
@@ -43,9 +45,9 @@ mod tests {
 
     use crate::jsonrpc_client::Client;
     use crate::rpc::FlorestaRPC;
-    use crate::rpc_types::GetBlockRes;
+    use crate::test_data::getblock_data;
 
-    struct Florestad {
+    pub struct Florestad {
         proc: Child,
     }
 
@@ -196,15 +198,18 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        let block = client.get_block(block_hash, Some(1)).unwrap();
-        let GetBlockRes::Verbose(block) = block else {
-            panic!("Expected verbose block");
-        };
+        let block = client.get_block(block_hash, None).unwrap();
 
-        assert_eq!(
-            block.hash,
-            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206".to_owned()
-        );
+        assert_eq!(block, getblock_data(true));
+
+        let block_hash: BlockHash =
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+                .parse()
+                .unwrap();
+
+        let block = client.get_block(block_hash, Some(0)).unwrap();
+
+        assert_eq!(block, getblock_data(false));
     }
 
     #[test]
