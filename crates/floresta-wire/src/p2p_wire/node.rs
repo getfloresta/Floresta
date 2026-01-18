@@ -1828,7 +1828,9 @@ where
         required_service: ServiceFlags,
     ) -> Result<(), WireError> {
         // If the user passes in a `--connect` cli argument, we only connect with
-        // that particular peer.
+        // that particular peer, but not having any peers means that we didnt tried to
+        // connect to it yet or the connection failed.
+
         if self.fixed_peer.is_some() && !self.peers.is_empty() {
             return Ok(());
         }
@@ -1851,8 +1853,8 @@ where
     }
 
     pub(crate) fn open_feeler_connection(&mut self) -> Result<(), WireError> {
-        // No feeler if `-connect` is set
-        if self.fixed_peer.is_some() {
+        // No feeler if `-connect` is set or when Regtest mode.
+        if self.fixed_peer.is_some() || self.network == Network::Regtest {
             return Ok(());
         }
         self.create_connection(ConnectionKind::Feeler)?;
@@ -1908,6 +1910,9 @@ where
             let net = self.network;
             self.address_man.add_fixed_addresses(net);
 
+            if self.network == Network::Regtest {
+                return Ok(());
+            }
             return Err(WireError::NoAddressesAvailable);
         };
 
