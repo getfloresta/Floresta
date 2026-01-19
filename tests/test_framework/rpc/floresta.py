@@ -177,3 +177,12 @@ class FlorestaRPC(BaseRPC):
             A dictionary containing the outpoint information.
         """
         return self.perform_request("gettxout", params=[txid, vout, include_mempool])
+
+    def load_descriptor(self, descriptor: str):
+        """
+        Load a script descriptor into the wallet.
+
+        Args:
+            descriptor: The script descriptor to load.
+        """
+        return self.perform_request("loaddescriptor", params=[descriptor])

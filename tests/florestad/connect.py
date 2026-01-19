@@ -6,40 +6,26 @@ the --connect option pointing to the utreexod node. Then check if
 the utreexod node is connected to the florestad node.
 """
 
-from test_framework import FlorestaTestFramework
 import time
-
-SLEEP_TIME = 10
-
-
-class CliConnectTest(FlorestaTestFramework):
-
-    def set_test_params(self):
-        self.utreexod = self.add_node(variant="utreexod")
-
-        # To get the random port we nee to start the utreexod first
-        self.log("=== Starting utreexod")
-        self.run_node(self.utreexod)
-
-        # Now we can start the florestad node with the connect option
-        to_connect = f"{self.utreexod.get_host()}:{self.utreexod.get_port('p2p')}"
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[f"--connect={to_connect}"],
-        )
-
-    def run_test(self):
-        # Start the nodes
-        self.log("=== Starting floresta")
-        self.run_node(self.florestad)
-
-        time.sleep(SLEEP_TIME)  # Give some time for the nodes to start
-
-        # Check whether the utreexod is connected to florestad
-        self.log("=== Checking connection")
-        res = self.utreexod.rpc.get_peerinfo()
-        self.assertEqual(len(res), 1)
+import pytest
 
 
-if __name__ == "__main__":
-    CliConnectTest().main()
+@pytest.mark.florestad
+def test_connect(utreexod_node, add_node_with_extra_args):
+    """
+    Test the --connect flag of florestad.
+    """
+    utreexod = utreexod_node
+    _florestad = add_node_with_extra_args(
+        variant="florestad",
+        extra_args=[f"--connect={utreexod.get_host()}:{utreexod.get_port('p2p')}"],
+    )
+
+    end = time.time() + 10
+
+    while time.time() < end:
+        res = utreexod.rpc.get_peerinfo()
+        if len(res) == 1:
+            return
+
+    pytest.fail("Florestad node did not connect to Utreexod node in time")

@@ -8,7 +8,6 @@ regtest mode.
 
 import os
 import time
-from datetime import datetime, timezone
 from subprocess import Popen, PIPE
 from typing import List
 
@@ -106,22 +105,17 @@ class BaseDaemon(metaclass=BaseDaemonMetaClass):
     ```
     """
 
-    def __init__(self):
+    def __init__(self, log):
         self._target = None
         self._name = None
         self._process = None
         self._settings = []
+        self.log = log
 
     # pylint: disable=R0801
-    def log(self, message: str):
-        """Log a message to the console"""
-        now = (
-            datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .strftime("%Y-%m-%d %H:%M:%S")
-        )
-
-        print(f"[{self.__class__.__name__.upper()} {now}] {message}")
+    def log_msg(self, message: str):
+        """Format a log message for the console"""
+        return f"[{self.__class__.__name__.upper()}] {message}"
 
     @property
     def target(self) -> str:
@@ -234,10 +228,14 @@ class BaseDaemon(metaclass=BaseDaemonMetaClass):
             self.process.terminate()
             stderr = self.process.stderr.read()
 
-            self.log(f"Failed to start node '{self.name}'. Command: {' '.join(cmd)} ")
+            self.log.debug(
+                self.log_msg(
+                    f"Failed to start node '{self.name}'. Command: {' '.join(cmd)} "
+                )
+            )
             raise RuntimeError(f"Failed to start node '{self.name}'. {stderr}")
 
-        self.log(f"Starting node '{self.name}': {' '.join(cmd)}")
+        self.log.debug(self.log_msg(f"Starting node '{self.name}': {' '.join(cmd)}"))
 
     def add_daemon_settings(self, settings: List[str]):
         """
