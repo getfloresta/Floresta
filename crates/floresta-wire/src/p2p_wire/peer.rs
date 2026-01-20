@@ -58,6 +58,11 @@ const UTREEXO_PROOF_CMD_STRING: &str = "uproof";
 /// The command string for the "get utreexo proof" message
 const GET_UTREEXO_PROOF_CMD: &str = "getuproof";
 
+/// To avoid being eclipsed with an address spam attack, we limit
+/// the rate of addrv2 messages a peer can send us to one every
+/// 10 seconds.
+const ADDRV2_MESSAGE_INTERVAL_SECS: u64 = 10;
+
 #[derive(Debug, PartialEq)]
 enum State {
     None,
@@ -107,6 +112,7 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     messages: u64,
     start_time: Instant,
     last_message: Instant,
+    last_addrv2: Instant,
     current_best_block: i32,
     last_ping: Option<Instant>,
     id: u32,
@@ -451,6 +457,21 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                         return Err(PeerError::MessageTooBig);
                     }
 
+                    // Rate limit addrv2 messages
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(self.last_addrv2).as_secs();
+                    self.last_addrv2 = Instant::now();
+
+                    if elapsed < ADDRV2_MESSAGE_INTERVAL_SECS {
+                        debug!(
+                            "Peer {} sent addrv2 messages too frequently, ignoring",
+                            self.id
+                        );
+
+                        // just drop the message
+                        return Ok(());
+                    }
+
                     self.send_to_node(PeerMessages::Addr(addresses), time);
                 }
                 NetworkMessage::GetBlocks(_) => {
@@ -625,6 +646,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             mempool,
             last_ping: None,
             last_message: Instant::now(),
+            last_addrv2: Instant::now() - Duration::from_secs(ADDRV2_MESSAGE_INTERVAL_SECS),
             node_tx,
             services: ServiceFlags::NONE,
             messages: 0,
