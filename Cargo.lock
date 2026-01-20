@@ -1008,7 +1008,6 @@ dependencies = [
 name = "floresta-cli"
 version = "0.4.0"
 dependencies = [
- "anyhow",
  "bitcoin",
  "clap",
  "floresta-rpc",
@@ -1080,6 +1079,7 @@ dependencies = [
  "floresta-common",
  "floresta-compact-filters",
  "floresta-electrum",
+ "floresta-rpc",
  "floresta-watch-only",
  "floresta-wire",
  "libc",
