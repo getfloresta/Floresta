@@ -226,31 +226,13 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
         let verbosity = verbosity.unwrap_or(1);
 
-        match verbosity {
-            0 => {
-                let block = self.call(
-                    "getblock",
-                    &[
-                        Value::String(hash.to_string()),
-                        Value::Number(Number::from(verbosity)),
-                    ],
-                )?;
-                Ok(GetBlockRes::Zero(block))
-            }
-
-            1 => {
-                let block = self.call(
-                    "getblock",
-                    &[
-                        Value::String(hash.to_string()),
-                        Value::Number(Number::from(verbosity)),
-                    ],
-                )?;
-                Ok(GetBlockRes::One(block))
-            }
-
-            _ => Err(rpc_types::Error::InvalidVerbosity),
-        }
+        self.call(
+            "getblock",
+            &[
+                Value::String(hash.to_string()),
+                Value::Number(Number::from(verbosity)),
+            ],
+        )
     }
 
     fn get_block_count(&self) -> Result<u32> {

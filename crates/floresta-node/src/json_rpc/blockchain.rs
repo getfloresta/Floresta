@@ -27,6 +27,7 @@ use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
+use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
@@ -169,79 +170,74 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub(super) async fn get_block(
         &self,
         hash: BlockHash,
-    ) -> Result<GetBlockVerboseOne, JsonRpcError> {
+        verbosity: u8,
+    ) -> Result<GetBlockRes, JsonRpcError> {
         let block = self.get_block_inner(hash).await?;
-        let header = &block.header;
 
-        let height = header.get_height(&self.chain)?;
+        if verbosity == 0 {
+            let hex = serialize_hex(&block);
 
-        let median_time = header.calculate_median_time_past(&self.chain)?;
+            return Ok(GetBlockRes::Zero(hex));
+        }
+        if verbosity == 1 {
+            let header = &block.header;
+            let height = header.get_height(&self.chain)?;
+            let median_time = header.calculate_median_time_past(&self.chain)?;
+            let chain_work = header.calculate_chain_work(&self.chain)?.to_string_hex();
+            let confirmations = header.get_confirmations(&self.chain)? as i64;
+            let version_hex = header.get_version_hex();
 
-        let chain_work = header.calculate_chain_work(&self.chain)?.to_string_hex();
+            let next_block_hash = header
+                .get_next_block_hash(&self.chain)?
+                .map(|h| h.to_string());
 
-        let confirmations = header.get_confirmations(&self.chain)? as i64;
+            let bits = header.get_bits_hex();
+            let difficulty = header.get_difficulty();
+            let target = header.get_target_hex();
 
-        let version_hex = header.get_version_hex();
+            // Stripped size is the size of the block without witness data
+            // Header + VarInt for number of transactions + sum of base sizes of each transaction
+            let tx_count_varint_size = VarInt::from(block.txdata.len()).size();
+            let total_tx_base_size: usize = block.txdata.iter().map(|tx| tx.base_size()).sum();
+            let stripped_size_bytes = Header::SIZE + tx_count_varint_size + total_tx_base_size;
 
-        let next_block_hash = header
-            .get_next_block_hash(&self.chain)?
-            .map(|h| h.to_string());
+            let stripped_size = Some(stripped_size_bytes as i64);
 
-        let bits = header.get_bits_hex();
+            let previous_block_hash = (header.prev_blockhash != BlockHash::all_zeros())
+                .then_some(header.prev_blockhash.to_string());
 
-        let difficulty = header.get_difficulty();
+            let tx = block
+                .txdata
+                .iter()
+                .map(|tx| tx.compute_txid().to_string())
+                .collect();
 
-        let target = header.get_target_hex();
+            let block = GetBlockVerboseOne {
+                bits,
+                chain_work,
+                confirmations,
+                difficulty,
+                hash: header.block_hash().to_string(),
+                height: height as i64,
+                merkle_root: header.merkle_root.to_string(),
+                nonce: header.nonce as i64,
+                previous_block_hash,
+                size: block.total_size() as i64,
+                time: header.time as i64,
+                tx,
+                version: header.version.to_consensus(),
+                version_hex,
+                weight: block.weight().to_wu(),
+                median_time: Some(median_time as i64),
+                n_tx: block.txdata.len() as i64,
+                next_block_hash,
+                stripped_size,
+                target,
+            };
 
-        // Stripped size is the size of the block without witness data
-        // Header + VarInt for number of transactions + sum of base sizes of each transaction
-        let tx_count_varint_size = VarInt::from(block.txdata.len()).size();
-        let total_tx_base_size: usize = block.txdata.iter().map(|tx| tx.base_size()).sum();
-        let stripped_size_bytes = Header::SIZE + tx_count_varint_size + total_tx_base_size;
-
-        let stripped_size = Some(stripped_size_bytes as i64);
-
-        let previous_block_hash = (header.prev_blockhash != BlockHash::all_zeros())
-            .then_some(header.prev_blockhash.to_string());
-
-        let tx = block
-            .txdata
-            .iter()
-            .map(|tx| tx.compute_txid().to_string())
-            .collect();
-
-        let block = GetBlockVerboseOne {
-            bits,
-            chain_work,
-            confirmations,
-            difficulty,
-            hash: header.block_hash().to_string(),
-            height: height as i64,
-            merkle_root: header.merkle_root.to_string(),
-            nonce: header.nonce as i64,
-            previous_block_hash,
-            size: block.total_size() as i64,
-            time: header.time as i64,
-            tx,
-            version: header.version.to_consensus(),
-            version_hex,
-            weight: block.weight().to_wu(),
-            median_time: Some(median_time as i64),
-            n_tx: block.txdata.len() as i64,
-            next_block_hash,
-            stripped_size,
-            target,
-        };
-
-        Ok(block)
-    }
-
-    pub(super) async fn get_block_serialized(
-        &self,
-        hash: BlockHash,
-    ) -> Result<String, JsonRpcError> {
-        let block = self.get_block_inner(hash).await?;
-        Ok(serialize_hex(&block))
+            return Ok(GetBlockRes::One(Box::new(block)));
+        }
+        Err(JsonRpcError::InvalidVerbosityLevel)
     }
 
     // getblockchaininfo
