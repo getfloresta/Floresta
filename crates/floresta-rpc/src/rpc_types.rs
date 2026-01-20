@@ -182,8 +182,10 @@ pub struct PeerInfo {
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[serde(untagged)]
 pub enum GetBlockRes {
     Zero(String),
+
     One(Box<GetBlockVerboseOne>),
 }
 

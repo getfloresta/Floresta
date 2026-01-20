@@ -10,7 +10,6 @@ use clap::Subcommand;
 use floresta_rpc::jsonrpc_client::Client;
 use floresta_rpc::rpc::FlorestaRPC;
 use floresta_rpc::rpc_types::AddNodeCommand;
-use floresta_rpc::rpc_types::GetBlockRes;
 use floresta_rpc::rpc_types::RescanConfidence;
 
 // Main function that runs the CLI application
@@ -92,12 +91,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         }
         Methods::GetRoots => serde_json::to_string_pretty(&client.get_roots()?)?,
         Methods::GetBlock { hash, verbosity } => {
-            let block = client.get_block(hash, verbosity)?;
-
-            match block {
-                GetBlockRes::One(block) => serde_json::to_string_pretty(&block)?,
-                GetBlockRes::Zero(block) => serde_json::to_string_pretty(&block)?,
-            }
+            serde_json::to_string_pretty(&client.get_block(hash, verbosity)?)?
         }
         Methods::GetPeerInfo => serde_json::to_string_pretty(&client.get_peer_info()?)?,
         Methods::Stop => serde_json::to_string_pretty(&client.stop()?)?,
