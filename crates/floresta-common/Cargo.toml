@@ -9,9 +9,9 @@ repository = "https://github.com/getfloresta/Floresta"
 readme.workspace = true # Floresta/README.md
 
 [dependencies]
-bitcoin = { workspace = true, features = ["serde"] }
+bitcoin = { workspace = true }
 hashbrown = { version = "0.16" }
-miniscript = { workspace = true, optional = true }
+miniscript = { workspace = true, optional = true, default-features = false }
 sha2 = { workspace = true }
 spin = { workspace = true }
 

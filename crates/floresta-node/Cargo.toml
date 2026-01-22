@@ -7,7 +7,7 @@ authors = ["Floresta Developers <contact@getfloresta.org>"]
 
 [dependencies]
 axum = { workspace = true, optional = true }
-bitcoin = { workspace = true, features = ["serde", "std"] }
+bitcoin = { workspace = true }
 corepc-types = { workspace = true }
 dns-lookup = { workspace = true }
 miniscript = { workspace = true, features = ["std"] }
@@ -20,7 +20,7 @@ tokio-rustls = { workspace = true }
 toml = { workspace = true }
 tower-http = { version = "0.6", optional = true, features = ["cors"] }
 tracing = { workspace = true }
-zmq = { version = "0.10", optional = true }
+zmq = { version = "0.10", optional = true, default-features = false }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["bitcoinkernel"] }

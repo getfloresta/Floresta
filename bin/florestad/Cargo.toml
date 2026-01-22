@@ -22,10 +22,10 @@ categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 bitcoin = { workspace = true }
 clap = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
-dirs = "4.0"
+dirs = { version = "4.0", default-features = false }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-appender = "0.2"
+tracing-appender = { version = "0.2", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["chrono", "ansi", "env-filter"] }
 
 # Local dependencies

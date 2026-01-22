@@ -45,27 +45,27 @@ readme = "README.md"
 # We accept all compatible patch versions, so specifying patch level is misleading.
 # For exact versions when needed, use "=1.9.1"
 [workspace.dependencies]
-axum = "0.8"
-bitcoin = { version = "0.32", features = ["serde"] }
-clap = { version = "4.5", features = ["derive"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tracing", "tokio"] }
+bitcoin = { version = "0.32", default-features = false }
+clap = { version = "4.5", default-features = false, features = ["derive", "std"] }
 corepc-types = "0.11"
-console-subscriber = "0.5"
+console-subscriber = { version = "0.5", default-features = false }
 dns-lookup = "2.1"
 hex = "0.4"
 kv = "0.24"
 miniscript = { version = "12.3", default-features = false }
 rand = "0.8"
-rcgen = "0.13"
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustreexo = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = { version = "0.10", default-features = false }
-spin = "0.10"
+spin = { version = "0.10", default-features = false, features = ["spin_mutex", "rwlock"] }
 tempfile = "3.23"
-tokio = { version = "1.48", features = ["full"] }
+tokio = { version = "1.48", features = ["net", "time", "rt-multi-thread", "signal", "macros"] }
 tokio-rustls = "0.26"
-toml = "0.9"
-tracing = "0.1"
+toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
+tracing = { version = "0.1", default-features = false }
 zstd = "0.13"
 
 # Local dependencies
