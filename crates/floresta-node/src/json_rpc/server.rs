@@ -30,7 +30,10 @@ use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_wire::node_interface::NodeInterface;
 use floresta_wire::node_interface::PeerInfo;
+use jsonrpc::Response;
+use serde_json::from_value;
 use serde_json::json;
+use serde_json::value::RawValue;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -41,7 +44,6 @@ use tracing::info;
 use super::res::GetBlockRes;
 use super::res::JsonRpcError;
 use super::res::RawTxJson;
-use super::res::RpcError;
 use super::res::ScriptPubKeyJson;
 use super::res::ScriptSigJson;
 use super::res::TxInJson;
@@ -538,45 +540,43 @@ async fn json_rpc_request(
     debug!("Received JSON-RPC request: {req:?}");
 
     let id = req.id.clone();
-    let res = handle_json_rpc_request(req, state.clone()).await;
+    let res = handle_json_rpc_request(req.clone(), state.clone()).await;
 
     state.inflight.write().await.remove(&id);
 
+    let mut response_building = Response {
+        result: None,
+        error: None,
+        id: req.id,
+        jsonrpc: req.jsonrpc,
+    };
+
+    let mut ret_body = axum::http::Response::builder().header("Content-Type", "application/json");
+
     match res {
         Ok(res) => {
-            let body = serde_json::json!({
-                "result": res,
-                "id": id,
-            });
-
-            axum::http::Response::builder()
-                .status(axum::http::StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
+            response_building.result = Some(RawValue::from_string(res.to_string()).unwrap());
+            ret_body = ret_body.status(axum::http::StatusCode::OK);
         }
 
         Err(e) => {
             let http_error_code = get_http_error_code(&e);
             let json_rpc_error_code = get_json_rpc_error_code(&e);
-            let error = RpcError {
-                code: json_rpc_error_code,
-                message: e.to_string(),
-                data: None,
-            };
-
-            let body = serde_json::json!({
-                "error": error,
-                "id": id,
+            let error = json!({
+                "code": json_rpc_error_code,
+                "message": e.to_string(),
             });
 
-            axum::http::Response::builder()
-                .status(axum::http::StatusCode::from_u16(http_error_code).unwrap())
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
+            response_building.error = Some(from_value(error).unwrap());
+            ret_body = ret_body.status(axum::http::StatusCode::from_u16(http_error_code).unwrap());
         }
-    }
+    };
+
+    ret_body
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&response_building).unwrap(),
+        ))
+        .unwrap()
 }
 
 async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<serde_json::Value> {

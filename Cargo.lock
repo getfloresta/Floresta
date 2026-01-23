@@ -1081,6 +1081,7 @@ dependencies = [
  "floresta-electrum",
  "floresta-watch-only",
  "floresta-wire",
+ "jsonrpc",
  "libc",
  "metrics",
  "miniscript",

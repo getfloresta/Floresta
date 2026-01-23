@@ -123,13 +123,6 @@ pub enum GetBlockRes {
     Serialized(String),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RpcError {
-    pub code: i32,
-    pub message: String,
-    pub data: Option<String>,
-}
-
 /// Return type for the `gettxoutproof` rpc command, the internal is
 /// just the hex representation of the Merkle Block, which was defined
 /// by btc core.

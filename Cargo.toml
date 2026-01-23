@@ -52,6 +52,7 @@ dns-lookup = "2.1"
 hex = "0.4"
 kv = "0.24"
 miniscript = { version = "12.3", default-features = false }
+jsonrpc = { version = "0.18" }
 rand = "0.8"
 rcgen = "0.13"
 rustreexo = "0.4"
