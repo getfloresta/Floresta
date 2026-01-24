@@ -15,7 +15,8 @@ fn main() {
     // First, we need some place to store the wallet data. Here, we use an in-memory database,
     // that will be destroyed when the program exits. You can use any database that implements
     // the `AddressCacheDatabase` trait.
-    let wallet_data = MemoryDatabase::new();
+    let wallet_data = SqliteDatabase::new_ephemeral().unwrap();
+
     // Then, we create the wallet itself.
     let wallet = AddressCache::new(wallet_data);
     // Now, we need to add the addresses we want to watch. We can add them one by one, or

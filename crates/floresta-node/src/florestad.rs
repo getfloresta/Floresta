@@ -716,7 +716,7 @@ impl Florestad {
         })
     }
 
-    fn load_wallet(data_dir: &String) -> Result<AddressCache<KvDatabase>, FlorestadError> {
+    fn load_wallet(data_dir: &str) -> Result<AddressCache<SqliteDatabase>, FlorestadError> {
         let database =
             SqliteDatabase::new(data_dir).map_err(FlorestadError::CouldNotOpenSqLiteDatabase)?;
         Ok(AddressCache::new(database))

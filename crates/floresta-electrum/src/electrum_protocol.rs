@@ -956,9 +956,8 @@ mod test {
         headers
     }
 
-    fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
-        let test_id: u32 = rand::random();
-        let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
+    fn get_test_cache() -> Arc<AddressCache<SqliteDatabase>> {
+        let cache = SqliteDatabase::new_ephemeral().unwrap();
         let cache = AddressCache::new(cache);
 
         // Inserting test transactions in the wallet
