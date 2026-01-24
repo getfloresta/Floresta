@@ -78,7 +78,7 @@ pub enum FlorestadError {
     InvalidDataDir(String),
 
     /// Obtaining a lock on the data directory.
-    CouldNotOpenSqLiteDatabase(SqliteDatabaseError),
+    CouldNotOpenSqliteDatabase(SqliteDatabaseError),
 
     /// Initializing the watch-only wallet.
     CouldNotInitializeWallet(WatchOnlyError<SqliteDatabaseError>),
@@ -175,7 +175,7 @@ impl Display for FlorestadError {
             FlorestadError::InvalidDataDir(path) => {
                 write!(f, "Data directory doesn't exist or is not writable: {path}")
             }
-            FlorestadError::CouldNotOpenSqLiteDatabase(err) => {
+            FlorestadError::CouldNotOpenSqliteDatabase(err) => {
                 write!(f, "Could not open the sqlite database: {err}")
             }
             FlorestadError::CouldNotInitializeWallet(err) => {
