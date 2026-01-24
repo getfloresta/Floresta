@@ -40,7 +40,7 @@ tokio = { workspace = true }
 # Local dependencies
 floresta = { path = "../floresta", features = [
     "bitcoinkernel",
-    "memory-database",
+    "sqlite",
     "electrum-server",
     "watch-only-wallet",
 ] }
@@ -51,7 +51,7 @@ electrum-server = ["dep:floresta-electrum"]
 bitcoinkernel = ["floresta-chain/bitcoinkernel"]
 watch-only-wallet = ["dep:floresta-watch-only"]
 # Works only if `watch-only-wallet` is set
-memory-database = ["floresta-watch-only?/memory-database"]
+sqlite = ["floresta-watch-only?/sqlite"]
 flat-chainstore = ["floresta-chain/flat-chainstore"]
 
 [lib]
