@@ -6,7 +6,7 @@ use bitcoin::consensus::deserialize;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::ScriptBuf;
 use floresta_common::get_spk_hash;
-use floresta_watch_only::memory_database::MemoryDatabase;
+use floresta_watch_only::sqlite_database::SqliteDatabase;
 use floresta_watch_only::AddressCache;
 use miniscript::bitcoin::secp256k1::Secp256k1;
 use miniscript::Descriptor;
