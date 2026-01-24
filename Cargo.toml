@@ -52,7 +52,6 @@ corepc-types = "0.11"
 console-subscriber = { version = "0.5", default-features = false }
 dns-lookup = "2.1"
 hex = "0.4"
-kv = "0.24"
 miniscript = { version = "12.3", default-features = false }
 rand = "0.8"
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }

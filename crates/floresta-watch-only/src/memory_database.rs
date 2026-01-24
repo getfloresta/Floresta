@@ -2,7 +2,7 @@
 //! volatile, and all data is lost after the database is dropped or the process is terminated.
 //! It's not meant to use in production, but for the integrated testing framework
 //!
-//! For actual databases that can be used for production code, see [KvDatabase](crate::kv_database::KvDatabase).
+//! For actual databases that can be used for production code, see [SqliteDatabase](crate::sqlite_database::SqliteDatabase).
 use bitcoin::hashes::sha256;
 use bitcoin::Txid;
 use floresta_common::prelude::sync::RwLock;

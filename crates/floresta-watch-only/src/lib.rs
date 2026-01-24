@@ -18,7 +18,6 @@ use floresta_chain::UtxoData;
 use floresta_common::get_spk_hash;
 use floresta_common::parse_descriptors;
 
-pub mod kv_database;
 #[cfg(any(test, feature = "memory-database"))]
 pub mod memory_database;
 pub mod merkle;
