@@ -20,6 +20,9 @@ use floresta_common::parse_descriptors;
 
 pub mod merkle;
 
+#[cfg(any(test, feature = "sqlite"))]
+pub mod sqlite_database;
+
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hash_types::Txid;
@@ -112,7 +115,7 @@ impl Default for CachedTransaction {
 }
 
 /// An address inside our cache, contains all information we need to satisfy electrum's requests
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CachedAddress {
     script_hash: Hash,
     balance: u64,
@@ -123,7 +126,7 @@ pub struct CachedAddress {
 
 /// Holds some useful data about our wallet, like how many addresses we have, how many
 /// transactions we have, etc.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Stats {
     pub address_count: usize,
     pub transaction_count: usize,
@@ -139,7 +142,7 @@ pub trait AddressCacheDatabase {
     type Error: fmt::Debug + Send + Sync + 'static;
     /// Saves a new address to the database. If the address already exists, `update` should
     /// be used instead
-    fn save(&self, address: &CachedAddress);
+    fn save(&self, address: &CachedAddress) -> Result<(), Self::Error>;
     /// Loads all addresses we have cached so far
     fn load(&self) -> Result<Vec<CachedAddress>, Self::Error>;
     /// Loads the data associated with our watch-only wallet.
@@ -147,7 +150,7 @@ pub trait AddressCacheDatabase {
     /// Saves the data associated with our watch-only wallet.
     fn save_stats(&self, stats: &Stats) -> Result<(), Self::Error>;
     /// Updates an address, probably because a new transaction arrived
-    fn update(&self, address: &CachedAddress);
+    fn update(&self, address: &CachedAddress) -> Result<(), Self::Error>;
     /// TODO: Maybe turn this into another db
     /// Returns the height of the last block we filtered
     fn get_cache_height(&self) -> Result<u32, Self::Error>;
@@ -325,7 +328,9 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
             transactions: Vec::new(),
             utxos: Vec::new(),
         };
-        self.database.save(&new_address);
+        self.database
+            .save(&new_address)
+            .expect("Database not working");
 
         self.address_map.insert(hash, new_address);
         self.script_set.insert(hash);
@@ -442,7 +447,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
         if let Some(address) = self.address_map.get_mut(&hash) {
             if !address.transactions.contains(&transaction_to_cache.hash) {
                 address.transactions.push(transaction_to_cache.hash);
-                self.database.update(address);
+                self.database.update(address).expect("Database not working");
             }
         }
     }
@@ -486,7 +491,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
 
             if !address.transactions.contains(&transaction_to_cache.hash) {
                 address.transactions.push(transaction_to_cache.hash);
-                self.database.update(address);
+                self.database.update(address).expect("Database not working");
             }
         }
     }
@@ -529,7 +534,9 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
                 transactions: Vec::new(),
                 utxos: Vec::new(),
             };
-            self.database.save(&new_address);
+            self.database
+                .save(&new_address)
+                .expect("Database not working");
 
             e.insert(new_address);
             self.script_set.insert(hash);
@@ -795,7 +802,7 @@ mod test {
     use floresta_common::get_spk_hash;
     use floresta_common::prelude::*;
 
-    use super::memory_database::MemoryDatabase;
+    use super::sqlite_database::SqliteDatabase;
     use super::AddressCache;
     use crate::merkle::MerkleProof;
 
@@ -807,8 +814,9 @@ mod test {
         deserialize(&hex).unwrap()
     }
 
-    fn get_test_cache() -> AddressCache<MemoryDatabase> {
-        let database = MemoryDatabase::new();
+    fn get_test_cache() -> AddressCache<SqliteDatabase> {
+        let database = SqliteDatabase::new_ephemeral().unwrap();
+
         AddressCache::new(database)
     }
 

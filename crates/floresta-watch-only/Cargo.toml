@@ -12,9 +12,8 @@ readme.workspace = true # Floresta/README.md
 
 [dependencies]
 bitcoin = { workspace = true, features = ["serde"] }
-kv = { workspace = true }
+rusqlite = { version = "0.38", optional = true, features = [ "bundled", "buildtime_bindgen" ], default-features = false  }
 serde = { workspace = true }
-serde_json = { workspace = true, features = ["alloc"] }
 tracing = { workspace = true }
 
 # Local dependencies
@@ -23,10 +22,12 @@ floresta-common = { workspace = true, features = ["descriptors-no-std"] }
 
 [dev-dependencies]
 rand = { workspace = true }
+rusqlite = { version = "0.38", features = [ "bundled", "buildtime_bindgen" ], default-features = false }
 
 [features]
-default = ["std"]
-memory-database = []
+default = ["std", "sqlite"]
+sqlite = ["dep:rusqlite"]
+test-utils = ["sqlite"]
 # The default features in common are `std` and `descriptors-std` (which is a superset of `descriptors-no-std`)
 std = ["floresta-common/default", "serde/std"]
 

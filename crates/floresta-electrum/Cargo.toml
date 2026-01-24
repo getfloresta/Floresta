@@ -39,6 +39,7 @@ zstd = { workspace = true }
 # Local dev-dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-mempool = { workspace = true }
+floresta-watch-only = { workspace = true, features = ["test-utils"] }
 
 [lints]
 workspace = true
