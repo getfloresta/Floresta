@@ -5,7 +5,7 @@ This is an example of how a tests with bitcoin should look like,
 see `tests/test_framework/test_framework.py` for more info.
 """
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class BitcoindTest(FlorestaTestFramework):
@@ -28,7 +28,7 @@ class BitcoindTest(FlorestaTestFramework):
         """
         Here we define setup for test adding a node definition
         """
-        self.bitcoind = self.add_node(variant="bitcoind")
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     # All tests should override the run_test method
     def run_test(self):

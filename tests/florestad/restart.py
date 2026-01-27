@@ -8,9 +8,7 @@ The test verifies that the node can stop and restart without encountering
 issues, such as data corruption or failure to initialize.
 """
 
-from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class TestRestart(FlorestaTestFramework):
@@ -24,13 +22,8 @@ class TestRestart(FlorestaTestFramework):
         Here we define setup for test
         """
 
-        self.data_dir = TestRestart.create_data_dirs(
-            DATA_DIR, self.__class__.__name__.lower(), 1
-        )[0]
-
-        self.floresta = self.add_node(
-            variant="florestad",
-            extra_args=[f"--data-dir={self.data_dir}"],
+        self.floresta = self.add_node_default_args(
+            variant=NodeType.FLORESTAD,
         )
 
     def run_test(self):

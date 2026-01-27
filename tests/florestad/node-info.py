@@ -5,7 +5,7 @@ Tests for node information exchanged between Floresta and other peers.
 import time
 import re
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class NodeInfoTest(FlorestaTestFramework):
@@ -14,9 +14,9 @@ class NodeInfoTest(FlorestaTestFramework):
         """
         Setup a florestad and a bitcoind node
         """
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.bitcoind = self.add_node(variant="bitcoind")
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def run_test(self):
         """
@@ -26,10 +26,8 @@ class NodeInfoTest(FlorestaTestFramework):
         self.run_node(self.bitcoind)
         self.run_node(self.florestad)
 
-        bitcoind_port = self.bitcoind.get_port("p2p")
-
         result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
+            node=self.bitcoind.p2p_url,
             command="add",
             v2transport=True,
         )
@@ -51,7 +49,7 @@ class NodeInfoTest(FlorestaTestFramework):
         self.assertEqual(peer_info[0]["inbound"], True)
 
         peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(peer_info[0]["address"], f"127.0.0.1:{bitcoind_port}")
+        self.assertEqual(peer_info[0]["address"], self.bitcoind.p2p_url)
         self.assertEqual(peer_info[0]["kind"], "regular")
         self.assertEqual(
             peer_info[0]["services"],

@@ -5,9 +5,7 @@ This functional test cli utility to interact with a Floresta node with `uptime`
 """
 
 import time
-from test_framework import FlorestaTestFramework, Node
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework import FlorestaTestFramework, Node, NodeType
 
 
 class UptimeTest(FlorestaTestFramework):
@@ -22,22 +20,12 @@ class UptimeTest(FlorestaTestFramework):
         Setup the two node florestad process with different data-dirs, electrum-addresses
         and rpc-addresses in the same regtest network
         """
-        data_dirs = UptimeTest.create_data_dirs(
-            DATA_DIR, self.__class__.__name__.lower(), nodes=2
+        self.florestad = self.add_node_default_args(
+            variant=NodeType.FLORESTAD,
         )
 
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[
-                f"--data-dir={data_dirs[0]}",
-            ],
-        )
-
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
-            extra_args=[
-                f"-datadir={data_dirs[1]}",
-            ],
+        self.bitcoind = self.add_node_default_args(
+            variant=NodeType.BITCOIND,
         )
 
     def test_node_uptime(self, node: Node, test_time: int, margin: int):

@@ -4,8 +4,7 @@ floresta_cli_getblockchainfo.py
 This functional test cli utility to interact with a Floresta node with `getblockchaininfo`
 """
 
-from test_framework import FlorestaTestFramework
-from test_framework.rpc.floresta import REGTEST_RPC_SERVER
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class GetBlockchaininfoTest(FlorestaTestFramework):
@@ -30,7 +29,7 @@ class GetBlockchaininfoTest(FlorestaTestFramework):
         """
         Setup a single node
         """
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
     def run_test(self):
         """

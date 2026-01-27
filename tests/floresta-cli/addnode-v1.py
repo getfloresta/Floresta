@@ -11,7 +11,7 @@ in context of the v1 transport protocol.
 import re
 import time
 
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, NodeType
 
 DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
 
@@ -25,18 +25,13 @@ class AddnodeTestV1(FlorestaTestFramework):
         """
         name = self.__class__.__name__.lower()
         self.v2transport = False
-        self.data_dirs = AddnodeTestV1.create_data_dirs(DATA_DIR, name, 2)
 
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[f"--data-dir={self.data_dirs[0]}"],
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
+        self.bitcoind = self.add_node_extra_args(
+            variant=NodeType.BITCOIND,
             extra_args=[
-                f"-datadir={self.data_dirs[1]}",
-                f"-v2transport={1 if self.v2transport else 0}",
+                f"-v2transport=0",
             ],
         )
 
@@ -64,9 +59,11 @@ class AddnodeTestV1(FlorestaTestFramework):
         """
         Send an `addnode` RPC from Floresta to the bitcoind peer using the given command.
         """
-        self.log(f"Floresta adding node {self.bitcoind_addr} with command '{command}'")
+        self.log(
+            f"Floresta adding node {self.bitcoind.p2p_url} with command '{command}'"
+        )
         result = self.florestad.rpc.addnode(
-            node=self.bitcoind_addr,
+            node=self.bitcoind.p2p_url,
             command=command,
             v2transport=self.v2transport,
         )
@@ -90,8 +87,6 @@ class AddnodeTestV1(FlorestaTestFramework):
         self.log("===== Starting florestad and bitcoind nodes")
         self.run_node(self.florestad)
         self.run_node(self.bitcoind)
-
-        self.bitcoind_addr = f"127.0.0.1:{self.bitcoind.get_port('p2p')}"
 
         self.log("===== Add bitcoind as a persistent peer to Floresta")
         self.floresta_addnode_with_command("add")

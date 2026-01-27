@@ -7,9 +7,7 @@ This functional test cli utility to interact with a Floresta node with `getblock
 import time
 import random
 
-from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework import FlorestaTestFramework, NodeType
 
 
 class GetBlockTest(FlorestaTestFramework):
@@ -17,17 +15,8 @@ class GetBlockTest(FlorestaTestFramework):
     def set_test_params(self):
 
         self.v2transport = True
-        self.data_dirs = GetBlockTest.create_data_dirs(DATA_DIR, "get_block", 2)
-
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[f"--data-dir={self.data_dirs[0]}"],
-        )
-
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
-            extra_args=[f"-datadir={self.data_dirs[1]}", "-v2transport=1"],
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def compare_block(self, height: int):
         block_hash = self.bitcoind.rpc.get_blockhash(height)
@@ -61,9 +50,8 @@ class GetBlockTest(FlorestaTestFramework):
         self.bitcoind.rpc.generate_block(6)
 
         self.log("Connecting florestad to bitcoind")
-        bitcoind_port = self.bitcoind.get_port("p2p")
         self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
+            node=self.bitcoind.p2p_url,
             command="add",
             v2transport=self.v2transport,
         )
