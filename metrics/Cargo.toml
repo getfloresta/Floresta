@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 axum = { workspace = true }
 prometheus-client = "0.22"
-sysinfo = "0.36"
+sysinfo = { version = "0.36", default-features= false, features = ["system"] }
 tokio = { workspace = true }
 
 [lints]
