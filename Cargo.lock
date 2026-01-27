@@ -1096,6 +1096,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "floresta-domain"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "rustreexo",
+]
+
+[[package]]
 name = "floresta-electrum"
 version = "0.5.0"
 dependencies = [

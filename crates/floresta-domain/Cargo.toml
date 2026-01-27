@@ -1,0 +1,28 @@
+[package]
+name = "floresta-domain"
+version = "0.1.0"
+edition = "2021"
+authors = ["Floresta Developers <contact@getfloresta.org>"]
+description = """
+    Core domain types and traits for Floresta, a Utreexo-based Bitcoin node.
+
+    This crate defines the fundamental business logic abstractions including
+    blockchain state management, transaction mempool, UTXO proofs, and wallet
+    indexing. It provides the shared vocabulary and contracts that all other
+    Floresta crates build upon.
+"""
+repository = "https://github.com/getfloresta/Floresta"
+license.workspace = true
+readme.workspace = true
+keywords = ["bitcoin", "utreexo", "domain", "blockchain", "mempool"]
+categories = ["cryptography::cryptocurrencies"]
+
+[dependencies]
+bitcoin = { workspace = true, features = ["serde", "std"] }
+rustreexo = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true
