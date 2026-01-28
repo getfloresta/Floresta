@@ -158,6 +158,8 @@ pub struct ScriptSigJson {
 /// General information about our peers. Returned by get_peer_info
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PeerInfo {
+    /// This peer's ID in the peer manager.
+    pub id: u32,
     /// The network address for this peer.
     pub address: String,
     /// A string with the services this peer advertises. E.g. NODE_NETWORK, UTREEXO, WITNESS...

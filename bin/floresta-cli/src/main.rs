@@ -109,7 +109,10 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             let transport = v2transport.unwrap_or(false);
             serde_json::to_string_pretty(&client.add_node(node, command, transport)?)?
         }
-
+        Methods::DisconnectNode {
+            node_address,
+            node_id,
+        } => serde_json::to_string_pretty(&client.disconnect_node(node_address, node_id)?)?,
         Methods::FindTxOut {
             txid,
             vout,
@@ -302,6 +305,18 @@ pub enum Methods {
         node: String,
         command: AddNodeCommand,
         v2transport: Option<bool>,
+    },
+
+    #[doc = include_str!("../../../doc/rpc/disconnectnode.md")]
+    #[command(
+        name = "disconnectnode",
+        about = "Immediately disconnect from a peer",
+        long_about = Some(include_str!("../../../doc/rpc/disconnectnode.md")),
+        disable_help_subcommand = true
+    )]
+    DisconnectNode {
+        node_address: String,
+        node_id: Option<usize>,
     },
 
     #[command(name = "findtxout")]

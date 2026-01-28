@@ -127,6 +127,21 @@ where
                 let _ = responder.send(node_response);
                 return;
             }
+            UserRequest::Disconnect((addr, port)) => {
+                let node_response = match self.handle_disconnect_peer(addr, port) {
+                    Ok(_) => {
+                        info!("Disconnected from peer {addr}:{port}");
+                        NodeResponse::Disconnect(true)
+                    }
+                    Err(err) => {
+                        warn!("Failed to disconnect from peer {addr}:{port}: {err:?}");
+                        NodeResponse::Disconnect(false)
+                    }
+                };
+
+                let _ = responder.send(node_response);
+                return;
+            }
         };
 
         let peer = self.send_to_fastest_peer(req, ServiceFlags::NONE);

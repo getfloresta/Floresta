@@ -6,7 +6,9 @@ Brief description of what this RPC does and its primary purpose.
 
 ### Synopsis
 
+```
 floresta-cli <command> <param1, parameter_type> <param2> [<optional_flag, (-f or --flag)>]
+```
 
 ### Examples
 

@@ -31,13 +31,14 @@ floresta-cli addnode 192.168.0.1 onetry false
 
 ## Returns
 
-### Ok Response
+### Ok response
 
 - json null
 
-### Error Enum `CommandError`
+### Error response
 
-Any of the error types on `rpc_types::Error`.
+- `InvalidAddress` - The provided address is not a valid socket address or IP address
+- `InvalidAddnodeCommand` - The command is not one of 'add', 'remove', or 'onetry'
 
 ## Notes
 

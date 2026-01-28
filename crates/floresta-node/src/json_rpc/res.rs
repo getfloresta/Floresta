@@ -179,9 +179,6 @@ pub enum JsonRpcError {
     /// This error is returned when there is an error decoding the request, e.g., if the request is not valid JSON
     Decode(String),
 
-    /// The provided port is invalid, e.g., when it is not a valid port number (0-65535)
-    InvalidPort,
-
     /// The provided address is invalid, e.g., when it is not a valid IP address or hostname
     InvalidAddress,
 
@@ -211,6 +208,12 @@ pub enum JsonRpcError {
     /// This error is returned when the addnode command is invalid, e.g., if the command is not recognized or when the parameters are incorrect
     InvalidAddnodeCommand,
 
+    /// Invalid `disconnect` node command (both address and ID parameters are present).
+    InvalidDisconnectNodeCommand,
+
+    /// Peer was not found in the peer list.
+    PeerNotFound,
+
     /// Raised if when the rescanblockchain command, with the timestamp flag activated, contains some timestamp thats less than the genesis one and not zero which is the default value for this arg.
     InvalidTimestamp,
 }
@@ -231,7 +234,6 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidDescriptor(e) =>  write!(f, "Invalid descriptor: {e}"),
             JsonRpcError::BlockNotFound =>  write!(f, "Block not found"),
             JsonRpcError::Chain => write!(f, "Chain error"),
-            JsonRpcError::InvalidPort => write!(f, "Invalid port"),
             JsonRpcError::InvalidAddress => write!(f, "Invalid address"),
             JsonRpcError::Node(e) => write!(f, "Node error: {e}"),
             JsonRpcError::NoBlockFilters => write!(f, "You don't have block filters enabled, please start florestad without --no-cfilters to run this RPC"),
@@ -243,6 +245,8 @@ impl Display for JsonRpcError {
             JsonRpcError::Filters(e) => write!(f, "Error with filters: {e}"),
             JsonRpcError::ChainWorkOverflow => write!(f, "Overflow while calculating the chain work"),
             JsonRpcError::InvalidAddnodeCommand => write!(f, "Invalid addnode command"),
+            JsonRpcError::InvalidDisconnectNodeCommand => write!(f, "Invalid disconnectnode command"),
+            JsonRpcError::PeerNotFound => write!(f, "Peer not found in the peer list"),
         }
     }
 }

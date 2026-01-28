@@ -82,6 +82,9 @@ pub enum UserRequest {
     /// will not add it to the node's added peers list.
     Onetry((IpAddr, u16, bool)),
 
+    /// Attempt to disconnect from a peer.
+    Disconnect((IpAddr, u16)),
+
     /// Ping all connected peers to check if they are alive.
     Ping,
 }
@@ -93,6 +96,7 @@ pub enum UserRequest {
 /// services it provides, the user agent it's using, the height of the blockchain it's currently
 /// at, its state and the kind of connection it has with the node.
 pub struct PeerInfo {
+    pub id: u32,
     pub address: SocketAddr,
     #[serde(serialize_with = "serialize_service_flags")]
     pub services: ServiceFlags,
@@ -129,6 +133,9 @@ pub enum NodeResponse {
 
     /// A response indicating whether a peer was successfully removed.
     Remove(bool),
+
+    // A response indicating whether a peer was successfully disconnected from.
+    Disconnect(bool),
 
     /// A response indicating whether a peer was successfully connected once.
     Onetry(bool),
@@ -208,6 +215,21 @@ impl NodeInterface {
     ) -> Result<bool, oneshot::error::RecvError> {
         let val = self.send_request(UserRequest::Remove((addr, port))).await?;
         extract_variant!(Remove, val);
+    }
+
+    /// Immediately disconnect from a peer.
+    ///
+    /// Returns a bool indicating whether the disconnection was successful.
+    pub async fn disconnect_peer(
+        &self,
+        addr: IpAddr,
+        port: u16,
+    ) -> Result<bool, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::Disconnect((addr, port)))
+            .await?;
+
+        extract_variant!(Disconnect, val);
     }
 
     /// Attempts to connect to a peer once.

@@ -113,6 +113,11 @@ pub trait FlorestaRPC {
     /// P2P protocol.
     #[doc = include_str!("../../../doc/rpc/addnode.md")]
     fn add_node(&self, node: String, command: AddNodeCommand, v2transport: bool) -> Result<Value>;
+    /// Immediately disconnect from a peer.
+    ///
+    /// The peer can be referenced either by node_address or node_id.
+    /// If referencing by node_id, an empty string must be passed as the node_address.
+    fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value>;
     /// Finds an specific utxo in the chain
     ///
     /// You can use this to look for a utxo. If it exists, it will return the amount and
@@ -191,6 +196,19 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                 Value::Bool(v2transport),
             ],
         )
+    }
+
+    fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value> {
+        match node_id {
+            Some(node_id) => self.call(
+                "disconnectnode",
+                &[
+                    Value::String(node_address),
+                    Value::Number(Number::from(node_id)),
+                ],
+            ),
+            None => self.call("disconnectnode", &[Value::String(node_address)]),
+        }
     }
 
     fn stop(&self) -> Result<String> {
