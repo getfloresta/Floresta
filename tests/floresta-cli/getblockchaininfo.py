@@ -6,6 +6,11 @@ This functional test cli utility to interact with a Floresta node with `getblock
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.constants import (
+    GENESIS_BLOCK_HASH,
+    GENESIS_BLOCK_DIFFICULTY_INT,
+    GENESIS_BLOCK_HEIGHT,
+)
 
 
 class GetBlockchaininfoTest(FlorestaTestFramework):
@@ -14,9 +19,6 @@ class GetBlockchaininfoTest(FlorestaTestFramework):
     """
 
     nodes = [-1]
-    best_block = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-    difficulty = 1
-    height = 0
     ibd = True
     latest_block_time = 1296688602
     latest_work = "0000000000000000000000000000000000000000000000000000000000000002"
@@ -41,9 +43,9 @@ class GetBlockchaininfoTest(FlorestaTestFramework):
 
         # Test assertions
         response = self.florestad.rpc.get_blockchain_info()
-        self.assertEqual(response["best_block"], GetBlockchaininfoTest.best_block)
-        self.assertEqual(response["difficulty"], GetBlockchaininfoTest.difficulty)
-        self.assertEqual(response["height"], GetBlockchaininfoTest.height)
+        self.assertEqual(response["best_block"], GENESIS_BLOCK_HASH)
+        self.assertEqual(response["difficulty"], GENESIS_BLOCK_DIFFICULTY_INT)
+        self.assertEqual(response["height"], GENESIS_BLOCK_HEIGHT)
         self.assertEqual(response["ibd"], GetBlockchaininfoTest.ibd)
         self.assertEqual(
             response["latest_block_time"], GetBlockchaininfoTest.latest_block_time
