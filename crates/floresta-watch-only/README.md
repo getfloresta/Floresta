@@ -2,19 +2,15 @@
 
 `floresta-watch-only` is a lightweight, Electrum-first watch-only wallet for the Floresta project. It tracks Bitcoin addresses using public descriptors, processes blocks in real-time for transaction detection, manages UTXOs with spent-output tracking, and generates Merkle proofs for SPV verification. It supports HD wallets through descriptor-based address derivation, implements the `BlockConsumer` trait to receive block notifications from `floresta-chain`, and provides persistent storage with pluggable database backends.
 
-This crate is used by `floresta-electrum` to power the Electrum server's address history, balance queries, and UTXO lookups.
+This crate powers `florestad`'s RPC and `floresta-electrum` with address history, balance query and UTXO lookups.
 
 ## Why Use a Watch-Only Wallet
 
-Watch-only wallets track Bitcoin addresses and transactions using only public descriptors and derived addresses. This design is fundamental for building server infrastructure that needs to index and serve blockchain data to clients without signing capabilities.
+Watch-only wallets track Bitcoin addresses and transactions using only public descriptors and derived addresses. Since no secret keys are stored or handled, a compromised watch-only wallet cannot spend funds — it can only reveal which addresses belong to the wallet and their transaction history. This security tradeoff makes it safe to run on internet-facing servers, where the risk of compromise is higher, while keeping signing capabilities entirely separate.
 
 ### Electrum Server Infrastructure
 
-Power Electrum protocol servers by efficiently indexing addresses, transactions, and UTXOs. Clients connect to query their wallet data without the server having access to signing capabilities.
-
-### Address Indexing at Scale
-
-Track thousands of addresses across multiple wallets and users with optimized in-memory caching and persistent storage, making it suitable for multi-user server deployments.
+Serve Electrum protocol clients by caching addresses, transactions, and UTXOs that belong to the user's wallets. Only data related to watched wallets is stored, not the entire blockchain index.
 
 ### Blockchain Monitoring Services
 
