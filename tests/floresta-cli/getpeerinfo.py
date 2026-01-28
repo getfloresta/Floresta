@@ -5,7 +5,6 @@ This functional test cli utility to interact with a Floresta node with `getpeeri
 """
 
 from test_framework import FlorestaTestFramework
-from test_framework.rpc.floresta import REGTEST_RPC_SERVER
 
 
 class GetPeerInfoTest(FlorestaTestFramework):

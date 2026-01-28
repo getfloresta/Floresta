@@ -8,6 +8,7 @@ and utreexod, respectively.
 import re
 import time
 from test_framework import FlorestaTestFramework
+from test_framework.constants import WALLET_ADDRESS
 
 
 class GetBestblockhashTest(FlorestaTestFramework):
@@ -23,8 +24,6 @@ class GetBestblockhashTest(FlorestaTestFramework):
         of floresta and utreexod, respectively.
     """
 
-    best_block = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-
     def set_test_params(self):
         """
         Setup a florestad node and a utreexod mining node
@@ -34,7 +33,7 @@ class GetBestblockhashTest(FlorestaTestFramework):
         self.utreexod = self.add_node(
             variant="utreexod",
             extra_args=[
-                "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
+                f"--miningaddr={WALLET_ADDRESS}",
                 "--prune=0",
             ],
         )

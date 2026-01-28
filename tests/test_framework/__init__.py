@@ -37,6 +37,7 @@ from test_framework.rpc.utreexo import UtreexoRPC
 from test_framework.rpc.bitcoin import REGTEST_RPC_SERVER as bitcoind_rpc_server
 from test_framework.rpc.floresta import REGTEST_RPC_SERVER as florestad_rpc_server
 from test_framework.rpc.utreexo import REGTEST_RPC_SERVER as utreexod_rpc_server
+from test_framework.constants import FLORESTA_TEMP_DIR
 
 
 class Node:
@@ -345,12 +346,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         Get path for florestad used in integration tests, generally set on
         $FLORESTA_TEMP_DIR/binaries
         """
-        if os.getenv("FLORESTA_TEMP_DIR") is None:
-            raise RuntimeError(
-                "FLORESTA_TEMP_DIR not set. "
-                + " Please set it to the path of the integration test directory."
-            )
-        return os.getenv("FLORESTA_TEMP_DIR")
+        return FLORESTA_TEMP_DIR
 
     @staticmethod
     def get_logs_dir():
@@ -369,7 +365,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
                 "Failed to run 'git describe'. Run this at the Floresta directory."
             ) from exc
 
-        base_dir = FlorestaTestFramework.get_integration_test_dir()
+        base_dir = FLORESTA_TEMP_DIR
         logs_data_dir = os.path.join(base_dir, "logs", git_describe)
 
         return logs_data_dir
@@ -426,9 +422,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         # path to the integration test dir
         # tempfile will be used to get the proper
         # temp dir for the OS
-        tls_rel_path = os.path.join(
-            FlorestaTestFramework.get_integration_test_dir(), "data", "tls"
-        )
+        tls_rel_path = os.path.join(FLORESTA_TEMP_DIR, "data", "tls")
         tls_path = os.path.normpath(os.path.abspath(tls_rel_path))
 
         # Create the folder if not exists
@@ -666,7 +660,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         --key=value strings (see florestad --help for a list of available
         commands)
         """
-        tempdir = str(self.get_integration_test_dir())
+        tempdir = str(FLORESTA_TEMP_DIR)
         targetdir = os.path.join(tempdir, "binaries")
         testname = self.__class__.__name__.lower()
 

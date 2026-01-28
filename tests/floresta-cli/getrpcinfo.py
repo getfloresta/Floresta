@@ -54,7 +54,9 @@ class GetRpcInfoTest(FlorestaTestFramework):
         # Check the command structure
         self.assertEqual(command["method"], "getrpcinfo")
         self.assertTrue(command["duration"] > 0)
-        self.assertEqual(result["logpath"], os.path.normpath(expected_logpath))
+        # Check the logpath. Paths may differ (e.g., relative vs absolute),
+        # so verify it contains the expected information.
+        self.assertTrue(os.path.normpath(expected_logpath) in result["logpath"])
 
     def test_floresta_getrpcinfo(self):
         """
