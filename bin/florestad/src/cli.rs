@@ -63,14 +63,13 @@ pub struct Cli {
     pub wallet_xpub: Option<Vec<String>>,
 
     #[arg(long, value_name = "DESCRIPTOR")]
-    /// Add an output descriptor to our wallet
+    /// Add an output descriptor to our wallet.
     ///
-    /// This option can be passed many times, and will accept any valid output descriptor.
-    /// You only need to pass this once, but there's no harm in passing it more than once.
-    /// After you start florestad at least once, passing some xpub, florestad
-    /// will follow the first 100 addresses derived from this xpub on each keychain  and
-    /// cache any transactions where those addresses appear. You can use either the integrated
-    /// json-rpc or electrum server to fetch an address's history, balance and utxos.
+    /// This option can be passed multiple times, as long as each descriptor is valid.
+    /// For each valid descriptor, the node will derive the first 100 addresses and cache any
+    /// transactions related to those addresses.
+    /// You can use the integrated JSON-RPC or Electrum server to fetch the transaction history,
+    /// balance, and UTXOs for these addresses.
     pub wallet_descriptor: Option<Vec<String>>,
 
     #[arg(long, value_name = "BLOCK_HASH|0", default_value = "hardcoded", value_parser = parse_assume_valid)]
