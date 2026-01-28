@@ -1,0 +1,15 @@
+"""
+This module contains constants used throughout the Floresta tests.
+"""
+
+import os
+
+GENESIS_BLOCK_HEIGHT = 0
+GENESIS_BLOCK_HASH = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+GENESIS_BLOCK_DIFFICULTY_INT = 1
+GENESIS_BLOCK_DIFFICULTY_FLOAT = 4.656542373906925e-10
+GENESIS_BLOCK_LEAF_COUNT = 0
+TEST_CHAIN = "regtest"
+FLORESTA_TEMP_DIR = os.getenv("FLORESTA_TEMP_DIR")
+
+WALLET_ADDRESS = "bcrt1q427ze5mrzqupzyfmqsx9gxh7xav538yk2j4cft"
