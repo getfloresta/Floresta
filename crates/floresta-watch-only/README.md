@@ -287,4 +287,4 @@ This library should compile with any combination of features on **Rust 1.81.0**.
 
 ## License
 
-`floresta-watch-only` is released under the terms of the MIT license. See [LICENSE](https://github.com/getfloresta/Floresta/blob/master/LICENSE) for more information or see https://opensource.org/licenses/MIT.
+`floresta-watch-only` is released under the terms of the MIT license. See the [LICENSE](https://github.com/getfloresta/Floresta/blob/master/LICENSE) file for more information.
