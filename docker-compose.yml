@@ -10,6 +10,8 @@ services:
       - 8332:8332
       - 3333:3333
     restart: unless-stopped
+    volumes:
+      - floresta_data:/data/.floresta
   prometheus:
     image: prom/prometheus
     container_name: prometheus
@@ -20,6 +22,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./metrics/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
   grafana:
     image: grafana/grafana
     container_name: grafana
@@ -31,3 +34,12 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=grafana
     volumes:
       - ./metrics/grafana:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  floresta_data:
+    name: floresta_data
+  prometheus_data:
+    name: prometheus_data
+  grafana_data:
+    name: grafana_data

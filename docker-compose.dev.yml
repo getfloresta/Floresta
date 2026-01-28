@@ -1,0 +1,77 @@
+# Docker Compose configuration for Floresta development
+# This file is designed for contributors who want to develop and test changes locally
+#
+# Features:
+# - Source code binding for hot-reloading with cargo-watch
+# - Environment variable support for different networks
+# - Named volumes for data persistence
+#
+# Usage:
+#   NETWORK=signet docker-compose -f docker-compose.dev.yml up
+#   docker-compose -f docker-compose.dev.yml up  # defaults to mainnet
+
+services:
+  floresta-dev:
+    container_name: floresta-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_FEATURES: "metrics"
+    ports:
+      - "${RPC_PORT:-8332}:8332"
+      - "${ELECTRUM_PORT:-50001}:50001"
+      - "${METRICS_PORT:-3333}:3333"
+    environment:
+      - NETWORK=${NETWORK:-bitcoin}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      # Source code binding for development
+      - .:/app:cached
+      # Persistent data directory
+      - floresta_dev_data:/data/.floresta
+      # Cargo cache for faster builds
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_git_cache:/usr/local/cargo/git
+    working_dir: /app
+    # Override command to use cargo-watch for hot-reloading
+    # Uncomment the following line if you have cargo-watch installed in the image
+    # command: cargo watch -x 'run --bin florestad -- -n ${NETWORK:-bitcoin}'
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus-dev
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    volumes:
+      - ./metrics/prometheus:/etc/prometheus
+      - prometheus_dev_data:/prometheus
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana-dev
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-grafana}
+    volumes:
+      - ./metrics/grafana:/etc/grafana/provisioning/datasources
+      - grafana_dev_data:/var/lib/grafana
+
+volumes:
+  floresta_dev_data:
+    name: floresta_dev_data
+  prometheus_dev_data:
+    name: prometheus_dev_data
+  grafana_dev_data:
+    name: grafana_dev_data
+  cargo_cache:
+    name: floresta_cargo_cache
+  cargo_git_cache:
+    name: floresta_cargo_git_cache
