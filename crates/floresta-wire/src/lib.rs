@@ -28,19 +28,11 @@ pub use p2p_wire::address_man;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::block_proof;
 #[cfg(not(target_arch = "wasm32"))]
-pub use p2p_wire::chain_selector;
-#[cfg(not(target_arch = "wasm32"))]
-pub use p2p_wire::mempool;
-#[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::node;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::node_context;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::node_interface;
-#[cfg(not(target_arch = "wasm32"))]
-pub use p2p_wire::running_node;
-#[cfg(not(target_arch = "wasm32"))]
-pub use p2p_wire::sync_node;
 pub use p2p_wire::transport::TransportProtocol;
 pub use p2p_wire::UtreexoNodeConfig;
 

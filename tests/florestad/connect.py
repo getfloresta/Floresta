@@ -7,9 +7,6 @@ the utreexod node is connected to the florestad node.
 """
 
 from test_framework import FlorestaTestFramework
-import time
-
-SLEEP_TIME = 10
 
 
 class CliConnectTest(FlorestaTestFramework):
@@ -33,7 +30,7 @@ class CliConnectTest(FlorestaTestFramework):
         self.log("=== Starting floresta")
         self.run_node(self.florestad)
 
-        time.sleep(SLEEP_TIME)  # Give some time for the nodes to start
+        self.wait_for_peers_connections(self.florestad, self.utreexod)
 
         # Check whether the utreexod is connected to florestad
         self.log("=== Checking connection")

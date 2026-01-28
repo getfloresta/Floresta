@@ -1,4 +1,4 @@
-> [!WARNING]
+> \[!WARNING\]
 > We are currently migrating from the old Utreexo P2P protocol to the new version described in [BIP-0183](https://github.com/bitcoin/bips/pull/1923).
 > Since there are no bridge nodes running the new protocol on mainnet yet, Floresta can currently sync only on 
 > signet. Mainnet support will return once the new protocol design and its implementation in both Floresta and

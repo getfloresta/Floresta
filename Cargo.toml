@@ -11,6 +11,7 @@ members = [
     "crates/floresta-electrum",
     "crates/floresta-watch-only",
     "crates/floresta-wire",
+    "crates/floresta-mempool",
 
     # Binaries
     "bin/florestad",
@@ -31,6 +32,7 @@ default-members = [
     "crates/floresta-electrum",
     "crates/floresta-watch-only",
     "crates/floresta-wire",
+    "crates/floresta-mempool",
     "bin/florestad",
     "bin/floresta-cli",
 ]
@@ -75,6 +77,7 @@ floresta-node = { path = "crates/floresta-node", default-features = false }
 floresta-rpc = { path = "crates/floresta-rpc" }
 floresta-watch-only = { path = "crates/floresta-watch-only" }
 floresta-wire = { path = "crates/floresta-wire" }
+floresta-mempool = { path = "crates/floresta-mempool" }
 metrics = { path = "metrics" }
 
 [workspace.lints.clippy]

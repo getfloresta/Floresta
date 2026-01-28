@@ -11,18 +11,21 @@
 # 2. Run all needed commands for batch executing all python tests suites:
 #
 #       uv run tests/run_tests.py
+check_installed() {
+    if ! command -v "$1" &>/dev/null; then
+        echo "You must have $1 installed to run those tests!"
+        exit 1
+    fi
+}
+
+check_installed uv
+
 set -e
 
 if [[ -z "$FLORESTA_TEMP_DIR" ]]; then
 
-    # This helps us to keep track of the actual version being tested without conflicting with any already installed binaries.
-    HEAD_COMMIT_HASH=$(git rev-parse HEAD)
-
-    # This helps us to keep track of the actual version being tested without conflicting with any already installed binaries.
-    GIT_DESCRIBE=$(git describe --tags --always)
-
     # Since its deterministic how we make the setup, we already know where to search for the binaries to be testing.
-    export FLORESTA_TEMP_DIR="/tmp/floresta-func-tests.${GIT_DESCRIBE}"
+    export FLORESTA_TEMP_DIR="/tmp/floresta-func-tests"
 
 fi
 

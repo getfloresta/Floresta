@@ -15,7 +15,6 @@ keywords = ["bitcoin", "utreexo", "p2p", "networking"]
 categories = ["cryptography::cryptocurrencies", "network-programming"]
 
 [dependencies]
-ahash = "0.8"
 bip324 = { version = "=0.7.0", features = [ "tokio" ] }
 bitcoin = { workspace = true, features = ["serde", "std"] }
 dns-lookup = { workspace = true }
@@ -32,10 +31,12 @@ ureq = { version = "3.1", features = ["socks-proxy", "json", "rustls-no-provider
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-compact-filters = { workspace = true }
 floresta-common = { workspace = true }
+floresta-mempool = { workspace = true }
 metrics = { workspace = true,  optional = true }
 
 [dev-dependencies]
 zstd = { workspace = true }
+derive_more = { version = "2.1", features = ["constructor"] }
 
 [features]
 default = []

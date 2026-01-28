@@ -28,6 +28,15 @@ use tracing::warn;
 /// How long we'll wait before trying to connect to a peer that failed
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
 
+/// The minimum amount of addresses we need to have on the [`AddressMan`].
+const MIN_PEERS: usize = 15;
+
+/// The minimum amount of CBF-capable addresses we need to have on the [`AddressMan`].
+const MIN_PEERS_CBF: usize = 5;
+
+/// The minimum amount of Utreexo-capable addresses we need to have on the [`AddressMan`].
+const MIN_PEERS_UTREEXO: usize = 2;
+
 /// A type alias for a list of addresses to send to our peers
 type AddressToSend = Vec<(AddrV2, u64, ServiceFlags, u16)>;
 
@@ -233,6 +242,37 @@ impl AddressMan {
                 self.push_if_has_service(address, ServiceFlags::COMPACT_FILTERS);
             }
         }
+    }
+
+    /// Return addresses from the [`AddressMan`] filtered by their [`ServiceFlags`].
+    fn get_addresses_by_service(&self, service: ServiceFlags) -> Vec<LocalAddress> {
+        self.good_peers_by_service
+            .get(&service)
+            .map(|peer_ids| {
+                peer_ids
+                    .iter()
+                    .filter_map(|id| self.addresses.get(id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Check if we have enough addresses on the address manager.
+    #[rustfmt::skip]
+    pub fn enough_addresses(&self) -> bool {
+        if self.good_addresses.len() < MIN_PEERS {
+            return false;
+        }
+
+        if self.get_addresses_by_service(ServiceFlags::COMPACT_FILTERS).len() < MIN_PEERS_CBF {
+            return false;
+        }
+
+        if self.get_addresses_by_service(service_flags::UTREEXO.into()).len() < MIN_PEERS_UTREEXO {
+            return false;
+        }
+
+        true
     }
 
     fn is_good_peer(address: &LocalAddress) -> bool {

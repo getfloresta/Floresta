@@ -119,21 +119,33 @@ UTREEXO_REVISION=0.1.0 ./tests/prepare.sh && ./tests/run.sh
 ```
 
 ##### Bitcoin-core
+By default, the `prepare.sh` script will obtain a runnable `bitcoind` binary in one of three exclusive ways. The default Bitcoin Core version is `30.2`, but you can override this by setting the `BITCOIN_REVISION` environment variable. The three methods are:
 
-By default, the tool will build `bitcoind` on its latest release using 4 CPU cores. Starting with Bitcoin Core 29.0, `bitcoind` uses the `CMake` build system. If you want to use a previous version, configure it with the `BITCOIN_REVISION` environment variable. Also, if you need to change the number of CPU cores, use
-`BUILD_CORE_NPROCS`. If `BITCOIN_REVISION < 29.0`, it will be passed as argument to `Make`. If `BITCOIN_REVISION >= 29.0`, it will be passed to as argument to `CMake`. For example:
-
+1. **Using a user-provided binary**: If the `BITCOIND_EXE` environment variable is set and points to an executable, that exact binary is used. No download or build is attempted, and any `BITCOIN_REVISION` or build-parallelism settings are ignored.
 ```bash
-BITCOIN_REVISION=28.0 BUILD_BITCOIND_NPROCS=2 ./tests/prepare.sh && ./tests/run.sh
+    BITCOIND_EXE=/path/to/bitcoind ./tests/prepare.sh
+```
+
+2. **Downloading a prebuilt binary**: If `BITCOIND_EXE` is not set, the script will try to download a prebuilt Bitcoin Core tarball for the specified `BITCOIN_REVISION`. Prebuilt binaries are available for all platforms and operating systems supported by Bitcoin Core. The supported versions are `30.2`, `29.2`, `28.3` and `27.2`.
+```bash
+    BITCOIN_REVISION=28.3 ./tests/prepare.sh
+```
+
+3. **Building from source**: If no prebuilt binary is available for the platform, operating system, or specified version, the script will clone the Bitcoin Core repository and build `bitcoind` from the specified `BITCOIN_REVISION`. This can be a version tag (e.g., `29.1`) or a branch(e.g., `master`) from the remote repository.
+```bash
+    BITCOIN_REVISION=master ./tests/prepare.sh
 ```
 
 Additionally, you can use some arguments in those scripts:
 
 ```bash
-./tests/prepare.sh --build && ./tests/run.sh --preserve-data-dir
+./tests/prepare.sh --build --release && ./tests/run.sh --preserve-data-dir
 ```
 
-The `--build` argument will force the script to build `utreexod` even if it is already built.
+The `--build` argument will force the script to fetch the `bitcoind` binary again and to build the `utreexod`.
+
+The `--release` argument will build the `florestad` binary in release mode, which is optimized for production use. If this flag is not provided, the binary will be built in debug mode by default.
+
 The `--preserve-data-dir` argument will keep the data and logs directories after running the tests
 (this is useful if you want to keep the data for debugging purposes).
 

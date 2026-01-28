@@ -36,8 +36,9 @@ rand = { workspace = true }
 rcgen = { workspace = true }
 zstd = { workspace = true }
 
-# Local dependencies
+# Local dev-dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
+floresta-mempool = { workspace = true }
 
 [lints]
 workspace = true

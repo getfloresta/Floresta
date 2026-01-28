@@ -1,0 +1,32 @@
+[package]
+name = "floresta-mempool"
+version = "0.4.0"
+edition = "2021"
+authors = ["Floresta Developers <contact@getfloresta.org>"]
+description = """
+    A policy-driven, stateful transaction mempool for Floresta,
+    responsible for transaction relay decisions, fee estimation, and
+    block template construction.
+"""
+repository = "https://github.com/getfloresta/Floresta"
+license = "MIT"
+readme.workspace = true
+keywords = ["bitcoin", "mempool", "transactions"]
+
+[dependencies]
+ahash = "0.8"
+bitcoin = { workspace = true, features = ["serde", "std"] }
+rand = { workspace = true }
+rustreexo = { workspace = true }
+
+# Local dependencies
+floresta-chain = { workspace = true }
+
+[dev-dependencies]
+floresta-common = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

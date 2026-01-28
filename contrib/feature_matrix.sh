@@ -18,6 +18,7 @@ crates="\
     floresta-common \
     floresta-compact-filters \
     floresta-electrum \
+    floresta-mempool \
     floresta-node \
     floresta-rpc \
     floresta-watch-only \

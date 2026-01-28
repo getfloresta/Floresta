@@ -8,7 +8,6 @@ use std::time::Instant;
 
 use bitcoin::bip158::BlockFilter;
 use bitcoin::p2p::address::AddrV2Message;
-use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::BlockHash;
 use floresta_chain::proof_util;
@@ -27,9 +26,9 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use super::error::WireError;
-use super::peer::PeerMessages;
+use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
+use crate::node::sync_ctx::SyncNode;
 use crate::node::try_and_log;
 use crate::node::try_and_warn;
 use crate::node::ConnectionKind;
@@ -40,10 +39,8 @@ use crate::node::UtreexoNode;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
-use crate::node_interface::NodeResponse;
-use crate::node_interface::UserRequest;
-use crate::p2p_wire::chain_selector::ChainSelector;
-use crate::p2p_wire::sync_node::SyncNode;
+use crate::p2p_wire::error::WireError;
+use crate::p2p_wire::peer::PeerMessages;
 
 #[derive(Debug, Clone)]
 pub struct RunningNode {
@@ -64,6 +61,16 @@ impl NodeContext for RunningNode {
             | service_flags::UTREEXO.into()
             | ServiceFlags::WITNESS
             | ServiceFlags::COMPACT_FILTERS
+    }
+}
+
+impl Default for RunningNode {
+    fn default() -> Self {
+        RunningNode {
+            last_address_rearrange: Instant::now(),
+            last_invs: HashMap::default(),
+            inflight_filters: BTreeMap::new(),
+        }
     }
 }
 
@@ -609,7 +616,11 @@ where
             NodeNotification::FromPeer(peer, message) => {
                 self.register_message_time(&message, peer);
 
-                match message {
+                let Some(unhandled) = self.handle_peer_msg_common(message, peer)? else {
+                    return Ok(());
+                };
+
+                match unhandled {
                     PeerMessages::UtreexoProof(uproof) => {
                         self.attach_proof(uproof, peer)?;
                         self.process_pending_blocks()?;
@@ -727,14 +738,6 @@ where
                         self.handle_disconnection(peer, idx)?;
                     }
 
-                    PeerMessages::Addr(addresses) => {
-                        debug!("Got {} addresses from peer {}", addresses.len(), peer);
-                        let addresses: Vec<_> =
-                            addresses.into_iter().map(|addr| addr.into()).collect();
-
-                        self.address_man.push_addresses(&addresses);
-                    }
-
                     PeerMessages::BlockFilter((hash, filter)) => {
                         debug!("Got a block filter for block {hash} from peer {peer}");
 
@@ -771,50 +774,7 @@ where
                         }
                     }
 
-                    PeerMessages::NotFound(inv) => match inv {
-                        Inventory::Error => {}
-                        Inventory::Block(block)
-                        | Inventory::WitnessBlock(block)
-                        | Inventory::CompactBlock(block) => {
-                            if let Some(request) = self
-                                .inflight_user_requests
-                                .remove(&UserRequest::Block(block))
-                            {
-                                request.2.send(NodeResponse::Block(None)).unwrap();
-                            }
-                        }
-
-                        Inventory::WitnessTransaction(tx) | Inventory::Transaction(tx) => {
-                            if let Some(request) = self
-                                .inflight_user_requests
-                                .remove(&UserRequest::MempoolTransaction(tx))
-                            {
-                                request
-                                    .2
-                                    .send(NodeResponse::MempoolTransaction(None))
-                                    .unwrap();
-                            }
-                        }
-                        _ => {}
-                    },
-
-                    PeerMessages::Transaction(tx) => {
-                        debug!("saw a mempool transaction with txid={}", tx.compute_txid());
-                        if let Some(request) = self
-                            .inflight_user_requests
-                            .remove(&UserRequest::MempoolTransaction(tx.compute_txid()))
-                        {
-                            request
-                                .2
-                                .send(NodeResponse::MempoolTransaction(Some(tx)))
-                                .unwrap();
-                        }
-                    }
-
-                    PeerMessages::UtreexoState(_) => {
-                        warn!("Utreexo state received from peer {peer}, but we didn't ask",);
-                        self.increase_banscore(peer, 5)?;
-                    }
+                    _ => unreachable!("Error: `handle_peer_msg_common` should have handled remaining PeerMessages"),
                 }
             }
         }

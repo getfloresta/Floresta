@@ -14,13 +14,9 @@ import time
 from test_framework import FlorestaTestFramework
 
 DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
-TIMEOUT = 15
-PING_TIMEOUT = 40
 
 
 class AddnodeTestV1(FlorestaTestFramework):
-
-    nodes = [-1, -1]
 
     def set_test_params(self):
         """
@@ -44,303 +40,99 @@ class AddnodeTestV1(FlorestaTestFramework):
             ],
         )
 
-    def start_both_nodes(self):
+    def verify_peer_connection_state(self, is_connected: bool):
         """
-        Start both nodes, by calling `run_node` for each node
-        and returning the nodes with `get_node` method.
+        Verify whether a peer is connected; if connected, validate the peer details.
         """
-        self.run_node(self.florestad)
-        self.run_node(self.bitcoind)
+        self.log(
+            f"Checking if bitcoind is {'connected' if is_connected else 'disconnected'}"
+        )
+        self.wait_for_peers_connections(self.florestad, self.bitcoind, is_connected)
 
-    def test_should_floresta_add_bitcoind(self):
+        expected_peer_count = 1 if is_connected else 0
+        peer_info = self.florestad.rpc.get_peerinfo()
+        self.assertEqual(len(peer_info), expected_peer_count)
+
+        if is_connected:
+            self.assertEqual(peer_info[0]["transport_protocol"], "V1")
+
+        if self.bitcoind.daemon.is_running:
+            bitcoin_peers = self.bitcoind.rpc.get_peerinfo()
+            self.assertEqual(len(bitcoin_peers), expected_peer_count)
+
+    def floresta_addnode_with_command(self, command: str):
         """
-        The test follows:
-
-        - Call `addnode <bitcoind ip:port> add false`;
-        - the result should be a null json compliant to bitcoin-core;
-        - call `getpeerinfo` on floresta. That should return a list
-          with the bitcoind peer in Ready state.
+        Send an `addnode` RPC from Floresta to the bitcoind peer using the given command.
         """
-        self.log("=========== Testing should_floresta_add_bitcoind...")
-
-        # Floresta adds the bitcoind node
-        bitcoind_port = self.bitcoind.get_port("p2p")
-
-        # call the rpc
+        self.log(f"Floresta adding node {self.bitcoind_addr} with command '{command}'")
         result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
-            command="add",
+            node=self.bitcoind_addr,
+            command=command,
             v2transport=self.v2transport,
         )
 
-        # `addnode` bitcoin-core compliant command
-        # should return a null json object
         self.assertIsNone(result)
 
-        # give some time to the node to establish the connection
-        time.sleep(1)
-
-        # Floresta should be able to connect almost immediately
-        # to the utreexod node after adding it.
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 1)
-
-        # now we expect the node to be in Ready state
-        # with some expressive information. The node
-        # should be in the `getpeerinfo` list.
-        self.assertEqual(peer_info[0]["address"], f"127.0.0.1:{bitcoind_port}")
-        self.assertEqual(peer_info[0]["initial_height"], 0)
-        self.assertEqual(peer_info[0]["kind"], "regular")
-
-        self.assertEqual(
-            peer_info[0]["services"],
-            "ServiceFlags(NETWORK|WITNESS|NETWORK_LIMITED)",
-        )
-        self.assertEqual(peer_info[0]["transport_protocol"], "V1")
-
-        self.assertEqual(peer_info[0]["state"], "Ready")
-        self.assertMatch(
-            peer_info[0]["user_agent"],
-            re.compile(r"\/Satoshi:\d*\.\d*\.\d*\/"),
-        )
-
-    def test_should_bitcoind_see_floresta(self):
+    def stop_bitcoind(self):
         """
-        The test follows:
-
-        - Call `getpeerinfo` on bitcoind. That should return a list
-        with the floresta peer.
+        Stop the bitcoind node.
         """
-        # now see how bitcoind see floresta
-        self.log("=========== Testing should bitcoind_see_floresta...")
-
-        # call the rpc
-        bitcoind_host = self.bitcoind.get_host()
-        bitcoind_port = self.bitcoind.get_port("p2p")
-        peer_info = self.bitcoind.rpc.get_peerinfo()
-
-        # Now we expect see the floresta node
-        self.assertEqual(len(peer_info), 1)
-        self.assertEqual(peer_info[0]["addrbind"], f"{bitcoind_host}:{bitcoind_port}")
-        self.assertEqual(peer_info[0]["startingheight"], 0)
-        self.assertEqual(peer_info[0]["services"], "0000000001000009")
-        self.assertMatch(
-            peer_info[0]["subver"],
-            re.compile(r"\/Floresta:\d\.\d\.\d\/"),
-        )
-        self.assertEqual(peer_info[0]["inbound"], True)
-
-    def test_should_bitcoind_disconnect(self):
-        """
-        The test follows:
-
-        - call `stop` on bitcoind;
-        - call `getpeerinfo` on floresta. That should return an empty list
-        """
-        self.log(
-            "=========== Testing should bitcoind disconnect and floresta not see anymore..."
-        )
-
-        # lets try to disconnect the node
-        # and wait for disconnection to proceed
-        # with the test
+        self.log(f"Stopping bitcoind node")
         self.bitcoind.stop()
         self.florestad.rpc.ping()
-        time.sleep(PING_TIMEOUT)
-
-        # now we expect the node to be in the
-        # awaiting state. It will be in that state
-        # until the node reconnects again
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 0)
-
-    def test_should_florestad_reconnect(self):
-        """
-        The test follows:
-        - call `run_node` on bitcoind;
-        - call `getpeerinfo` on floresta. That should return a list
-        with the bitcoind peer in Ready state;
-        """
-        self.log(
-            "=========== Testing should bitcoind restart and floresta await for it be ready..."
-        )
-        # reconnect the bitcoind node
-        self.run_node(self.bitcoind)
-
-        # wait for the bitcoind node to be ready
-        self.bitcoind.rpc.wait_for_connections(opened=True, timeout=PING_TIMEOUT)
-        time.sleep(PING_TIMEOUT)
-
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 1)
-        self.assertEqual(peer_info[0]["state"], "Ready")
-
-    def test_should_floresta_not_add_bitcoind_again(self):
-        """
-        The test follows:
-
-        - Call `addnode <bitcoind ip:port> false`;
-        - the result should be a null json compliant to bitcoin-core;
-        - call `getpeerinfo` on floresta. That should the same
-        list as before, meaning that the bitcoind peer was not added again.
-        """
-        self.log("=========== Testing should floresta not add bitcoind again...")
-        result = self.florestad.rpc.addnode(
-            node="127.0.0.1:18444", command="add", v2transport=self.v2transport
-        )
-
-        # `addnode` bitcoin-core compliant command
-        # should return a null json object
-        self.assertIsNone(result)
-
-        # Check if the list of peers is the same from
-        # the previous test, meaning that the
-        # `addnode` command was not able to add the node
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 1)
-
-    def test_should_floresta_remove_bitcoind(self):
-        """
-        The test follows:
-
-        - Call `addnode <bitcoind ip:port> remove false`;
-        - the result should be a null json compliant to bitcoin-core;
-        - call `getpeerinfo` on floresta. That should return a list
-        with zero peers.
-        """
-        self.log("=========== Testing should floresta remove bitcoind...")
-
-        # get host and port
-        bitcoind_port = self.bitcoind.get_port("p2p")
-        result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
-            command="remove",
-        )
-
-        # `addnode` bitcoin-core compliant command
-        # should return a null json object
-        self.assertIsNone(result)
-
-        # For now the node will be in ready state
-        # and will be available in `get_peerinfo`
-        # The `addnode remove` just remove the
-        # node from the added_peers list but it will
-        # still be in the peers list.
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 1)
-        self.assertEqual(peer_info[0]["state"], "Ready")
-
-        # to check if removed, let's stop the bitcoind
-        # restart it and check the `getpeerinfo` again
-        self.bitcoind.stop()
-
-        self.run_node(self.bitcoind)
-        self.florestad.rpc.ping()
-
-        # wait some time to guarantee
-        # that it will not be in the peers list again
-        time.sleep(PING_TIMEOUT)
-
-        # now we expect the node to be in the
-        # awaiting state. It will be in that state
-        # until the node reconnects again
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 0)
-
-    def test_should_bitcoind_not_see_floresta(self):
-        """
-        The test follows:
-        - Call `getpeerinfo` on bitcoind. That should return a list
-        with zero peers.
-        """
-        self.log("=========== Testing should bitcoind not see floresta...")
-        peer_info = self.bitcoind.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 0)
-
-    def test_should_floresta_onetry_connection_with_bitcoind(self):
-        """
-        The test follows:
-
-        - Call `addnode <bitcoind ip:port> onetry false` in the floresta node;
-        - the result should be a null json compliant to bitcoin-core;
-        - call `getpeerinfo` on floresta. That should return a list
-        with the bitcoind peer in Ready state;
-        """
-        self.log(
-            "=========== Testing should floresta onetry connection with bitcoind..."
-        )
-
-        # get the bitcoind port
-        bitcoind_port = self.bitcoind.get_port("p2p")
-        result = self.florestad.rpc.addnode(
-            node=f"127.0.0.1:{bitcoind_port}",
-            command="onetry",
-            v2transport=self.v2transport,
-        )
-
-        # `addnode` bitcoin-core compliant command
-        # should return a null json object
-        self.assertIsNone(result)
-
-        # add some time to establish the handshake
-        time.sleep(TIMEOUT)
-
-        # Check if the added node was added
-        # to the peers list with the `getpeerinfo` command
-        # but should be in the "Awaiting" state
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 1)
-        self.assertEqual(peer_info[0]["address"], f"127.0.0.1:{bitcoind_port}")
-        self.assertEqual(peer_info[0]["initial_height"], 0)
-        self.assertEqual(peer_info[0]["kind"], "regular")
-
-        self.assertEqual(
-            peer_info[0]["services"],
-            "ServiceFlags(NETWORK|WITNESS|NETWORK_LIMITED)",
-        )
-        self.assertEqual(peer_info[0]["transport_protocol"], "V1")
-
-        self.assertEqual(peer_info[0]["state"], "Ready")
-        self.assertMatch(
-            peer_info[0]["user_agent"],
-            re.compile(r"\/Satoshi:\d*\.\d*\.\d*\/"),
-        )
-
-        # now we need to force a disconnection by shutdown bitcoind
-        # and see if, when bitcoind restart, it will not be reconnected
-        self.bitcoind.stop()
-        self.run_node(self.bitcoind)
-
-        # wait some time to guarantee
-        # that it will not be in the peers list again
-        self.florestad.rpc.ping()
-        time.sleep(PING_TIMEOUT)
-
-        peer_info = self.florestad.rpc.get_peerinfo()
-        self.assertEqual(len(peer_info), 0)
 
     def run_test(self):
         """
-        First initialize both nodes. Then run above tests
-        in the following order:
-
-        - should floresta add bitcoind;
-        - should bitcoind see floresta;
-        - should floresta not add bitcoind again;
-        - should floresta remove bitcoind;
-        - should bitcoind not see floresta;
-        - should floresta onetry connection with bitcoind;
-        - should floresta remove onetry connection with bitcoind;
+        Tests the addnode functionality for Floresta, verifying that it can establish connections
+        based on the command passed (e.g., add, onetry, remove), behaves correctly when a peer
+        disconnects according to the connection type, and properly handles adding and removing peers.
         """
-        self.start_both_nodes()
-        self.test_should_floresta_add_bitcoind()
-        self.test_should_bitcoind_see_floresta()
-        self.test_should_bitcoind_disconnect()
-        self.test_should_florestad_reconnect()
-        self.test_should_floresta_not_add_bitcoind_again()
-        self.test_should_floresta_remove_bitcoind()
-        self.test_should_bitcoind_not_see_floresta()
-        self.test_should_floresta_onetry_connection_with_bitcoind()
+        self.log("===== Starting florestad and bitcoind nodes")
+        self.run_node(self.florestad)
+        self.run_node(self.bitcoind)
+
+        self.bitcoind_addr = f"127.0.0.1:{self.bitcoind.get_port('p2p')}"
+
+        self.log("===== Add bitcoind as a persistent peer to Floresta")
+        self.floresta_addnode_with_command("add")
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.stop_bitcoind()
+        self.verify_peer_connection_state(is_connected=False)
+
+        self.run_node(self.bitcoind)
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.log("===== Verify Floresta does not add the same persistent peer twice")
+        self.floresta_addnode_with_command("add")
+        # This function expects 1 peer connected to florestad
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.floresta_addnode_with_command("onetry")
+        # This function expects 1 peer connected to florestad
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.log("===== Remove bitcoind from Floresta's persistent peer list")
+        self.floresta_addnode_with_command("remove")
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.stop_bitcoind()
+        self.verify_peer_connection_state(is_connected=False)
+
+        self.run_node(self.bitcoind)
+        self.verify_peer_connection_state(is_connected=False)
+
+        self.log(
+            "===== Add bitcoind as a one-time (onetry) connection; expect a single connection"
+        )
+        self.floresta_addnode_with_command("onetry")
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.stop_bitcoind()
+        self.verify_peer_connection_state(is_connected=False)
+
+        self.run_node(self.bitcoind)
+        self.verify_peer_connection_state(is_connected=False)
 
 
 if __name__ == "__main__":

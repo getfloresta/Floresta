@@ -533,7 +533,7 @@ mod tests {
 
         let expected_hex_string =
             "00000000000000000000000000000000000000000000000000000bb80bb80bb8";
-        let expected_work = Work::from_hex(&format!("0x{}", expected_hex_string)).unwrap();
+        let expected_work = Work::from_hex(&format!("0x{expected_hex_string}")).unwrap();
 
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(work, expected_work);

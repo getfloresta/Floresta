@@ -51,7 +51,6 @@ use std::time::Instant;
 
 use bitcoin::block::Header;
 use bitcoin::consensus::deserialize;
-use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
@@ -67,14 +66,10 @@ use rustreexo::accumulator::stump::Stump;
 use tokio::time;
 use tokio::time::timeout;
 use tokio::time::MissedTickBehavior;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use super::error::WireError;
-use super::node_interface::UserRequest;
-use super::peer::PeerMessages;
 use crate::address_man::AddressState;
 use crate::block_proof::Bitmap;
 use crate::node::periodic_job;
@@ -87,7 +82,8 @@ use crate::node::UtreexoNode;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
-use crate::node_interface::NodeResponse;
+use crate::p2p_wire::error::WireError;
+use crate::p2p_wire::peer::PeerMessages;
 
 #[derive(Debug, Default, Clone)]
 /// A p2p driver that attempts to connect with multiple peers, ask which chain are them following
@@ -960,7 +956,11 @@ where
     ) -> Result<(), WireError> {
         self.register_message_time(&notification, peer);
 
-        match notification {
+        let Some(unhandled) = self.handle_peer_msg_common(notification, peer)? else {
+            return Ok(());
+        };
+
+        match unhandled {
             PeerMessages::Headers(headers) => {
                 self.inflight.remove(&InflightRequests::Headers);
                 return self.handle_headers(peer, headers).await;
@@ -981,11 +981,6 @@ where
                 self.handle_disconnection(peer, idx)?;
             }
 
-            PeerMessages::Addr(addresses) => {
-                let addresses: Vec<_> = addresses.iter().cloned().map(|addr| addr.into()).collect();
-                self.address_man.push_addresses(&addresses);
-            }
-
             PeerMessages::Block(block) => {
                 // During chain selection we don't ask for blocks, unless it's an explicit
                 // user request made through the node handle. If it isn't, we punish this
@@ -994,58 +989,6 @@ where
                     error!("peer {peer} sent us a block we didn't request");
                     self.increase_banscore(peer, 5)?;
                 }
-            }
-
-            PeerMessages::NotFound(inv) => match inv {
-                Inventory::Error => {}
-
-                Inventory::Block(block)
-                | Inventory::WitnessBlock(block)
-                | Inventory::CompactBlock(block) => {
-                    let request = self
-                        .inflight_user_requests
-                        .remove(&UserRequest::Block(block));
-                    if let Some(request) = request {
-                        request
-                            .2
-                            .send(NodeResponse::Block(None))
-                            .map_err(|_| WireError::ResponseSendError)?;
-                    }
-                }
-
-                Inventory::WitnessTransaction(tx) | Inventory::Transaction(tx) => {
-                    let request = self
-                        .inflight_user_requests
-                        .remove(&UserRequest::MempoolTransaction(tx));
-                    if let Some(request) = request {
-                        request
-                            .2
-                            .send(NodeResponse::MempoolTransaction(None))
-                            .map_err(|_| WireError::ResponseSendError)?;
-                    }
-                }
-
-                _ => {}
-            },
-
-            PeerMessages::Transaction(tx) => {
-                debug!("saw a mempool transaction with txid={}", tx.compute_txid());
-
-                let request = self
-                    .inflight_user_requests
-                    .remove(&UserRequest::MempoolTransaction(tx.compute_txid()));
-                if let Some(request) = request {
-                    request
-                        .2
-                        .send(NodeResponse::MempoolTransaction(Some(tx)))
-                        .map_err(|_| WireError::ResponseSendError)?;
-                }
-            }
-
-            PeerMessages::UtreexoState(_) => {
-                warn!("Utreexo state received from peer {peer}, but we didn't ask",);
-
-                self.increase_banscore(peer, 5)?;
             }
 
             _ => {}

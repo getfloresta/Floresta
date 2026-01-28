@@ -19,6 +19,7 @@ use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use floresta_common::impl_error_from;
+use floresta_mempool::Mempool;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::spawn;
@@ -32,7 +33,6 @@ use tracing::error;
 use tracing::warn;
 
 use self::peer_utils::make_pong;
-use super::mempool::Mempool;
 use super::node::NodeNotification;
 use super::node::NodeRequest;
 use super::transport::TransportError;
@@ -657,6 +657,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         let _ = self.node_tx.send(message);
     }
 }
+
 pub(super) mod peer_utils {
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
@@ -717,6 +718,7 @@ pub(super) mod peer_utils {
         })
     }
 }
+
 #[derive(Debug)]
 pub struct Version {
     pub user_agent: String,
@@ -728,6 +730,7 @@ pub struct Version {
     pub kind: ConnectionKind,
     pub transport_protocol: TransportProtocol,
 }
+
 /// Messages passed from different modules to the main node to process. They should minimal
 /// and only if it requires global states, everything else should be handled by the module
 /// itself.

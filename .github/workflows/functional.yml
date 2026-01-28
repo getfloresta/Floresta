@@ -30,17 +30,18 @@ jobs:
       - name: Run pylint linter
         run: uv run pylint --verbose ./tests
 
-      # These are the minimal deps defined by bitcoin core at
-      # https://github.com/bitcoin/bitcoin/blob/master/doc/build-unix.md
-      - name: Prepare bitcoin-core deps
-        run: sudo apt install build-essential cmake pkgconf python3 libevent-dev libboost-dev
+      # Required for compiling the project, as it depends on the bitcoinkernel
+      - name: Install Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
       - name: Prepare functional tests tasks
         run: |
-          tests/prepare.sh
+          tests/prepare.sh --release
 
       - name: Run functional tests tasks
         run: |

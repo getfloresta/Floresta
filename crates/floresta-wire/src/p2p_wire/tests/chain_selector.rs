@@ -11,9 +11,11 @@ mod tests {
     use rustreexo::accumulator::stump::Stump;
 
     use crate::p2p_wire::tests::utils::create_false_acc;
-    use crate::p2p_wire::tests::utils::get_essentials;
-    use crate::p2p_wire::tests::utils::get_test_accs;
     use crate::p2p_wire::tests::utils::setup_node;
+    use crate::p2p_wire::tests::utils::signet_blocks;
+    use crate::p2p_wire::tests::utils::signet_headers;
+    use crate::p2p_wire::tests::utils::signet_roots;
+    use crate::p2p_wire::tests::utils::PeerData;
     const STARTING_LIE_BLOCK_HEIGHT: usize = 30;
 
     pub const NUM_BLOCKS: usize = 120;
@@ -21,10 +23,9 @@ mod tests {
     #[tokio::test]
     async fn two_peers_one_lying() {
         let datadir = format!("./tmp-db/{}.chain_selector", rand::random::<u32>());
-        let essentials = get_essentials();
-        let headers = essentials.headers.to_vec();
-        let blocks = essentials.blocks;
-        let true_accs = get_test_accs().unwrap();
+        let headers = signet_headers();
+        let blocks = signet_blocks();
+        let true_accs = signet_roots();
 
         let mut false_accs = true_accs.clone();
 
@@ -40,8 +41,8 @@ mod tests {
         }
 
         let peers = vec![
-            (headers.clone(), blocks.clone(), true_accs),
-            (headers.clone(), blocks.clone(), false_accs),
+            PeerData::new(headers.clone(), blocks.clone(), true_accs),
+            PeerData::new(headers.clone(), blocks, false_accs),
         ];
 
         let chain = setup_node(peers, true, Network::Signet, &datadir, NUM_BLOCKS).await;
@@ -68,10 +69,9 @@ mod tests {
     #[tokio::test]
     async fn ten_peers_one_honest() {
         let datadir = format!("./tmp-db/{}.chain_selector", rand::random::<u32>());
-        let essentials = get_essentials();
-        let headers = essentials.headers.to_vec();
-        let blocks = essentials.blocks;
-        let true_accs = get_test_accs().unwrap();
+        let headers = signet_headers();
+        let blocks = signet_blocks();
+        let true_accs = signet_roots();
         let mut false_accs_array: Vec<HashMap<BlockHash, Vec<u8>>> = Vec::new();
 
         for i in 0..9 {
@@ -84,7 +84,7 @@ mod tests {
 
         let mut peers = Vec::new();
         for _ in 0..9 {
-            let peer = (
+            let peer = PeerData::new(
                 headers.clone(),
                 blocks.clone(),
                 false_accs_array.pop().unwrap(),
@@ -92,7 +92,7 @@ mod tests {
             peers.push(peer);
         }
 
-        peers.push((headers.clone(), blocks.clone(), true_accs.clone()));
+        peers.push(PeerData::new(headers.clone(), blocks, true_accs));
 
         let chain = setup_node(peers, true, Network::Signet, &datadir, NUM_BLOCKS).await;
         let best_block = chain.get_best_block().unwrap();

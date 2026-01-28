@@ -6,6 +6,7 @@
 WARNING: This code is slow, uses bad randomness, does not properly protect
 keys, and is trivially vulnerable to side channel attacks. Do not use for
 anything but tests."""
+
 import hashlib
 import hmac
 import random

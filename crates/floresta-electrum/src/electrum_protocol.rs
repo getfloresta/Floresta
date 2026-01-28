@@ -896,13 +896,13 @@ mod test {
     use floresta_chain::FlatChainStoreConfig;
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
+    use floresta_mempool::Mempool;
     use floresta_watch_only::kv_database::KvDatabase;
     use floresta_watch_only::merkle::MerkleProof;
     use floresta_watch_only::AddressCache;
     use floresta_wire::address_man::AddressMan;
-    use floresta_wire::mempool::Mempool;
+    use floresta_wire::node::running_ctx::RunningNode;
     use floresta_wire::node::UtreexoNode;
-    use floresta_wire::running_node::RunningNode;
     use floresta_wire::UtreexoNodeConfig;
     use rcgen::generate_simple_self_signed;
     use rcgen::CertifiedKey;
@@ -1032,18 +1032,9 @@ mod test {
             disable_dns_seeds: true,
             network: Network::Signet,
             pow_fraud_proofs: true,
-            proxy: None,
             datadir: "/tmp-db".to_string(),
-            fixed_peer: None,
-            max_banscore: 50,
-            compact_filters: false,
-            max_outbound: 10,
-            max_inflight: 20,
-            assume_utreexo: None,
-            backfill: false,
-            filter_start_height: None,
             user_agent: "floresta".to_string(),
-            allow_v1_fallback: true,
+            ..Default::default()
         };
 
         let chain_provider: UtreexoNode<Arc<ChainState<FlatChainStore>>, RunningNode> =

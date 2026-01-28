@@ -34,12 +34,6 @@ pub struct UtreexoNodeConfig {
     /// If a peer misbehaves, we increase its ban score. If the ban score reaches this value,
     /// we disconnect from the peer.
     pub max_banscore: u32,
-    /// Maximum number of outbound connections. Defaults to 8.
-    pub max_outbound: u32,
-    /// Maximum number of inflight requests. Defaults to 10.
-    ///
-    /// More inflight requests means more memory usage, but also more parallelism.
-    pub max_inflight: u32,
     /// Data directory for the node. Defaults to `.floresta-node`.
     pub datadir: String,
     /// A SOCKS5 proxy to use. Defaults to None.
@@ -80,8 +74,6 @@ impl Default for UtreexoNodeConfig {
             compact_filters: false,
             fixed_peer: None,
             max_banscore: 100,
-            max_outbound: 8,
-            max_inflight: 10,
             datadir: ".floresta-node".to_string(),
             proxy: None,
             backfill: false,
@@ -95,16 +87,12 @@ impl Default for UtreexoNodeConfig {
 
 pub mod address_man;
 pub mod block_proof;
-pub mod chain_selector;
 pub mod error;
-pub mod mempool;
 pub mod node;
 pub mod node_context;
 pub mod node_interface;
 pub mod peer;
-pub mod running_node;
 pub mod socks;
-pub mod sync_node;
 #[cfg(test)]
 #[doc(hidden)]
 pub mod tests;

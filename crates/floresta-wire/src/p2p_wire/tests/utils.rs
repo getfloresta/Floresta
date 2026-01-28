@@ -1,20 +1,18 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io;
-use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use bitcoin::block::Header;
-use bitcoin::consensus::deserialize_partial;
 use bitcoin::consensus::encode;
+use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::consensus::Decodable;
 use bitcoin::hex::FromHex;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
+use derive_more::Constructor;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::AssumeValidArg;
 use floresta_chain::ChainState;
@@ -23,6 +21,7 @@ use floresta_chain::FlatChainStoreConfig;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use floresta_common::FractionAvg;
+use floresta_mempool::Mempool;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use rustreexo::accumulator::pollard::Pollard;
@@ -38,6 +37,7 @@ use tokio::time::timeout;
 use zstd;
 
 use crate::address_man::AddressMan;
+use crate::node::sync_ctx::SyncNode;
 use crate::node::ConnectionKind;
 use crate::node::LocalPeerView;
 use crate::node::NodeNotification;
@@ -45,29 +45,10 @@ use crate::node::NodeRequest;
 use crate::node::PeerStatus;
 use crate::node::UtreexoNode;
 use crate::p2p_wire::block_proof::UtreexoProof;
-use crate::p2p_wire::mempool::Mempool;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
-use crate::p2p_wire::sync_node::SyncNode;
 use crate::p2p_wire::transport::TransportProtocol;
 use crate::UtreexoNodeConfig;
-
-/// A list of headers, used to represent the collection of headers.
-pub type HeaderList = Vec<Header>;
-
-/// A map that associates block hashes with their corresponding `UtreexoBlock` objects.
-/// This is useful for efficiently looking up blocks by their hash.
-pub type BlockHashMap = HashMap<BlockHash, Block>;
-
-/// A map of block hashes to raw block data (represented as bytes vector).
-pub type BlockDataMap = HashMap<BlockHash, Vec<u8>>;
-
-/// A collection of essential data related to blocks and headers.
-pub struct Essentials {
-    pub headers: HeaderList,
-    pub blocks: BlockHashMap,
-    pub invalid_block: Block,
-}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UtreexoRoots {
@@ -75,13 +56,8 @@ pub struct UtreexoRoots {
     numleaves: usize,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-struct BlockFile {
-    block: String,
-}
-
-#[derive(Debug)]
-pub struct TestPeer {
+#[derive(Debug, Constructor)]
+pub struct SimulatedPeer {
     headers: Vec<Header>,
     blocks: HashMap<BlockHash, Block>,
     accs: HashMap<BlockHash, Vec<u8>>,
@@ -90,25 +66,7 @@ pub struct TestPeer {
     peer_id: u32,
 }
 
-impl TestPeer {
-    pub fn new(
-        node_tx: UnboundedSender<NodeNotification>,
-        headers: Vec<Header>,
-        blocks: HashMap<BlockHash, Block>,
-        accs: HashMap<BlockHash, Vec<u8>>,
-        node_rx: UnboundedReceiver<NodeRequest>,
-        peer_id: u32,
-    ) -> Self {
-        TestPeer {
-            headers,
-            blocks,
-            accs,
-            node_tx,
-            node_rx,
-            peer_id,
-        }
-    }
-
+impl SimulatedPeer {
     pub async fn run(&mut self) {
         let version = Version {
             user_agent: "node_test".to_string(),
@@ -209,7 +167,7 @@ pub fn create_peer(
     node_rcv: UnboundedReceiver<NodeRequest>,
     peer_id: u32,
 ) -> LocalPeerView {
-    let mut peer = TestPeer::new(node_sender, headers, blocks, accs, node_rcv, peer_id);
+    let mut peer = SimulatedPeer::new(headers, blocks, accs, node_sender, node_rcv, peer_id);
     task::spawn(async move {
         peer.run().await;
     });
@@ -237,21 +195,11 @@ pub fn get_node_config(
     pow_fraud_proofs: bool,
 ) -> UtreexoNodeConfig {
     UtreexoNodeConfig {
-        disable_dns_seeds: false,
         network,
         pow_fraud_proofs,
-        compact_filters: false,
-        fixed_peer: None,
-        max_banscore: 100,
-        max_outbound: 8,
-        max_inflight: 10,
         datadir,
-        proxy: None,
-        assume_utreexo: None,
-        backfill: false,
-        filter_start_height: None,
         user_agent: "node_test".to_string(),
-        allow_v1_fallback: true,
+        ..Default::default()
     }
 }
 
@@ -280,7 +228,8 @@ pub fn create_false_acc(tip: usize) -> Vec<u8> {
     serialize(utreexo_root)
 }
 
-pub fn get_test_headers() -> Vec<Header> {
+/// Returns the first 2016 signet headers
+pub fn signet_headers() -> Vec<Header> {
     let mut headers: Vec<Header> = Vec::new();
 
     let file = include_bytes!("../../../../floresta-chain/testdata/signet_headers.zst");
@@ -294,64 +243,54 @@ pub fn get_test_headers() -> Vec<Header> {
     headers
 }
 
-pub fn get_test_blocks() -> io::Result<HashMap<BlockHash, Block>> {
-    let dir = "./src/p2p_wire/tests/test_data/blocks.json";
-    let mut contents = String::new();
-    File::open(dir)?.read_to_string(&mut contents)?;
+/// Returns the first 121 signet blocks, including genesis
+pub fn signet_blocks() -> HashMap<BlockHash, Block> {
+    let file = include_str!("./test_data/blocks.json");
+    let entries: Vec<serde_json::Value> = serde_json::from_str(file).unwrap();
 
-    let blocks: Vec<BlockFile> = serde_json::from_str(&contents).unwrap();
-    let mut u_blocks = HashMap::new();
-
-    for block_str in blocks {
-        let ser_block = Vec::from_hex(&block_str.block).unwrap();
-        let block: Block = deserialize_partial(&ser_block).unwrap().0;
-        u_blocks.insert(block.block_hash(), block);
-    }
-
-    Ok(u_blocks)
+    entries
+        .iter()
+        .map(|e| {
+            let str = e["block"].as_str().unwrap();
+            let block: Block = deserialize_hex(str).unwrap();
+            (block.block_hash(), block)
+        })
+        .collect()
 }
 
-pub fn get_test_accs() -> io::Result<HashMap<BlockHash, Vec<u8>>> {
-    let mut contents = String::new();
-    File::open("./src/p2p_wire/tests/test_data/roots.json")
-        .unwrap()
-        .read_to_string(&mut contents)
-        .unwrap();
-    let roots: Vec<UtreexoRoots> = serde_json::from_str(&contents).unwrap();
-    let headers = get_test_headers();
+/// Returns the first 120 signet accumulators. The genesis hash doesn't have a value since those
+/// coinbase coins are unspendable.
+pub fn signet_roots() -> HashMap<BlockHash, Vec<u8>> {
+    let file = include_str!("./test_data/roots.json");
+    let roots: Vec<UtreexoRoots> = serde_json::from_str(file).unwrap();
+
+    let headers = signet_headers();
     let mut accs = HashMap::new();
 
     for root in roots.into_iter() {
-        let buffer = serialize(root.clone());
+        // For empty signet blocks numleaves equals the height; the genesis coins are unspendable,
+        // so at height 1 we have one leaf, and so on as long as blocks have only one coinbase UTXO
+        let height = root.numleaves;
 
-        // Insert the serialised Utreexo-Root along with its corresponding BlockHash in the HashMap
-        accs.insert(headers[root.numleaves].block_hash(), buffer);
+        accs.insert(headers[height].block_hash(), serialize(root));
     }
-    Ok(accs)
+    accs
 }
 
-pub fn generate_invalid_block() -> Block {
-    let invalid_block_str = "00000020daf3b60d374b19476461f97540498dcfa2eb7016238ec6b1d022f82fb60100007a7ae65b53cb988c2ec92d2384996713821d5645ffe61c9acea60da75cd5edfa1a944d5fae77031e9dbb050001010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025751feffffff0200f2052a01000000160014ef2dceae02e35f8137de76768ae3345d99ca68860000000000000000776a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf94c4fecc7daa2490047304402202b3f946d6447f9bf17d00f3696cede7ee70b785495e5498274ee682a493befd5022045fc0bcf9331073168b5d35507175f9f374a8eba2336873885d12aada67ea5f60100012000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-
-    let block = Vec::from_hex(invalid_block_str).unwrap();
-    let block: Block = deserialize_partial(&block).unwrap().0;
-
-    block
+/// Returns an invalid signet block that would be at height 7
+pub fn invalid_block_h7() -> Block {
+    deserialize_hex(
+        "00000020daf3b60d374b19476461f97540498dcfa2eb7016238ec6b1d022f82fb60100007a7ae65b53cb988c2ec92d2384996713821d5645ffe61c9acea60da75cd5edfa1a944d5fae77031e9dbb050001010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025751feffffff0200f2052a01000000160014ef2dceae02e35f8137de76768ae3345d99ca68860000000000000000776a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf94c4fecc7daa2490047304402202b3f946d6447f9bf17d00f3696cede7ee70b785495e5498274ee682a493befd5022045fc0bcf9331073168b5d35507175f9f374a8eba2336873885d12aada67ea5f601000120000000000000000000000000000000000000000000000000000000000000000000000000"
+    ).unwrap()
 }
 
-pub fn get_essentials() -> Essentials {
-    let headers = get_test_headers();
-    let blocks = get_test_blocks().unwrap();
-    let invalid_block = generate_invalid_block();
-
-    Essentials {
-        headers,
-        blocks,
-        invalid_block,
-    }
+#[derive(Constructor)]
+/// The chain data that our simulated peer will have
+pub struct PeerData {
+    headers: Vec<Header>,
+    blocks: HashMap<BlockHash, Block>,
+    accs: HashMap<BlockHash, Vec<u8>>,
 }
-
-type PeerData = (HeaderList, BlockHashMap, BlockDataMap);
 
 pub async fn setup_node(
     peers: Vec<PeerData>,
@@ -367,7 +306,7 @@ pub async fn setup_node(
     let chain = ChainState::new(chainstore, network, AssumeValidArg::Disabled);
     let chain = Arc::new(chain);
 
-    let mut headers = get_test_headers();
+    let mut headers = signet_headers();
     headers.remove(0);
     headers.truncate(num_blocks);
     for header in headers {
@@ -389,9 +328,9 @@ pub async fn setup_node(
     for (i, peer) in peers.into_iter().enumerate() {
         let (sender, receiver) = unbounded_channel();
         let peer = create_peer(
-            peer.0,
-            peer.1,
-            peer.2,
+            peer.headers,
+            peer.blocks,
+            peer.accs,
             node.node_tx.clone(),
             sender.clone(),
             receiver,
@@ -406,4 +345,71 @@ pub async fn setup_node(
         .unwrap();
 
     chain
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::consensus::deserialize;
+    use bitcoin::hashes::Hash;
+    use bitcoin::BlockHash;
+
+    use super::invalid_block_h7;
+    use super::signet_blocks;
+    use super::signet_headers;
+    use super::signet_roots;
+
+    #[test]
+    fn test_get_headers_and_blocks() {
+        let headers = signet_headers();
+        let blocks = signet_blocks();
+
+        assert_eq!(headers.len(), 2016);
+        assert_eq!(blocks.len(), 121); // including genesis, up to height 120
+
+        // Sanity check
+        let mut prev_hash = BlockHash::all_zeros();
+        for (i, header) in headers.iter().enumerate() {
+            let hash = header.block_hash();
+
+            let Some(block) = blocks.get(&hash) else {
+                if i < 121 {
+                    panic!("We should have a block at height {i}");
+                }
+                break;
+            };
+
+            assert_eq!(*header, block.header, "hashmap links to the correct block");
+            assert!(block.check_merkle_root(), "valid txdata");
+            assert_eq!(header.prev_blockhash, prev_hash, "valid hash chain");
+            prev_hash = hash;
+        }
+    }
+
+    #[test]
+    fn test_get_invalid_block() {
+        let invalid_block = invalid_block_h7();
+        assert!(!invalid_block.txdata.is_empty(), "at least one tx");
+
+        assert!(!invalid_block.check_merkle_root(), "invalid merkle root");
+
+        let headers = signet_headers();
+        assert_eq!(
+            invalid_block.header.prev_blockhash,
+            headers[6].block_hash(),
+            "invalid block is at height 7",
+        );
+    }
+
+    #[test]
+    fn test_get_accs() {
+        let accs = signet_roots();
+        assert_eq!(accs.len(), 120, "we have roots starting from height 1");
+
+        for (i, header) in signet_headers().iter().enumerate().skip(1).take(120) {
+            let acc = accs.get(&header.block_hash()).unwrap();
+
+            let leaves: u64 = deserialize(acc.clone().drain(0..8).as_slice()).unwrap();
+            assert_eq!(i as u64, leaves, "one leaf added per block");
+        }
+    }
 }

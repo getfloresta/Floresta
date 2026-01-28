@@ -24,12 +24,12 @@ use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_electrum::electrum_protocol::ElectrumServer;
+use floresta_mempool::Mempool;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_wire::address_man::AddressMan;
-use floresta_wire::mempool::Mempool;
+use floresta_wire::node::running_ctx::RunningNode;
 use floresta_wire::node::UtreexoNode;
-use floresta_wire::running_node::RunningNode;
 use floresta_wire::UtreexoNodeConfig;
 use rcgen::BasicConstraints;
 use rcgen::CertificateParams;
@@ -419,15 +419,13 @@ impl Florestad {
             proxy,
             datadir: data_dir.clone(),
             fixed_peer: self.config.connect.clone(),
-            max_banscore: 50,
             compact_filters: self.config.cfilters,
-            max_outbound: 10,
-            max_inflight: 20,
             assume_utreexo: self.config.assumeutreexo_value.clone().or(assume_utreexo),
             backfill: self.config.backfill,
             filter_start_height: self.config.filters_start_height,
             user_agent: self.config.user_agent.clone(),
             allow_v1_fallback: self.config.allow_v1_fallback,
+            ..Default::default()
         };
 
         let acc = Pollard::new();
