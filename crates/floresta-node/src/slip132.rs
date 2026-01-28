@@ -108,6 +108,25 @@ pub enum Error {
     InternalFailure,
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Base58(e) => write!(f, "base58 error: {}", e),
+            Error::Hex(e) => write!(f, "hex error: {}", e),
+            Error::CannotDeriveFromHardenedKey => write!(f, "cannot derive from hardened key"),
+            Error::InvalidChildNumber(n) => write!(f, "child number {} is out of range", n),
+            Error::InvalidChildNumberFormat => write!(f, "invalid child number format"),
+            Error::InvalidDerivationPathFormat => write!(f, "invalid derivation path format"),
+            Error::UnknownVersion(v) => write!(f, "unknown version magic bytes {:02X?}", v),
+            Error::WrongExtendedKeyLength(l) => write!(f, "wrong extended key length: {}", l),
+            Error::UnknownSlip32Prefix => write!(f, "unknown SLIP32 prefix"),
+            Error::InternalFailure => write!(f, "internal failure"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 impl From<bip32::Error> for Error {
     fn from(err: bip32::Error) -> Self {
         match err {

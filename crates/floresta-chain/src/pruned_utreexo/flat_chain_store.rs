@@ -382,6 +382,24 @@ pub enum FlatChainstoreError {
     InvalidValidationIndex,
 }
 
+impl core::fmt::Display for FlatChainstoreError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FlatChainstoreError::Io(e) => write!(f, "io error: {}", e),
+            FlatChainstoreError::BlockNotFound => write!(f, "block not found"),
+            FlatChainstoreError::IndexIsFull => write!(f, "index is full"),
+            FlatChainstoreError::DbTooNew(v) => write!(f, "database version {} is too new", v),
+            FlatChainstoreError::Poisoned => write!(f, "lock is poisoned"),
+            FlatChainstoreError::InvalidMagic(m) => write!(f, "invalid magic: {:#x}", m),
+            FlatChainstoreError::AccumulatorTooBig => write!(f, "accumulator is too big"),
+            FlatChainstoreError::IndexTooBig => write!(f, "index is too big"),
+            FlatChainstoreError::InvalidMetadataPointer => write!(f, "invalid metadata pointer"),
+            FlatChainstoreError::DbCorrupted => write!(f, "database is corrupted"),
+            FlatChainstoreError::InvalidValidationIndex => write!(f, "invalid validation index"),
+        }
+    }
+}
+
 /// Need this to use [FlatChainstoreError] as a [DatabaseError] in [ChainStore]
 impl DatabaseError for FlatChainstoreError {}
 

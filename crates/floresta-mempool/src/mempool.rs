@@ -113,6 +113,23 @@ pub enum AcceptToMempoolError {
     BlockNotFound,
 }
 
+impl std::fmt::Display for AcceptToMempoolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AcceptToMempoolError::InvalidProof => write!(f, "invalid proof"),
+            AcceptToMempoolError::InvalidPrevout => write!(f, "invalid prevout"),
+            AcceptToMempoolError::MemoryUsageTooHigh => write!(f, "memory usage too high"),
+            AcceptToMempoolError::PrevoutNotFound => write!(f, "prevout not found"),
+            AcceptToMempoolError::ConflictingTransaction => write!(f, "conflicting transaction"),
+            AcceptToMempoolError::Rustreexo(e) => write!(f, "rustreexo error: {}", e),
+            AcceptToMempoolError::DuplicateInput => write!(f, "duplicate input"),
+            AcceptToMempoolError::BlockNotFound => write!(f, "block not found"),
+        }
+    }
+}
+
+impl std::error::Error for AcceptToMempoolError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A proof for a transaction in the mempool.
 pub struct MempoolProof {

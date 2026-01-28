@@ -83,6 +83,16 @@ pub enum HeaderExtError {
     ChainWorkOverflow,
 }
 
+impl core::fmt::Display for HeaderExtError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HeaderExtError::Chain(e) => write!(f, "chain error: {}", e),
+            HeaderExtError::BlockNotFound => write!(f, "block not found"),
+            HeaderExtError::ChainWorkOverflow => write!(f, "chain work overflow"),
+        }
+    }
+}
+
 impl HeaderExt for Header {
     fn calculate_median_time_past(
         &self,

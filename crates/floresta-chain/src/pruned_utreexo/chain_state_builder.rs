@@ -39,6 +39,19 @@ pub enum BlockchainBuilderError {
     Database(Box<dyn DatabaseError>),
 }
 
+impl core::fmt::Display for BlockchainBuilderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            BlockchainBuilderError::MissingChainstore => write!(f, "chainstore is missing"),
+            BlockchainBuilderError::MissingChainParams => write!(f, "chain parameters are missing"),
+            BlockchainBuilderError::IncompleteTip => {
+                write!(f, "tip and tip_header must be provided together")
+            }
+            BlockchainBuilderError::Database(e) => write!(f, "database error: {:?}", e),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 /// A builder for configuring and creating a `ChainState`.
 ///

@@ -25,6 +25,17 @@ struct Inner {
 pub enum MemoryDatabaseError {
     PoisonedLock,
 }
+
+impl std::fmt::Display for MemoryDatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemoryDatabaseError::PoisonedLock => write!(f, "database lock is poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for MemoryDatabaseError {}
+
 #[derive(Debug, Default)]
 pub struct MemoryDatabase {
     inner: RwLock<Inner>,
