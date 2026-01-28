@@ -1,40 +1,40 @@
 [workspace]
 resolver = "2"
 members = [
-    # Libraries
-    "crates/floresta",
-    "crates/floresta-node",
-    "crates/floresta-chain",
-    "crates/floresta-rpc",
-    "crates/floresta-common",
-    "crates/floresta-compact-filters",
-    "crates/floresta-electrum",
-    "crates/floresta-watch-only",
-    "crates/floresta-wire",
-    "crates/floresta-mempool",
+  # Libraries
+  "crates/floresta",
+  "crates/floresta-node",
+  "crates/floresta-chain",
+  "crates/floresta-rpc",
+  "crates/floresta-common",
+  "crates/floresta-compact-filters",
+  "crates/floresta-electrum",
+  "crates/floresta-watch-only",
+  "crates/floresta-wire",
+  "crates/floresta-mempool",
 
-    # Binaries
-    "bin/florestad",
-    "bin/floresta-cli",
+  # Binaries
+  "bin/florestad",
+  "bin/floresta-cli",
 
-    # Tests and monitoring
-    "metrics",
-    "fuzz",
+  # Tests and monitoring
+  "metrics",
+  "fuzz",
 ]
 
 default-members = [
-    "crates/floresta",
-    "crates/floresta-node",
-    "crates/floresta-chain",
-    "crates/floresta-rpc",
-    "crates/floresta-common",
-    "crates/floresta-compact-filters",
-    "crates/floresta-electrum",
-    "crates/floresta-watch-only",
-    "crates/floresta-wire",
-    "crates/floresta-mempool",
-    "bin/florestad",
-    "bin/floresta-cli",
+  "crates/floresta",
+  "crates/floresta-node",
+  "crates/floresta-chain",
+  "crates/floresta-rpc",
+  "crates/floresta-common",
+  "crates/floresta-compact-filters",
+  "crates/floresta-electrum",
+  "crates/floresta-watch-only",
+  "crates/floresta-wire",
+  "crates/floresta-mempool",
+  "bin/florestad",
+  "bin/floresta-cli",
 ]
 
 [workspace.package]
