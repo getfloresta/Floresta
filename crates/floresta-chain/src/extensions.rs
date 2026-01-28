@@ -354,10 +354,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn broadcast(&self, _: &Transaction) -> Result<(), Self::Error> {
-            unimplemented!()
-        }
-
         fn estimate_fee(&self, _: usize) -> Result<f64, Self::Error> {
             unimplemented!()
         }
@@ -375,10 +371,6 @@ mod tests {
         }
 
         fn is_in_ibd(&self) -> bool {
-            unimplemented!()
-        }
-
-        fn get_unbroadcasted(&self) -> Vec<Transaction> {
             unimplemented!()
         }
 
