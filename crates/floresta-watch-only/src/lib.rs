@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+#![doc = include_str!("../README.md")]
 // cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(html_logo_url = "https://avatars.githubusercontent.com/u/249173822")]
