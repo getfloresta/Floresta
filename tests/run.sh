@@ -29,9 +29,7 @@ if [[ -z "$FLORESTA_TEMP_DIR" ]]; then
 
 fi
 
-# Clean existing data/logs directories before running the tests
 rm -rf "$FLORESTA_TEMP_DIR/data"
-
 # Detect if --preserve-data-dir is among args
 # and forward args to uv
 PRESERVE_DATA=false
@@ -45,12 +43,11 @@ for arg in "$@"; do
     fi
 done
 
+# Clean existing logs directories BEFORE running tests (unless preserving)
+if [ "$PRESERVE_DATA" = false ]; then
+    echo "Cleaning up test directories before running tests..."
+    rm -rf "$FLORESTA_TEMP_DIR/logs"
+fi
+
 # Run the re-freshed tests
 uv run ./tests/test_runner.py "${UV_ARGS[@]}"
-
-# Clean up the data dir if we succeeded and --preserve-data-dir was not passed
-if [ $? -eq 0 ] && [ "$PRESERVE_DATA" = false ];
-then
-    echo "Tests passed, cleaning up the data dir at $FLORESTA_TEMP_DIR"
-    rm -rf $FLORESTA_TEMP_DIR/data $FLORESTA_TEMP_DIR/logs
-fi
