@@ -135,3 +135,9 @@ class UtreexoRPC(BaseRPC):
         Perform the `ping` RPC that checks if our peers are alive.
         """
         self.perform_request("ping")
+
+    def proveutxochaintipinclusion(self, txids: list, vouts: list) -> dict:
+        """
+        Generate a Utreexo proof for UTXOs at the current chain tip.
+        """
+        return self.perform_request("proveutxochaintipinclusion", [txids, vouts])

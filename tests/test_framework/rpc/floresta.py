@@ -190,3 +190,9 @@ class FlorestaRPC(BaseRPC):
             A dictionary containing the outpoint information.
         """
         return self.perform_request("gettxout", params=[txid, vout, include_mempool])
+
+    def verifyutxochaintipinclusionproof(self, proof: str) -> bool:
+        """
+        Verify Utreexo accumulator proof.
+        """
+        return self.perform_request("verifyutxochaintipinclusionproof", [proof])
