@@ -277,7 +277,7 @@ let db = MemoryDatabase::new();
 
 This crate uses Electrum-style script hashing for address identification. The script hash is computed as:
 
-```
+```text
 script_hash = SHA256(scriptPubKey)  // with bytes reversed
 ```
 
