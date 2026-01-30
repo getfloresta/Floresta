@@ -165,12 +165,22 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Methods {
-    /// Returns information about the current state of the blockchain
-    #[command(name = "getblockchaininfo")]
+    #[doc = include_str!("../../../doc/rpc/getblockchaininfo.md")]
+    #[command(
+        name = "getblockchaininfo",
+        about = "Returns an object containing various state info regarding blockchain processing.",
+        long_about = Some(include_str!("../../../doc/rpc/getblockchaininfo.md")),
+        disable_help_subcommand = true
+    )]
     GetBlockchainInfo,
 
-    /// Returns the hash of the block associated with height
-    #[command(name = "getblockhash")]
+    #[doc = include_str!("../../../doc/rpc/getblockhash.md")]
+    #[command(
+        name = "getblockhash",
+        about = "Returns the hash of the block at the given height.",
+        long_about = Some(include_str!("../../../doc/rpc/getblockhash.md")),
+        disable_help_subcommand = true
+    )]
     GetBlockHash { height: u32 },
 
     #[doc = include_str!("../../../doc/rpc/getbestblockhash.md")]
