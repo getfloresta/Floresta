@@ -35,7 +35,6 @@ use rcgen::BasicConstraints;
 use rcgen::CertificateParams;
 use rcgen::IsCa;
 use rcgen::KeyPair;
-use rustreexo::accumulator::pollard::Pollard;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio::task;
@@ -428,14 +427,13 @@ impl Florestad {
             ..Default::default()
         };
 
-        let acc = Pollard::new();
         let kill_signal = self.stop_signal.clone();
 
         // Chain Provider (p2p)
         let chain_provider = UtreexoNode::<_, RunningNode>::new(
             config,
             blockchain_state.clone(),
-            Arc::new(tokio::sync::Mutex::new(Mempool::new(acc, 300_000_000))),
+            Arc::new(tokio::sync::Mutex::new(Mempool::new(300_000_000))),
             cfilters.clone(),
             kill_signal.clone(),
             AddressMan::default(),
@@ -494,6 +492,7 @@ impl Florestad {
             cfilters,
             chain_provider.get_handle(),
         )
+        .await
         .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
         // Default Electrum Server port.

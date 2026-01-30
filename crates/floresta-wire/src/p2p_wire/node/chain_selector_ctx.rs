@@ -897,7 +897,7 @@ where
                     }
 
                     NodeNotification::FromUser(request, responder) => {
-                        self.perform_user_request(request, responder);
+                        self.perform_user_request(request, responder).await;
                     }
                 }
             }
@@ -935,7 +935,7 @@ where
     ) -> Result<(), WireError> {
         match notification {
             NodeNotification::FromUser(request, responder) => {
-                self.perform_user_request(request, responder);
+                self.perform_user_request(request, responder).await;
             }
 
             NodeNotification::FromPeer(peer, notification) => {
