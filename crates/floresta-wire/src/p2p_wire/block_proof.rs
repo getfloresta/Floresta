@@ -36,7 +36,7 @@ use rustreexo::accumulator::node_hash::BitcoinNodeHash;
 /// stackexchange answer, but that doesn't change the max possible input value.
 ///
 /// <https://bitcoin.stackexchange.com/questions/85752/maximum-number-of-inputs-per-transaction>
-const MAX_INPUTS_PER_BLOCK: usize = 24_386;
+pub const MAX_INPUTS_PER_BLOCK: usize = 24_386;
 
 /// How high the Utreexo forest can be.
 const MAX_TREE_DEPTH: usize = 64;
@@ -46,7 +46,7 @@ const MAX_TREE_DEPTH: usize = 64;
 /// Assuming that each UTXO needs a proof, with no overlaps of any kind, the maximum number of
 /// proof hashes is the number of inputs per block multiplied by the maximum number of
 /// elements that each proof requires, in a tree with `MAX_TREE_DEPTH` depth.
-const MAX_PROOF_HASHES: usize = MAX_INPUTS_PER_BLOCK * MAX_TREE_DEPTH;
+pub const MAX_PROOF_HASHES: usize = MAX_INPUTS_PER_BLOCK * MAX_TREE_DEPTH;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// A Bitmap used to request proof elements in Utreexo proofs.
