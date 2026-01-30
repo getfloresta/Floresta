@@ -1,5 +1,9 @@
+use std::io::Cursor;
+use std::io::Read;
+
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
@@ -17,7 +21,12 @@ use corepc_types::v30::GetBlockVerboseOne;
 use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
+use floresta_common::read_bounded_len;
+use floresta_wire::block_proof::MAX_INPUTS_PER_BLOCK;
+use floresta_wire::block_proof::MAX_PROOF_HASHES;
 use miniscript::descriptor::checksum;
+use rustreexo::accumulator::node_hash::BitcoinNodeHash;
+use rustreexo::accumulator::proof::Proof;
 use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
@@ -28,6 +37,10 @@ use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::RescanConfidence;
+
+/// Max hex-encoded proof size (DoS protection).
+/// 4MB based on MAX_INPUTS_PER_BLOCK (24,386) with safety margin.
+const MAX_PROOF_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
@@ -666,5 +679,93 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    pub(super) fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: &str,
+    ) -> Result<bool, JsonRpcError> {
+        if proof.len() > MAX_PROOF_SIZE_BYTES {
+            return Err(JsonRpcError::InvalidProof("Proof too large".into()));
+        }
+
+        let proof_bytes: Vec<u8> =
+            bitcoin::hashes::hex::FromHex::from_hex(proof).map_err(|_| JsonRpcError::InvalidHex)?;
+
+        let mut cursor = Cursor::new(&proof_bytes);
+
+        // Parse and verify block hash matches current chain tip
+        let mut hash_bytes = [0u8; 32];
+        cursor
+            .read_exact(&mut hash_bytes)
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        let proved_at = BlockHash::from_byte_array(hash_bytes);
+        let best = self.get_best_block_hash()?;
+
+        if proved_at != best {
+            return Err(JsonRpcError::InvalidProof(format!(
+                "Possibly stale proof. Current chain tip is at block {} but proof was generated at block {}",
+                best, proved_at
+            )));
+        }
+
+        // Parse targets
+        let num_targets = read_bounded_len(&mut cursor, MAX_INPUTS_PER_BLOCK)
+            .map_err(|e| JsonRpcError::Decode(format!("Too many targets: {}", e)))?;
+        let targets: Vec<u64> = (0..num_targets)
+            .map(|_| VarInt::consensus_decode(&mut cursor).map(|v| v.0))
+            .collect::<Result<_, _>>()
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        // Parse proof hashes
+        let num_hashes = read_bounded_len(&mut cursor, MAX_PROOF_HASHES)
+            .map_err(|e| JsonRpcError::Decode(format!("Too many proof hashes: {}", e)))?;
+        let proof_hashes: Vec<BitcoinNodeHash> = (0..num_hashes)
+            .map(|_| {
+                let mut h = [0u8; 32];
+                cursor.read_exact(&mut h).map(|_| BitcoinNodeHash::from(h))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        // Parse proven hashes
+        let mut count_bytes = [0u8; 4];
+        cursor
+            .read_exact(&mut count_bytes)
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+        let num_proven = u32::from_le_bytes(count_bytes) as usize;
+        if num_proven > MAX_INPUTS_PER_BLOCK {
+            return Err(JsonRpcError::Decode(format!(
+                "Too many proven hashes: {} (max: {})",
+                num_proven, MAX_INPUTS_PER_BLOCK
+            )));
+        }
+        let hashes_proven: Vec<BitcoinNodeHash> = (0..num_proven)
+            .map(|_| {
+                let mut h = [0u8; 32];
+                cursor.read_exact(&mut h).map(|_| BitcoinNodeHash::from(h))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        if cursor.position() as usize != proof_bytes.len() {
+            return Err(JsonRpcError::Decode("Trailing bytes in proof".into()));
+        }
+
+        // Reconstruct and verify proof
+        let parsed_proof = Proof {
+            targets,
+            hashes: proof_hashes,
+        };
+        let stump = self.chain.acc();
+
+        match stump.verify(&parsed_proof, &hashes_proven) {
+            Ok(valid) => Ok(valid),
+            Err(e) => Err(JsonRpcError::InvalidProof(format!(
+                "Proof verification failed: {}",
+                e
+            ))),
+        }
     }
 }
