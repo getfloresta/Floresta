@@ -1,0 +1,48 @@
+name: Peripheral Code Linting
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-peripheral:
+    runs-on: ubuntu-latest
+    name: Lint peripheral code (justfile, TOML, shell scripts)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Check and format justfile
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Check justfile formatting
+        run: just --fmt --check --unstable
+
+      # Check TOML files with taplo
+      - name: Install taplo
+        uses: taiki-e/install-action@v2
+        with:
+          tool: taplo-cli
+
+      - name: Check TOML formatting
+        run: |
+          taplo fmt --check Cargo.toml
+          taplo fmt --check pyproject.toml
+          taplo fmt --check .rustfmt.toml
+          taplo fmt --check typos.toml
+
+      # Check shell scripts with shellcheck
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: |
+          find contrib tests -name "*.sh" -type f | xargs shellcheck --severity=warning || true
+
+      # Check Dockerfile with hadolint
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning

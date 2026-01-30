@@ -1,12 +1,12 @@
 _default:
-  @just --list
+    @just --list
 
 # Checks whether a command is available.
 check-command cmd recipe="check-command" link_to_package="":
-    @if ! command -v "{{cmd}}" >/dev/null; then \
-        echo "Command '{{cmd}}' is not available, but 'just {{recipe}}' requires it." >&2; \
-        if [ -n "{{link_to_package}}" ]; then \
-            echo "This might help you: {{link_to_package}}" >&2; \
+    @if ! command -v "{{ cmd }}" >/dev/null; then \
+        echo "Command '{{ cmd }}' is not available, but 'just {{ recipe }}' requires it." >&2; \
+        if [ -n "{{ link_to_package }}" ]; then \
+            echo "This might help you: {{ link_to_package }}" >&2; \
         fi; \
         exit 1; \
     fi
@@ -33,17 +33,17 @@ clean:
 
 # Execute all tests
 test name="":
-    @just test-doc {{name}}
-    @just test-unit {{name}}
+    @just test-doc {{ name }}
+    @just test-unit {{ name }}
     @just test-wkspc
 
 # Execute doc tests
 test-doc name="":
-    cargo test {{name}} --doc
+    cargo test {{ name }} --doc
 
 # Execute unit tests
 test-unit name="":
-    cargo test --lib {{name}} -- --nocapture
+    cargo test --lib {{ name }} -- --nocapture
 
 # Execute workspace-related tests
 test-wkspc:
@@ -51,11 +51,11 @@ test-wkspc:
 
 # Execute tests/prepare.sh.
 test-functional-prepare arg="":
-    bash tests/prepare.sh {{arg}}
+    bash tests/prepare.sh {{ arg }}
 
 # Execute tests/run.sh
 test-functional-run arg="":
-    bash tests/run.sh {{arg}}
+    bash tests/run.sh {{ arg }}
 
 # Format and lint functional tests
 test-functional-uv-fmt:
@@ -112,7 +112,7 @@ format:
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
     @just check-command "cargo-hack" "test-features" "cargo install cargo-hack --locked --version 0.6.34"
-    ./contrib/feature_matrix.sh test {{arg}}
+    ./contrib/feature_matrix.sh test {{ arg }}
 
 # Format code and run clippy for all feature combinations in each crate (arg: optional, e.g., '-- -D warnings')
 lint-features arg="":
@@ -122,7 +122,7 @@ lint-features arg="":
     @just doc-check
     @just spell-check
 
-    ./contrib/feature_matrix.sh clippy '{{arg}}'
+    ./contrib/feature_matrix.sh clippy '{{ arg }}'
 
     @just test-functional-uv-fmt
 
@@ -140,10 +140,11 @@ pcc:
 
 # Must have pandoc installed
 # Needs sudo to overwrite existing man pages
+
 # Convert all markdown files on /doc/rpc/ to man pages on /doc/rpc_man/
 gen-manpages path="":
     @just check-command pandoc gen-manpages "https://pandoc.org/installing.html"
-    ./contrib/dist/gen_manpages.sh {{path}}
+    ./contrib/dist/gen_manpages.sh {{ path }}
 
 # Run typos
 spell-check:
@@ -155,16 +156,17 @@ spell-check:
 #   just install florestad         # installs only florestad
 #   just install floresta-cli      # installs only floresta-cli
 #
+
 # Floresta recipe to help installing the binaries without versioning problems.
 install bin="all":
-    if [ "{{bin}}" = "all" ]; then \
+    if [ "{{ bin }}" = "all" ]; then \
         cargo install --path bin/florestad --locked && \
         cargo install --path bin/floresta-cli --locked; \
-    elif [ "{{bin}}" = "florestad" ]; then \
+    elif [ "{{ bin }}" = "florestad" ]; then \
         cargo install --path bin/florestad --locked; \
-    elif [ "{{bin}}" = "floresta-cli" ]; then \
+    elif [ "{{ bin }}" = "floresta-cli" ]; then \
         cargo install --path bin/floresta-cli --locked; \
     else \
-        printf "Unknown binary: %s\n" "{{bin}}" >&2; \
+        printf "Unknown binary: %s\n" "{{ bin }}" >&2; \
         exit 1; \
     fi
