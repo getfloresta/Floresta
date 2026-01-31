@@ -964,7 +964,6 @@ version = "0.4.0"
 dependencies = [
  "bitcoin",
  "hashbrown",
- "miniscript",
  "sha2",
  "spin",
 ]
@@ -1078,6 +1077,7 @@ dependencies = [
  "floresta-chain",
  "floresta-common",
  "kv",
+ "miniscript",
  "rand",
  "serde",
  "serde_json",
