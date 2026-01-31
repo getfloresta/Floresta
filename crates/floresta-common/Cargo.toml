@@ -11,16 +11,12 @@ readme.workspace = true # Floresta/README.md
 [dependencies]
 bitcoin = { workspace = true }
 hashbrown = { version = "0.16" }
-miniscript = { workspace = true, optional = true, default-features = false }
 sha2 = { workspace = true }
 spin = { workspace = true }
 
 [features]
-default = ["std", "descriptors-std"]
+default = ["std"]
 std = ["bitcoin/std", "sha2/std"]
-# Both features can be set at the same time, but for `no_std` only the latter should be used
-descriptors-std = ["miniscript/std"]
-descriptors-no-std = ["miniscript/no-std"]
 
 [lints]
 workspace = true

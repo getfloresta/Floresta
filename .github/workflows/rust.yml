@@ -142,8 +142,6 @@ jobs:
         include:
           - crate: floresta-common
             feature_args: ""
-          - crate: floresta-common
-            feature_args: "--features descriptors-no-std"
 
     steps:
       - uses: actions/checkout@v4

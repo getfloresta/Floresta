@@ -16,8 +16,8 @@ use bitcoin::ScriptBuf;
 use floresta_chain::BlockConsumer;
 use floresta_chain::UtxoData;
 use floresta_common::get_spk_hash;
-use floresta_common::parse_descriptors;
 
+pub mod descriptor;
 pub mod kv_database;
 #[cfg(any(test, feature = "memory-database"))]
 pub mod memory_database;
@@ -39,6 +39,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use sync::RwLock;
 use tracing::error;
+
+use crate::descriptor::parse_descriptors;
 
 #[derive(Debug)]
 pub enum WatchOnlyError<DatabaseError: fmt::Debug> {
