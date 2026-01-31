@@ -74,6 +74,7 @@ BASE_TEST_SUITE = [
     ("florestad", "wallet_conf"),
     ("florestad", "wallet_flag"),
     ("floresta-cli", "loaddescriptor"),
+    ("floresta-cli", "listdescriptors"),
 ]
 
 # Before running the tests, we check if the number of tests
