@@ -38,3 +38,9 @@ class FlorestaRPC(BaseRPC):
         List all loaded descriptors
         """
         return self.perform_request("listdescriptors")
+
+    def load_descriptor(self, descriptor: str) -> dict:
+        """
+        Load a descriptor into the node
+        """
+        return self.perform_request("loaddescriptor", params=[descriptor])
