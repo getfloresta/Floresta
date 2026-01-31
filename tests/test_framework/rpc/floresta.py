@@ -32,3 +32,9 @@ class FlorestaRPC(BaseRPC):
             raise ValueError(f"Invalid getmemoryinfo mode: '{mode}'")
 
         return self.perform_request("getmemoryinfo", params=[mode])
+
+    def list_descriptors(self):
+        """
+        List all loaded descriptors
+        """
+        return self.perform_request("listdescriptors")
