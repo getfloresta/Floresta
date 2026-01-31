@@ -27,6 +27,7 @@ use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_mempool::Mempool;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
+use floresta_watch_only::WatchOnlyError;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::node::running_ctx::RunningNode;
 use floresta_wire::node::UtreexoNode;
@@ -745,11 +746,12 @@ impl Florestad {
 
         // Add the configured descriptors and addresses to the wallet
         for descriptor in setup.descriptors {
-            let descriptor = descriptor.to_string();
-            let is_cached = wallet.is_cached(&descriptor)?;
-
-            if !is_cached {
-                wallet.push_descriptor(&descriptor)?;
+            if let Err(e) = wallet.push_descriptor(&descriptor.to_string()) {
+                if let WatchOnlyError::DescriptorDuplicate = e {
+                    warn!("Descriptor already exists in wallet, skipping: {descriptor}");
+                } else {
+                    return Err(FlorestadError::from(e));
+                }
             }
         }
         for addresses in setup.addresses {

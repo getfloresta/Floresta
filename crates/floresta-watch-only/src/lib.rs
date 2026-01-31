@@ -45,6 +45,7 @@ pub enum WatchOnlyError<DatabaseError: fmt::Debug> {
     WalletNotInitialized,
     TransactionNotFound,
     DatabaseError(DatabaseError),
+    DescriptorDuplicate,
 }
 
 impl<DatabaseError: fmt::Debug> Display for WatchOnlyError<DatabaseError> {
@@ -58,6 +59,9 @@ impl<DatabaseError: fmt::Debug> Display for WatchOnlyError<DatabaseError> {
             }
             WatchOnlyError::DatabaseError(e) => {
                 write!(f, "Database error: {e:?}")
+            }
+            WatchOnlyError::DescriptorDuplicate => {
+                write!(f, "Descriptor is already cached")
             }
         }
     }
@@ -626,10 +630,10 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
     }
 
     /// Tells whether or not a descriptor is already cached
-    pub fn is_cached(&self, desc: &String) -> Result<bool, WatchOnlyError<D::Error>> {
+    pub fn is_cached(&self, desc: &str) -> Result<bool, WatchOnlyError<D::Error>> {
         let inner = self.inner.read().expect("poisoned lock");
         let known_descs = inner.database.descs_get()?;
-        Ok(known_descs.contains(desc))
+        Ok(known_descs.contains(&String::from(desc)))
     }
 
     /// Tells whether an address is already cached
@@ -639,6 +643,10 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
     }
 
     pub fn push_descriptor(&self, descriptor: &str) -> Result<(), WatchOnlyError<D::Error>> {
+        if self.is_cached(&String::from(descriptor))? {
+            return Err(WatchOnlyError::DescriptorDuplicate);
+        }
+
         let inner = self.inner.write().expect("poisoned lock");
         Ok(inner.database.desc_save(descriptor)?)
     }
@@ -975,7 +983,7 @@ mod test {
         // [is_cached], [push_descriptor]
         let desc = "wsh(sortedmulti(1,[54ff5a12/48h/1h/0h/2h]tpubDDw6pwZA3hYxcSN32q7a5ynsKmWr4BbkBNHydHPKkM4BZwUfiK7tQ26h7USm8kA1E2FvCy7f7Er7QXKF8RNptATywydARtzgrxuPDwyYv4x/<0;1>/*,[bcf969c0/48h/1h/0h/2h]tpubDEFdgZdCPgQBTNtGj4h6AehK79Jm4LH54JrYBJjAtHMLEAth7LuY87awx9ZMiCURFzFWhxToRJK6xp39aqeJWrG5nuW3eBnXeMJcvDeDxfp/<0;1>/*))#fuw35j0q";
         cache.push_descriptor(desc).unwrap();
-        assert!(cache.is_cached(&desc.to_string()).unwrap());
+        assert!(cache.is_cached(desc).unwrap());
 
         // [derive_addresses]
         cache.derive_addresses().unwrap();
