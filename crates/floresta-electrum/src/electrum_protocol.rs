@@ -16,7 +16,7 @@ use floresta_common::get_spk_hash;
 use floresta_common::spsc::Channel;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
-use floresta_watch_only::kv_database::KvDatabase;
+use floresta_watch_only::sqlite_database::SqliteDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_wire::node_interface::NodeInterface;
@@ -164,7 +164,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
     pub chain: Arc<Blockchain>,
     /// The address cache is used to store addresses and transactions, like a
     /// watch-only wallet, but it is adapted to the electrum protocol.
-    pub address_cache: Arc<AddressCache<KvDatabase>>,
+    pub address_cache: Arc<AddressCache<SqliteDatabase>>,
 
     /// The clients are the clients connected to our server, we keep track of them
     /// using a unique id.
@@ -195,7 +195,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
 
 impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     pub fn new(
-        address_cache: Arc<AddressCache<KvDatabase>>,
+        address_cache: Arc<AddressCache<SqliteDatabase>>,
         chain: Arc<Blockchain>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         node_interface: NodeInterface,
@@ -897,8 +897,8 @@ mod test {
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
     use floresta_mempool::Mempool;
-    use floresta_watch_only::kv_database::KvDatabase;
     use floresta_watch_only::merkle::MerkleProof;
+    use floresta_watch_only::sqlite_database::SqliteDatabase;
     use floresta_watch_only::AddressCache;
     use floresta_wire::address_man::AddressMan;
     use floresta_wire::node::running_ctx::RunningNode;
@@ -956,9 +956,8 @@ mod test {
         headers
     }
 
-    fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
-        let test_id: u32 = rand::random();
-        let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
+    fn get_test_cache() -> Arc<AddressCache<SqliteDatabase>> {
+        let cache = SqliteDatabase::new_ephemeral().unwrap();
         let cache = AddressCache::new(cache);
 
         // Inserting test transactions in the wallet
