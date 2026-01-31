@@ -128,6 +128,9 @@ pub enum FlorestadError {
 
     /// Load a flat chain store error.
     CouldNotLoadFlatChainStore(BlockchainError),
+
+    /// Xpub network mismatch error.
+    XpubNetworkMismatch(String),
 }
 
 impl Display for FlorestadError {
@@ -228,6 +231,9 @@ impl Display for FlorestadError {
             }
             FlorestadError::CouldNotLoadFlatChainStore(err) => {
                 write!(f, "Failure while loading flat chainstore: {err:?}")
+            }
+            FlorestadError::XpubNetworkMismatch(xpub) => {
+                write!(f, "Xpub network mismatch: {xpub}")
             }
         }
     }
