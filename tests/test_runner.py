@@ -72,6 +72,8 @@ BASE_TEST_SUITE = [
     ("example", "bitcoin"),
     ("example", "utreexod"),
     ("florestad", "node-info"),
+    ("florestad", "wallet_conf"),
+    ("florestad", "wallet_flag"),
 ]
 
 # Before running the tests, we check if the number of tests

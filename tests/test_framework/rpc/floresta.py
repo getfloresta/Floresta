@@ -190,3 +190,9 @@ class FlorestaRPC(BaseRPC):
             A dictionary containing the outpoint information.
         """
         return self.perform_request("gettxout", params=[txid, vout, include_mempool])
+
+    def list_descriptors(self):
+        """
+        List all loaded descriptors
+        """
+        return self.perform_request("listdescriptors")
