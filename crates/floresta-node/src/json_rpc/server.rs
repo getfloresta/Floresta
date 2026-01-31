@@ -37,7 +37,6 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::GetBlockRes;
 use super::res::JsonRpcError;
 use super::res::RawTxJson;
 use super::res::RpcError;
@@ -230,25 +229,13 @@ async fn handle_json_rpc_request(
         "getblock" => {
             let hash = get_hash(&params, 0, "block_hash")?;
             // Default value in case of missing parameter is 1
-            let verbosity = get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1);
+            let verbosity: u8 =
+                get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1);
 
-            match verbosity {
-                0 => {
-                    let block = state.get_block_serialized(hash).await?;
-
-                    let block = GetBlockRes::Zero(block);
-                    Ok(serde_json::to_value(block).unwrap())
-                }
-
-                1 => {
-                    let block = state.get_block(hash).await?;
-
-                    let block = GetBlockRes::One(block.into());
-                    Ok(serde_json::to_value(block).unwrap())
-                }
-
-                _ => Err(JsonRpcError::InvalidVerbosityLevel),
-            }
+            state
+                .get_block(hash, verbosity)
+                .await
+                .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
         }
 
         "getblockchaininfo" => state
@@ -261,10 +248,13 @@ async fn handle_json_rpc_request(
 
         "getblockfrompeer" => {
             let hash = get_hash(&params, 0, "block_hash")?;
-            state
-                .get_block(hash)
+
+            let _ = state
+                .get_block(hash, 0)
                 .await
-                .map(|v| serde_json::to_value(v).unwrap())
+                .map(|v| serde_json::to_value(v).unwrap());
+
+            Ok(Value::Null)
         }
 
         "getblockhash" => {
