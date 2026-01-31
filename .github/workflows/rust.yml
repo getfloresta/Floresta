@@ -27,6 +27,8 @@ jobs:
 
       - name: Spell check
         uses: crate-ci/typos@v1
+        with:
+          config: ./_typos.toml
 
       - name: Run cargo fmt
         run: cargo +nightly fmt --all --check

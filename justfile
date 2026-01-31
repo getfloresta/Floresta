@@ -149,7 +149,7 @@ gen-manpages path="":
 # Run typos
 spell-check:
     @just check-command typos spell-check "cargo +nightly install typos-cli --locked"
-    typos
+    typos --config _typos.toml
 
 # Usage:
 #   just install                   # installs both florestad and floresta-cli
