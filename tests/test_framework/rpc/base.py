@@ -334,3 +334,9 @@ class BaseRPC(ABC):
                 "disconnectnode", params=[node_address, node_id]
             )
         return self.perform_request("disconnectnode", params=[node_address])
+
+    def list_descriptors(self):
+        """
+        List all loaded descriptors
+        """
+        return self.perform_request("listdescriptors")
