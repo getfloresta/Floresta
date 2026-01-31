@@ -105,6 +105,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let desc = slice::from_ref(&descriptor);
         let mut parsed = parse_descriptors(desc)?;
 
+        self.wallet.push_descriptor(&descriptor)?;
+        debug!("Descriptor pushed: {descriptor}");
+
         // It's ok to unwrap because we know there is at least one element in the vector
         let addresses = parsed.pop().unwrap();
         let addresses = (0..100)
@@ -133,9 +136,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         tokio::task::spawn(Self::rescan_with_block_filters(
             addresses, chain, wallet, cfilters, node, None, None,
         ));
-
-        self.wallet.push_descriptor(&descriptor)?;
-        debug!("Descriptor pushed: {descriptor}");
 
         Ok(true)
     }
