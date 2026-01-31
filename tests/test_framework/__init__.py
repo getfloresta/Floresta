@@ -268,24 +268,41 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.exception = exc_value
             return True
 
-    def __init__(self):
+    def __init__(self, logger=None, test_name: str = None):
         """
         Sets test framework defaults.
 
         Do not override this method. Instead, override the set_test_params() method
         """
+        self._test_name = test_name
         self._nodes = []
+        self.logger = logger
+
+    @property
+    def test_name(self) -> str:
+        """
+        Get the test name, which is the class name in lowercase.
+        This is used to create a log file for the test.
+        """
+        if self._test_name is not None:
+            return self._test_name
+
+        self._test_name = self.__class__.__name__.lower()
+        return self._test_name
 
     # pylint: disable=R0801
     def log(self, msg: str):
         """Log a message with the class caller"""
+        if self.logger is not None:
+            self.logger.debug(msg)
+            return
 
         now = (
             datetime.now(timezone.utc)
             .replace(microsecond=0)
             .strftime("%Y-%m-%d %H:%M:%S")
         )
-        print(f"[{self.__class__.__name__} {now}] {msg}")
+        print(f"[{self.test_name} {now}] {msg}")
 
     def main(self):
         """
@@ -409,12 +426,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         tempdir = str(FlorestaTestFramework.get_logs_dir())
 
-        # Get the class's base filename
-        filename = sys.modules[self.__class__.__module__].__file__
-        filename = os.path.basename(filename)
-        filename = filename.replace(".py", "")
-
-        return os.path.join(tempdir, f"{filename}.log")
+        return os.path.join(tempdir, f"{self.test_name}.log")
 
     def create_tls_key_cert(self) -> tuple[str, str]:
         """
@@ -668,7 +680,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         tempdir = str(self.get_integration_test_dir())
         targetdir = os.path.join(tempdir, "binaries")
-        testname = self.__class__.__name__.lower()
+        testname = self.test_name
 
         if variant == "florestad":
             node = self.setup_florestad_daemon(
