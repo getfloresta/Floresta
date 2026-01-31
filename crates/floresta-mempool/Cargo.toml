@@ -14,8 +14,8 @@ readme.workspace = true
 keywords = ["bitcoin", "mempool", "transactions"]
 
 [dependencies]
-ahash = "0.8"
-bitcoin = { workspace = true, features = ["serde", "std"] }
+ahash = { version = "0.8", default-features = false }
+bitcoin = { workspace = true }
 rand = { workspace = true }
 rustreexo = { workspace = true }
 

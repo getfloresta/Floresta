@@ -18,7 +18,7 @@ categories = ["cryptography::cryptocurrencies", "database"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-bitcoin = { workspace = true, features = [ "serde" ] }
+bitcoin = { workspace = true }
 bitcoinkernel = { version = "0.1", optional = true }
 lru = { version = "0.16", optional = true }
 memmap2 = { version = "0.9", optional = true }
@@ -34,6 +34,7 @@ floresta-common = { workspace = true, features = ["std"] }
 metrics = { workspace = true,  optional = true }
 
 [dev-dependencies]
+bitcoin = { workspace = true, features = ["serde"] }
 criterion = "0.7"
 hex = { workspace = true }
 rand = { workspace = true }

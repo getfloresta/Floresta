@@ -32,7 +32,7 @@ floresta-watch-only = { workspace = true, optional = true }
 floresta-wire = { workspace = true }
 
 [dev-dependencies]
-bitcoin = { workspace = true, features = [ "serde" ] }
+bitcoin = { workspace = true }
 miniscript = { workspace = true, features = ["std"] }
 rustreexo = { workspace = true }
 tokio = { workspace = true }

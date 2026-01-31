@@ -16,14 +16,14 @@ categories = ["cryptography::cryptocurrencies", "network-programming"]
 
 [dependencies]
 bip324 = { version = "=0.7.0", features = [ "tokio" ] }
-bitcoin = { workspace = true, features = ["serde", "std"] }
+bitcoin = { workspace = true }
 dns-lookup = { workspace = true }
 rand = { workspace = true }
 rustls = "=0.23.27"
 rustreexo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 ureq = { version = "3.1", features = ["socks-proxy", "json", "rustls-no-provider"], default-features = false }
 
