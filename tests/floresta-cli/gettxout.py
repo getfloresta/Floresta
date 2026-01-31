@@ -3,13 +3,11 @@
 """
 gettxout.py
 
-This functional test cli utility to interact with a Floresta node with `getxtout` command.
+This functional test cli utility to interact with a Floresta node with `gettxout` command.
 """
 
 import time
 import pytest
-
-from test_framework.constants import WALLET_DESCRIPTOR_EXTERNAL
 
 TIMEOUT_SECONDS = 120
 
@@ -23,12 +21,6 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain):
     log = setup_logging
     blocks = 10
     florestad, bitcoind, utreexod = florestad_bitcoind_utreexod_with_chain(blocks)
-
-    log.info(
-        f"Loading descriptor into Floresta node wallet: {WALLET_DESCRIPTOR_EXTERNAL}"
-    )
-    result = florestad.rpc.load_descriptor(WALLET_DESCRIPTOR_EXTERNAL)
-    assert result
 
     peer_info = bitcoind.rpc.get_peerinfo()
     peer_id = next(peer["id"] for peer in peer_info if "utreexo" in peer["subver"])
