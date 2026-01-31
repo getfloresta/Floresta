@@ -9,24 +9,26 @@ use miniscript::DescriptorPublicKey;
 use tracing::error;
 
 use crate::error::FlorestadError;
+use crate::slip132::generate_descriptor_from_xpub;
+use crate::slip132::is_xpub_mainnet;
 
-pub mod extended_pub_key {
-    use bitcoin::bip32::Xpub;
-
-    use crate::slip132;
-
-    pub fn from_str(s: &str) -> Result<Xpub, slip132::Error> {
-        slip132::FromSlip132::from_slip132_str(s)
-    }
-}
-
-fn parse_xpubs(xpubs: &[String]) -> Result<Vec<Descriptor<DescriptorPublicKey>>, FlorestadError> {
+fn parse_xpubs(
+    xpubs: &[String],
+    network: Network,
+) -> Result<Vec<Descriptor<DescriptorPublicKey>>, FlorestadError> {
     let mut descriptors = Vec::new();
     for key in xpubs {
+        // Check if the xpub network matches the expected network
+        let is_mainnet = is_xpub_mainnet(key.as_str())?;
+        if (is_mainnet && network != Network::Bitcoin)
+            || (!is_mainnet && network == Network::Bitcoin)
+        {
+            return Err(FlorestadError::XpubNetworkMismatch(key.clone()));
+        }
+
         // Parses the descriptor and get an external and change descriptors
-        let xpub = extended_pub_key::from_str(key.as_str())?;
-        let main_desc = format!("wpkh({xpub}/0/*)");
-        let change_desc = format!("wpkh({xpub}/1/*)");
+        let main_desc = generate_descriptor_from_xpub(key.as_str(), false)?;
+        let change_desc = generate_descriptor_from_xpub(key.as_str(), true)?;
         descriptors.push(Descriptor::<DescriptorPublicKey>::from_str(&main_desc)?);
         descriptors.push(Descriptor::<DescriptorPublicKey>::from_str(&change_desc)?);
     }
@@ -47,7 +49,7 @@ impl InitialWalletSetup {
         network: Network,
         addresses_per_descriptor: u32,
     ) -> Result<Self, FlorestadError> {
-        let mut descriptors = parse_xpubs(xpubs)?;
+        let mut descriptors = parse_xpubs(xpubs, network)?;
         descriptors.extend(parse_descriptors(initial_descriptors)?);
         descriptors.sort();
         descriptors.dedup();
@@ -98,62 +100,141 @@ pub fn parse_descriptors(
 
 #[cfg(test)]
 pub mod test {
-    use bitcoin::bip32::ChildNumber;
-    use bitcoin::secp256k1::Secp256k1;
     use bitcoin::Network;
 
     use super::*;
 
+    const XPUB: &str = "xpub6CPimhNogJosVzpueNmrWEfSHc2YTXG1ZyE6TBV4Nx6UxZ7zKSGYv9hKxNjiFY5o1vz7QeZa2m6vQmyndDrkECk8cShWYWxe1gqa1xJEkgs";
+    const YPUB: &str = "ypub6XmBfjfmuYD1bjv5RCEHU8jD1NPGZh6NRTGDB8ndQsd7MPnzhDhAsdrF9sK8Z4G9FvcFBHoGsZqhsDHtenca3K5QigYWVKXvkAx6HBxVGYM";
+    const ZPUB: &str = "zpub6rFvSvP5VbpXwej2L5WseLfxfdUzSczs9DK9v9mpXgXNqjFhtfUTRGkQKr7sXKNyrrzhd2LCysGqts1oT3b1PJji16xWzcmNMfhmZ8kkLZ1";
+    const XPUB_MAINNET: [&str; 3] = [XPUB, YPUB, ZPUB];
+
+    const TPUB: &str = "tpubDC73PMTHeKDXnFwNFz8CLBy2VVx4D85WW2vbzwVLwCD9zkQ6Vj97muhLRTbKvmue1PyVQLwizvBW6v2SD1LnzbeuHnRsDYQZGE8urTZHMn5";
+    const UPUB: &str = "upub5E3Vhaq9uVmz426B5FME1csAY8tvQ8vRqt7WnGyiJ4CoknpyM2WJk4B6uSh2kud3r8RJHTzS5jLFnWNRThKZyew6tDX2eXGMyTvfa8AVwyK";
+    const VPUB: &str = "vpub5Zrsj9pYeJLwTfggbSQYZDdpEpZ4M1qB1EUKfXB9bjsookSNjM6c6eFTYfjb8KcGJV4ZqAYScBvC7hyDbbWKCHVcC6RETNJUfwUFvnHJM8Y";
+    const XPUB_TESTNET: [&str; 3] = [TPUB, UPUB, VPUB];
+
     #[test]
     fn test_xpub_parsing() {
-        // Test cases from https://github.com/satoshilabs/slips/blob/master/slip-0132.md
-        const XPUB: &str = "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj";
-        const YPUB: &str = "ypub6Ww3ibxVfGzLrAH1PNcjyAWenMTbbAosGNB6VvmSEgytSER9azLDWCxoJwW7Ke7icmizBMXrzBx9979FfaHxHcrArf3zbeJJJUZPf663zsP";
-        const ZPUB: &str = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
+        // xpub | network | (main address, change address)
+        let cases = &[
+            (
+                XPUB,
+                Network::Bitcoin,
+                [
+                    "1JHazecJrjbxBMQgRcyV3JCQJwVbHBjH5t",
+                    "1JbCXSeZHizJDQANsgtLBjo5y24JNMyGTB",
+                ],
+            ),
+            (
+                YPUB,
+                Network::Bitcoin,
+                [
+                    "31sQy1RG4Y6sCtCpmXrtiJooqzBozRUTU6",
+                    "33kzJbaR4EDzEoigsKuLata1svSqNGsdSo",
+                ],
+            ),
+            (
+                ZPUB,
+                Network::Bitcoin,
+                [
+                    "bc1qz4ta3h4ga6hdqa090wfpr83asyz5z40t272wez",
+                    "bc1qjeq39p3mpvmwqwkpaqe9hdjgfhfa8w5z87tnp4",
+                ],
+            ),
+            (
+                TPUB,
+                Network::Testnet,
+                [
+                    "mhk8YjtyHigqGMiEGaf8cnNW9Game9exC6",
+                    "mmuYagUFFQtAzw8Ts7afED6HFboCy4e8WR",
+                ],
+            ),
+            (
+                UPUB,
+                Network::Testnet,
+                [
+                    "2NBfJvMZadWb8mwtV3F4FXTqAJs3pkYNdn8",
+                    "2MznomgtTHMBvsMqPwwE3sSLzj6F8w3Mnyi",
+                ],
+            ),
+            (
+                VPUB,
+                Network::Testnet,
+                [
+                    "tb1q7e5q2y0mpvesst3jxhe45q0e2q9gdkfd6zxzqa",
+                    "tb1qzplphjt68gs0lwvxrq70t9j9cva8ky7r7ucz2g",
+                ],
+            ),
+            (
+                VPUB,
+                Network::Regtest,
+                [
+                    "bcrt1q7e5q2y0mpvesst3jxhe45q0e2q9gdkfdctl0h5",
+                    "bcrt1qzplphjt68gs0lwvxrq70t9j9cva8ky7ru4p0ap",
+                ],
+            ),
+        ];
 
-        let secp = Secp256k1::new();
+        for (descriptor, network, addresses) in cases {
+            let parsed = parse_xpubs(&[descriptor.to_string()], *network).unwrap();
+            assert_eq!(parsed.len(), 2);
 
-        let xpub: bitcoin::bip32::Xpub = super::extended_pub_key::from_str(XPUB)
-            .expect("Parsing failed")
-            .ckd_pub(&secp, ChildNumber::Normal { index: 0 })
-            .and_then(|key| key.ckd_pub(&secp, ChildNumber::Normal { index: 0 }))
-            .unwrap();
-        let ypub = super::extended_pub_key::from_str(YPUB)
-            .expect("Parsing failed")
-            .ckd_pub(&secp, ChildNumber::Normal { index: 0 })
-            .and_then(|key| key.ckd_pub(&secp, ChildNumber::Normal { index: 0 }))
-            .unwrap();
-        let zpub = super::extended_pub_key::from_str(ZPUB)
-            .expect("Parsing failed")
-            .ckd_pub(&secp, ChildNumber::Normal { index: 0 })
-            .and_then(|key| key.ckd_pub(&secp, ChildNumber::Normal { index: 0 }))
-            .unwrap();
-        // Old p2pkh
-        assert_eq!(
-            Address::p2pkh(xpub.to_pub(), Network::Bitcoin)
-                .to_string()
-                .as_str(),
-            "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
-        );
-
-        // p2wpkh-p2pkh
-        let script = Address::p2wpkh(&ypub.to_pub(), Network::Bitcoin).script_pubkey();
-
-        assert_eq!(
-            Address::p2sh(&script, Network::Bitcoin)
+            let main_desc = parsed[0].clone();
+            let main_address = main_desc
+                .at_derivation_index(0)
                 .unwrap()
-                .to_string()
-                .as_str(),
-            "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf"
-        );
+                .address(*network)
+                .unwrap();
+            assert_eq!(main_address.to_string(), addresses[0]);
 
-        // p2wpkh
-        assert_eq!(
-            Address::p2wpkh(&zpub.to_pub(), Network::Bitcoin)
-                .to_string()
-                .as_str(),
-            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
-        )
+            let change_desc = parsed[1].clone();
+            let change_address = change_desc
+                .at_derivation_index(0)
+                .unwrap()
+                .address(*network)
+                .unwrap();
+            assert_eq!(change_address.to_string(), addresses[1]);
+        }
+    }
+
+    #[test]
+    fn test_parse_xpub_with_correct_network() {
+        fn check(xpubs: [&str; 3], network: Network) {
+            for xpub in xpubs {
+                let parsed = parse_xpubs(&[xpub.to_string()], network);
+                assert!(parsed.is_ok());
+            }
+        }
+
+        check(XPUB_MAINNET, Network::Bitcoin);
+
+        check(XPUB_TESTNET, Network::Regtest);
+        check(XPUB_TESTNET, Network::Testnet);
+        check(XPUB_TESTNET, Network::Testnet4);
+        check(XPUB_TESTNET, Network::Signet);
+    }
+
+    #[test]
+    fn test_parse_xpub_with_wrong_network() {
+        fn check(xpubs: [&str; 3], network: Network) {
+            for xpub in xpubs {
+                let parsed = parse_xpubs(&[xpub.to_string()], network);
+                let err = parsed.err().unwrap();
+                if let FlorestadError::XpubNetworkMismatch(actual) = err {
+                    assert_eq!(actual, xpub.to_string());
+                } else {
+                    panic!("Expected XpubNetworkMismatch error");
+                }
+            }
+        }
+
+        check(XPUB_MAINNET, Network::Regtest);
+        check(XPUB_MAINNET, Network::Testnet);
+        check(XPUB_MAINNET, Network::Testnet4);
+        check(XPUB_MAINNET, Network::Signet);
+
+        check(XPUB_TESTNET, Network::Bitcoin);
     }
 
     #[test]
