@@ -104,7 +104,7 @@ floresta-cli importdescriptor "wpkh(xpub6CFy3kRXorC3NMTt8qrsY9ucUfxVLXyFQ49JSLm3
 
 The rescan assumes that you have compact block filters for the blocks that you're scanning. You can either download all the filters
 (about 11GB on mainnet) or, if you know the block range that you're interested in, you can download only the filters for that range
-using the `--filters-start-height` option. Let's you know that none of your wallets are older than block 800,000. Just start the node with.
+using the `--filters-start-height` option. Let's suppose you know that none of your wallets are older than block 800,000. Just start the node with.
 
 ```bash
 ./target/release/florestad --filters-start-height 800000
