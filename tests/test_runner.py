@@ -73,6 +73,7 @@ BASE_TEST_SUITE = [
     ("florestad", "node-info"),
     ("florestad", "wallet_conf"),
     ("florestad", "wallet_flag"),
+    ("floresta-cli", "loaddescriptor"),
 ]
 
 # Before running the tests, we check if the number of tests
