@@ -1,5 +1,9 @@
+use std::io::Cursor;
+use std::io::Read;
+
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
@@ -18,6 +22,9 @@ use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
 use miniscript::descriptor::checksum;
+use rustreexo::accumulator::node_hash::BitcoinNodeHash;
+use rustreexo::accumulator::pollard::Pollard;
+use rustreexo::accumulator::proof::Proof;
 use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
@@ -666,5 +673,79 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    pub(super) fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: String,
+    ) -> Result<bool, JsonRpcError> {
+        let proof_bytes: Vec<u8> = bitcoin::hashes::hex::FromHex::from_hex(&proof)
+            .map_err(|_| JsonRpcError::InvalidHex)?;
+
+        let mut cursor = Cursor::new(&proof_bytes);
+
+        // Parse and verify block hash matches current chain tip
+        let mut hash_bytes = [0u8; 32];
+        cursor
+            .read_exact(&mut hash_bytes)
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        let proved_at = BlockHash::from_byte_array(hash_bytes);
+        let best = self.get_best_block_hash()?;
+
+        if proved_at != best {
+            return Err(JsonRpcError::Decode(format!(
+                "Possibly stale proof. Current chain tip is at block {} but proof was generated at block {}",
+                best, proved_at
+            )));
+        }
+
+        // Parse targets
+        let num_targets = VarInt::consensus_decode(&mut cursor)
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?
+            .0 as usize;
+        let targets: Vec<u64> = (0..num_targets)
+            .map(|_| VarInt::consensus_decode(&mut cursor).map(|v| v.0))
+            .collect::<Result<_, _>>()
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        // Parse proof hashes
+        let num_hashes = VarInt::consensus_decode(&mut cursor)
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?
+            .0 as usize;
+        let proof_hashes: Vec<BitcoinNodeHash> = (0..num_hashes)
+            .map(|_| {
+                let mut h = [0u8; 32];
+                cursor.read_exact(&mut h).map(|_| BitcoinNodeHash::from(h))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        // Parse proven hashes
+        let mut count_bytes = [0u8; 4];
+        cursor
+            .read_exact(&mut count_bytes)
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+        let num_proven = u32::from_le_bytes(count_bytes) as usize;
+        let hashes_proven: Vec<BitcoinNodeHash> = (0..num_proven)
+            .map(|_| {
+                let mut h = [0u8; 32];
+                cursor.read_exact(&mut h).map(|_| BitcoinNodeHash::from(h))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        // Reconstruct and verify proof
+        let proof = Proof {
+            targets,
+            hashes: proof_hashes,
+        };
+        let stump = self.chain.acc();
+        let pollard = Pollard::from_roots(stump.roots.clone(), stump.leaves);
+
+        match pollard.verify(&proof, &hashes_proven) {
+            Ok(true) => Ok(true),
+            Ok(false) | Err(_) => Ok(false),
+        }
     }
 }

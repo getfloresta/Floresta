@@ -427,6 +427,12 @@ async fn handle_json_rpc_request(
             .list_descriptors()
             .map(|v| serde_json::to_value(v).unwrap()),
 
+        "verifyutxochaintipinclusionproof" => {
+            let proof = get_string(&params, 0, "proof")?;
+            state
+                .verify_utxo_chain_tip_inclusion_proof(proof)
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
         _ => {
             let error = JsonRpcError::MethodNotFound;
             Err(error)
