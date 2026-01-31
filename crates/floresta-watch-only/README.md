@@ -91,25 +91,14 @@ Tracks per-address state including balance and transaction history:
 A generic interface for database backends, enabling different storage implementations:
 
 ```rust,no_run
-# use core::fmt;
-# use bitcoin::hash_types::Txid;
-# use floresta_watch_only::{CachedTransaction, CachedAddress, Stats};
-pub trait AddressCacheDatabase {
-    type Error: fmt::Debug + Send + Sync + 'static;
+use floresta_watch_only::AddressCacheDatabase;
 
-    fn save(&self, address: &CachedAddress);
-    fn load(&self) -> Result<Vec<CachedAddress>, Self::Error>;
-    fn update(&self, address: &CachedAddress);
-    fn get_cache_height(&self) -> Result<u32, Self::Error>;
-    fn set_cache_height(&self, height: u32) -> Result<(), Self::Error>;
-    fn desc_save(&self, descriptor: &str) -> Result<(), Self::Error>;
-    fn descs_get(&self) -> Result<Vec<String>, Self::Error>;
-    fn get_transaction(&self, txid: &Txid) -> Result<CachedTransaction, Self::Error>;
-    fn save_transaction(&self, tx: &CachedTransaction) -> Result<(), Self::Error>;
-    fn list_transactions(&self) -> Result<Vec<Txid>, Self::Error>;
-    fn get_stats(&self) -> Result<Stats, Self::Error>;
-    fn save_stats(&self, stats: &Stats) -> Result<(), Self::Error>;
-}
+// The trait provides these methods:
+// - save, load, update (address management)
+// - get_cache_height, set_cache_height (block height tracking)
+// - desc_save, descs_get (descriptor storage)
+// - get_transaction, save_transaction, list_transactions
+// - get_stats, save_stats
 ```
 
 ### MerkleProof
@@ -263,12 +252,15 @@ let db = KvDatabase::new("./data/wallet".to_string())?;
 
 An in-memory volatile database for testing purposes. All data is lost when the process terminates.
 
-```rust,ignore
+```rust,no_run
+# #[cfg(feature = "memory-database")]
 # fn main() {
 use floresta_watch_only::memory_database::MemoryDatabase;
 
 let db = MemoryDatabase::new();
 # }
+# #[cfg(not(feature = "memory-database"))]
+# fn main() {}
 ```
 
 > **Note**: `MemoryDatabase` requires the `memory-database` feature flag.
