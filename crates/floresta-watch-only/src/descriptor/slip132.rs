@@ -7,7 +7,8 @@
 //! Bitcoin SLIP-132 standard implementation for parsing custom xpub/xpriv key
 //! formats
 
-use std::fmt::Debug;
+use core::fmt;
+use core::fmt::Debug;
 
 use bitcoin::base58;
 use bitcoin::bip32;
@@ -111,6 +112,29 @@ pub enum Error {
 
     /// No multisig support via xpub.
     NoSupportXpubMultisig,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Base58(e) => write!(f, "Base58 error: {}", e),
+            Error::Hex(e) => write!(f, "Hex error: {}", e),
+            Error::CannotDeriveFromHardenedKey => {
+                write!(f, "Cannot derive from hardened key")
+            }
+            Error::InvalidChildNumber(no) => write!(f, "Invalid child number: {}", no),
+            Error::InvalidChildNumberFormat => write!(f, "Invalid child number format"),
+            Error::InvalidDerivationPathFormat => write!(f, "Invalid derivation path format"),
+            Error::UnknownVersion(ver) => write!(f, "Unknown version bytes: {:02X?}", ver),
+            Error::WrongExtendedKeyLength(len) => {
+                write!(f, "Wrong extended key length: {}", len)
+            }
+            Error::UnknownSlip32Prefix => write!(f, "Unknown SLIP-132 prefix"),
+            Error::InternalFailure => write!(f, "Internal failure"),
+            Error::NoSupportXpriv => write!(f, "No support for xpriv keys"),
+            Error::NoSupportXpubMultisig => write!(f, "No support for xpub multisig keys"),
+        }
+    }
 }
 
 fn extract_slip132_prefix(s: &str) -> Result<[u8; 4], Error> {

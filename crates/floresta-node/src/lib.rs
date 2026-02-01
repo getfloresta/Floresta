@@ -12,7 +12,6 @@ mod error;
 mod florestad;
 #[cfg(feature = "json-rpc")]
 mod json_rpc;
-mod wallet_input;
 #[cfg(feature = "zmq-server")]
 mod zmq;
 
