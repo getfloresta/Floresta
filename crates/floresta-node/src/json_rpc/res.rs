@@ -5,6 +5,7 @@ use corepc_types::v30::GetBlockVerboseOne;
 use floresta_chain::extensions::HeaderExtError;
 use floresta_common::impl_error_from;
 use floresta_mempool::mempool::AcceptToMempoolError;
+use floresta_watch_only::descriptor::DescriptorError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -163,7 +164,7 @@ pub enum JsonRpcError {
     InvalidScript,
 
     /// The provided descriptor is invalid, e.g., if it does not match the expected format
-    InvalidDescriptor(miniscript::Error),
+    InvalidDescriptor(DescriptorError),
 
     /// The requested block is not found in the blockchain
     BlockNotFound,
@@ -283,7 +284,7 @@ impl From<HeaderExtError> for JsonRpcError {
     }
 }
 
-impl_error_from!(JsonRpcError, miniscript::Error, InvalidDescriptor);
+impl_error_from!(JsonRpcError, DescriptorError, InvalidDescriptor);
 
 impl<T: std::fmt::Debug> From<floresta_watch_only::WatchOnlyError<T>> for JsonRpcError {
     fn from(e: floresta_watch_only::WatchOnlyError<T>) -> Self {
