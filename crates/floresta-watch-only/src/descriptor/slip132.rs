@@ -10,6 +10,9 @@
 //! formats
 
 use core::fmt::Debug;
+use core::fmt::Display;
+use core::fmt::Formatter;
+use core::fmt::Result as FmtResult;
 
 use bitcoin::base58;
 use bitcoin::bip32;
@@ -111,6 +114,23 @@ pub enum Error {
     /// Extended public keys for multisig are unsupported.
     /// To import multisig wallets, use descriptors instead.
     XpubMultisigUnsupported,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Error::Base58(e) => write!(f, "Base58 error: {e}"),
+            Error::Bip32(e) => write!(f, "BIP32 error: {e}"),
+            Error::UnknownSlip32Prefix => write!(f, "Unknown SLIP-132 prefix"),
+            Error::XprivUnsupported => write!(f, "Extended private keys are unsupported"),
+            Error::XpubMultisigUnsupported => {
+                write!(
+                    f,
+                    "Extended public keys for multisig are unsupported. Use descriptors instead"
+                )
+            }
+        }
+    }
 }
 
 fn extract_slip132_prefix(s: &str) -> Result<[u8; 4], Error> {
