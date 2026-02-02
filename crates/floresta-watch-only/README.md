@@ -23,7 +23,6 @@ Provide balance, transaction history, and UTXO data to wallet interfaces while k
 ## Architecture
 
 The crate is organized around a central `AddressCache<D>` struct that wraps an inner cache with `RwLock` for thread-safe access. The cache maintains three primary data structures: an address map (script hash to `CachedAddress`), a script set for fast lookup, and a UTXO index for tracking spendable outputs.
-
 ```mermaid
 flowchart TB
     subgraph External["External Components"]
@@ -89,8 +88,7 @@ Tracks per-address state including balance and transaction history:
 ### AddressCacheDatabase Trait
 
 A generic interface for database backends, enabling different storage implementations:
-
-```rust,no_run
+```rust
 use floresta_watch_only::AddressCacheDatabase;
 
 // The trait provides these methods:
@@ -108,8 +106,8 @@ Generates and verifies SPV proofs for transactions within blocks. Proofs are cre
 ## Usage
 
 ### Basic Setup with KvDatabase
-
 ```rust,no_run
+// Note: This example requires filesystem access and cannot run in test environment
 # use floresta_watch_only::WatchOnlyError;
 # use floresta_watch_only::kv_database::KvDatabaseError;
 # fn main() -> Result<(), WatchOnlyError<KvDatabaseError>> {
@@ -131,8 +129,8 @@ cache.derive_addresses()?;
 ```
 
 ### Tracking Individual Addresses
-
 ```rust,no_run
+// Note: This example requires filesystem access and cannot run in test environment
 # use floresta_watch_only::{AddressCache, kv_database::KvDatabase};
 use bitcoin::ScriptBuf;
 use floresta_common::get_spk_hash;
@@ -155,8 +153,8 @@ let utxos = cache.get_address_utxos(&script_hash);
 ### Integration with BlockConsumer
 
 The `AddressCache` implements `BlockConsumer` from `floresta-chain`, allowing it to receive block notifications:
-
 ```rust,no_run
+// Note: This example requires filesystem access and cannot run in test environment
 # use floresta_watch_only::{AddressCache, kv_database::KvDatabase};
 use floresta_chain::BlockConsumer;
 
@@ -171,8 +169,8 @@ assert!(!cache.wants_spent_utxos());
 ```
 
 ### Retrieving Merkle Proofs
-
 ```rust,no_run
+// Note: This example requires filesystem access and cannot run in test environment
 # use floresta_watch_only::{AddressCache, kv_database::KvDatabase};
 # use bitcoin::hash_types::Txid;
 # use bitcoin::hashes::Hash as HashTrait;
@@ -197,7 +195,6 @@ if let Some(proof) = cache.get_merkle_proof(&txid) {
 ## Data Flow
 
 The following diagram illustrates how blocks flow through the watch-only wallet:
-
 ```mermaid
 sequenceDiagram
     participant Chain as floresta-chain
@@ -236,8 +233,8 @@ Uses the [`kv`](https://crates.io/crates/kv) crate for persistent key-value stor
 - **addresses**: Script hash to `CachedAddress` mappings
 - **transactions**: Txid to `CachedTransaction` mappings
 - **stats**: Wallet statistics and metadata
-
 ```rust,no_run
+// Note: This example requires filesystem access and cannot run in test environment
 # use floresta_watch_only::WatchOnlyError;
 # use floresta_watch_only::kv_database::KvDatabaseError;
 # fn main() -> Result<(), WatchOnlyError<KvDatabaseError>> {
@@ -251,8 +248,8 @@ let db = KvDatabase::new("./data/wallet".to_string())?;
 ### MemoryDatabase (Testing)
 
 An in-memory volatile database for testing purposes. All data is lost when the process terminates.
-
 ```rust,no_run
+// Note: This example requires the memory-database feature flag
 # #[cfg(feature = "memory-database")]
 # fn main() {
 use floresta_watch_only::memory_database::MemoryDatabase;
@@ -268,7 +265,6 @@ let db = MemoryDatabase::new();
 ## Electrum Script Hashing
 
 This crate uses Electrum-style script hashing for address identification. The script hash is computed as:
-
 ```text
 script_hash = SHA256(scriptPubKey)  // with bytes reversed
 ```
@@ -276,8 +272,7 @@ script_hash = SHA256(scriptPubKey)  // with bytes reversed
 This matches the [Electrum protocol specification](https://electrumx.readthedocs.io/en/latest/protocol-basics.html#script-hashes) and allows direct compatibility with Electrum clients.
 
 Use `floresta_common::get_spk_hash()` to compute script hashes:
-
-```rust,no_run
+```rust
 use bitcoin::ScriptBuf;
 use floresta_common::get_spk_hash;
 
@@ -295,7 +290,6 @@ let hash = get_spk_hash(&script);
 | `memory-database` | No | Enables `MemoryDatabase` for testing |
 
 Example with features:
-
 ```toml
 [dependencies]
 floresta-watch-only = { version = "0.4", features = ["memory-database"] }
