@@ -48,7 +48,7 @@ const MAX_ADDRESSES: usize = 50_000;
 /// A type alias for a list of addresses to send to our peers
 type AddressToSend = Vec<(AddrV2, u64, ServiceFlags, u16)>;
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Deserialize, Serialize)]
 /// A local state for how we see this peer. It helps us during peer selection,
 /// by keeping track of our past encounters with this node (if any),
 /// helping us to find live peers more easily, and avoid troublesome peers.
@@ -844,6 +844,10 @@ impl AddressMan {
 
     /// Updates the state of an address
     pub fn update_set_state(&mut self, idx: usize, state: AddressState) -> &mut Self {
+        if let Some(address) = self.addresses.get_mut(&idx) {
+            address.state = state;
+        }
+
         match state {
             AddressState::Banned(_) => {
                 self.good_addresses.retain(|&x| x != idx);
@@ -874,6 +878,13 @@ impl AddressMan {
                 if !self.good_addresses.contains(&idx) {
                     self.good_addresses.push(idx);
                 }
+
+                // push to the good peers by service
+                if let Some(address) = self.addresses.get(&idx).cloned() {
+                    self.push_if_has_service(&address, service_flags::UTREEXO.into());
+                    self.push_if_has_service(&address, ServiceFlags::NONE); // this means any peer
+                    self.push_if_has_service(&address, ServiceFlags::COMPACT_FILTERS);
+                }
             }
             AddressState::Failed(_) => {
                 self.good_addresses.retain(|&x| x != idx);
@@ -882,10 +893,6 @@ impl AddressMan {
                 }
             }
         }
-
-        if let Some(address) = self.addresses.get_mut(&idx) {
-            address.state = state;
-        };
 
         self
     }
