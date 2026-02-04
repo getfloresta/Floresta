@@ -307,9 +307,9 @@ async fn handle_json_rpc_request(
         }
 
         "getrawtransaction" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
-
+            let txid = Txid::from_str(params[0].as_str().ok_or(JsonRpcError::InvalidHash)?)
+                .map_err(|_| JsonRpcError::InvalidHash)?;
+            let verbosity = params.get(1).map(|v| v.as_bool().unwrap());
             state
                 .get_transaction(txid, verbosity)
                 .map(|v| serde_json::to_value(v).unwrap())
