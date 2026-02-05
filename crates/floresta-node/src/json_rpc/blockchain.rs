@@ -22,9 +22,9 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
+use super::res::jsonrpc_interface::JsonRpcError;
 use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
-use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;

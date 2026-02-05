@@ -31,7 +31,7 @@ pub mod arg_parser {
 
     use serde_json::Value;
 
-    use crate::json_rpc::res::JsonRpcError;
+    use crate::json_rpc::res::jsonrpc_interface::JsonRpcError;
 
     /// Extracts a u64 parameter from the request parameters at the specified index.
     ///
