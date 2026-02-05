@@ -106,13 +106,84 @@ impl Encodable for Bitmap {
     }
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// When requesting a [`UtreexoProof`], this struct is used to specify which data do you want
+///
+/// A [`UtreexoProof`] is made of three parts: the proof hashes, the leaf data, and the targets.
+/// The proof hashes are the hashes in a Merkle proof, used to recompute the forest roots. The leaf
+/// data is the data associated with the UTXOs being spent, such as the amount and the script
+/// pubkey. The targets are the positions of the UTXOs being spent inside the forest, used to
+/// recompute the forest roots together with the proof hashes. This struct will be serialized
+/// as a bitmap that will toggle whether you want to include each field.
+pub struct RequestSelection(u8);
+
+impl RequestSelection {
+    /// Whether to include the targets in the proof.
+    const INCLUDE_TARGETS_BIT: u8 = 1 << 0;
+
+    /// Whether to include the proof hashes in the proof.
+    const INCLUDE_PROOF_HASHES_BIT: u8 = 1 << 1;
+
+    /// Whether to include the leaf data in the proof.
+    const INCLUDE_LEAF_DATA_BIT: u8 = 1 << 2;
+
+    /// Request everything
+    const ALL_BITS: u8 =
+        Self::INCLUDE_TARGETS_BIT | Self::INCLUDE_PROOF_HASHES_BIT | Self::INCLUDE_LEAF_DATA_BIT;
+
+    /// Creates a new empty [`RequestSelection`], with no fields selected.
+    ///
+    /// Use the `include_*` methods to select which fields to include, or
+    /// [`RequestSelection::request_all`] to include all fields.
+    pub fn new() -> Self {
+        Self(0)
+    }
+
+    /// Creates a new [`RequestSelection`] that requests all fields.
+    ///
+    /// This is a special constructor for the common case where you want to request
+    /// all fields in the proof. If your goal is to request specific fields, use the
+    /// [`RequestSelection::new`] constructor and the `include_*` methods to choose
+    /// what you need.
+    pub fn request_all() -> Self {
+        Self(Self::ALL_BITS)
+    }
+
+    /// Whether to include the targets in the proof.
+    pub fn request_targets(mut self) -> Self {
+        self.0 |= Self::INCLUDE_TARGETS_BIT;
+        self
+    }
+
+    /// Whether to include the proof hashes in the proof.
+    pub fn request_proof_hashes(mut self) -> Self {
+        self.0 |= Self::INCLUDE_PROOF_HASHES_BIT;
+        self
+    }
+
+    /// Whether to include the leaf data in the proof.
+    pub fn request_leaf_data(mut self) -> Self {
+        self.0 |= Self::INCLUDE_LEAF_DATA_BIT;
+        self
+    }
+}
+
+impl Encodable for RequestSelection {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        self.0.consensus_encode(writer)
+    }
+}
+
 /// Represents a Utreexo proof request, for a specific block.
 pub struct GetUtreexoProof {
     /// The block hash for which the proof is requested.
     pub block_hash: BlockHash,
 
     /// Whether to include leaf data in the proof.
-    pub include_leaves: bool,
+    pub request_bitmap: RequestSelection,
 
     /// A bitmap indicating which proof hashes to include in the response.
     pub proof_hashes_bitmap: Bitmap,
@@ -128,7 +199,7 @@ impl Encodable for GetUtreexoProof {
     ) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += self.block_hash.consensus_encode(writer)?;
-        len += self.include_leaves.consensus_encode(writer)?;
+        len += self.request_bitmap.consensus_encode(writer)?;
         len += self.proof_hashes_bitmap.consensus_encode(writer)?;
         len += self.leaf_index_bitmap.consensus_encode(writer)?;
 

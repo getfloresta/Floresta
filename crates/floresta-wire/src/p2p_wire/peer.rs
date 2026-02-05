@@ -38,6 +38,7 @@ use super::node::NodeRequest;
 use super::transport::TransportError;
 use super::transport::TransportProtocol;
 use super::transport::WriteTransport;
+use crate::block_proof::RequestSelection;
 use crate::node::ConnectionKind;
 use crate::p2p_wire::block_proof::GetUtreexoProof;
 use crate::p2p_wire::block_proof::UtreexoProof;
@@ -389,7 +390,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             NodeRequest::GetBlockProof((block_hash, proof_hashes_bitmap, leaf_index_bitmap)) => {
                 let get_block_proof = GetUtreexoProof {
                     block_hash,
-                    include_leaves: true,
+                    request_bitmap: RequestSelection::request_all(),
                     proof_hashes_bitmap,
                     leaf_index_bitmap,
                 };
