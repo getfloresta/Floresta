@@ -1,7 +1,4 @@
 use corepc_types::v30::GetBlockVerboseOne;
-use floresta_chain::extensions::HeaderExtError;
-use floresta_common::impl_error_from;
-use floresta_mempool::mempool::AcceptToMempoolError;
 use serde::Deserialize;
 use serde::Serialize;
 

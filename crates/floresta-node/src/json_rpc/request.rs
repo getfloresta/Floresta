@@ -17,7 +17,7 @@ pub struct RpcRequest {
     pub method: String,
 
     /// The parameters for the method, as an array of json values.
-    pub params: Vec<Value>,
+    pub params: Option<Value>,
 
     /// An optional identifier for the request, which can be used to match responses.
     pub id: Value,
@@ -27,84 +27,35 @@ pub struct RpcRequest {
 /// methods already handle the case where the parameter is missing or has an
 /// unexpected type, returning an error if so.
 pub mod arg_parser {
-    use std::str::FromStr;
 
+    use serde::Deserialize;
     use serde_json::Value;
 
     use crate::json_rpc::res::jsonrpc_interface::JsonRpcError;
 
-    /// Extracts a u64 parameter from the request parameters at the specified index.
-    ///
-    /// This function checks if the parameter exists, is of type u64 and can be converted to `T`.
-    /// Returns an error otherwise.
-    pub fn get_numeric<T: TryFrom<u64>>(
-        params: &[Value],
-        index: usize,
-        opt_name: &str,
-    ) -> Result<T, JsonRpcError> {
-        let v = params
-            .get(index)
-            .ok_or_else(|| JsonRpcError::MissingParameter(opt_name.to_string()))?;
-
-        let n = v.as_u64().ok_or_else(|| {
-            JsonRpcError::InvalidParameterType(format!("{opt_name} must be a number"))
-        })?;
-
-        T::try_from(n)
-            .map_err(|_| JsonRpcError::InvalidParameterType(format!("{opt_name} is out-of-range")))
-    }
-
-    /// Extracts a string parameter from the request parameters at the specified index.
-    ///
-    /// This function checks if the parameter exists and is of type string. Returns an error
-    /// otherwise.
-    pub fn get_string(
-        params: &[Value],
-        index: usize,
-        opt_name: &str,
-    ) -> Result<String, JsonRpcError> {
-        let v = params
-            .get(index)
-            .ok_or_else(|| JsonRpcError::MissingParameter(opt_name.to_string()))?;
-
-        let str = v.as_str().ok_or_else(|| {
-            JsonRpcError::InvalidParameterType(format!("{opt_name} must be a string"))
-        })?;
-
-        Ok(str.to_string())
-    }
-
-    /// Extracts a boolean parameter from the request parameters at the specified index.
-    ///
-    /// This function checks if the parameter exists and is of type boolean. Returns an error
-    /// otherwise.
-    pub fn get_bool(params: &[Value], index: usize, opt_name: &str) -> Result<bool, JsonRpcError> {
-        let v = params
-            .get(index)
-            .ok_or_else(|| JsonRpcError::MissingParameter(opt_name.to_string()))?;
-
-        v.as_bool().ok_or_else(|| {
-            JsonRpcError::InvalidParameterType(format!("{opt_name} must be a boolean"))
-        })
-    }
-
-    /// Extracts a hash parameter from the request parameters at the specified index.
+    /// Extracts a parameter from the request parameters at the specified index.
     ///
     /// This function can extract any type that implements `FromStr`, such as `BlockHash` or
     /// `Txid`. It checks if the parameter exists and is a valid string representation of the type.
     /// Returns an error otherwise.
-    pub fn get_hash<T: FromStr>(
-        params: &[Value],
+    pub fn get_at<'de, T: Deserialize<'de>>(
+        params: &'de Value,
         index: usize,
-        opt_name: &str,
+        field_name: &str,
     ) -> Result<T, JsonRpcError> {
-        let v = params
-            .get(index)
-            .ok_or_else(|| JsonRpcError::MissingParameter(opt_name.to_string()))?;
+        let v = match (params.is_array(), params.is_object()) {
+            (true, false) => params.get(index),
+            (false, true) => params.get(field_name),
+            _ => None,
+        };
 
-        v.as_str().and_then(|s| s.parse().ok()).ok_or_else(|| {
-            JsonRpcError::InvalidParameterType(format!("{opt_name} must be a valid hash"))
-        })
+        let unwrap = v.ok_or(JsonRpcError::MissingParameter(field_name.to_string()))?;
+
+        T::deserialize(unwrap)
+            .ok()
+            .ok_or(JsonRpcError::InvalidParameterType(format!(
+                "{field_name} has an invalid type"
+            )))
     }
 
     /// Extracts an array of hashes from the request parameters at the specified index.
@@ -112,45 +63,53 @@ pub mod arg_parser {
     /// This function can extract an array of any type that implements `FromStr`, such as
     /// `BlockHash` or `Txid`. It checks if the parameter exists and is an array of valid string
     /// representations of the type. Returns an error otherwise.
-    pub fn get_hashes_array<T: FromStr>(
-        params: &[Value],
+    pub fn get_arr_at<'de, T: Deserialize<'de>>(
+        params: &'de Value,
         index: usize,
-        opt_name: &str,
+        field_name: &str,
     ) -> Result<Vec<T>, JsonRpcError> {
-        let v = params
-            .get(index)
-            .ok_or_else(|| JsonRpcError::MissingParameter(opt_name.to_string()))?;
+        let v = match (params.is_array(), params.is_object()) {
+            (true, false) => params.get(index),
+            (false, true) => params.get(field_name),
+            _ => return Err(JsonRpcError::InvalidRequest),
+        };
 
-        let array = v.as_array().ok_or_else(|| {
-            JsonRpcError::InvalidParameterType(format!("{opt_name} must be an array of hashes"))
-        })?;
+        let unwrap = v
+            .ok_or(JsonRpcError::MissingParameter(field_name.to_string()))?
+            .as_array()
+            .ok_or(JsonRpcError::InvalidRequest)?;
 
-        array
+        unwrap
             .iter()
-            .map(|v| {
-                v.as_str().and_then(|s| s.parse().ok()).ok_or_else(|| {
-                    JsonRpcError::InvalidParameterType(format!("{opt_name} must be a valid hash"))
-                })
-            })
+            .enumerate()
+            .map(|(index, v)| get_at(v, index, field_name))
             .collect()
     }
 
-    /// Extracts an optional field from the request parameters at the specified index.
+    /// Receives a `result`, unwrap it and exclude the case for `JsonRpcError::MissingParameter` redirecting into a Ok(None).
+    pub fn optional<T>(result: Result<T, JsonRpcError>) -> Result<Option<T>, JsonRpcError> {
+        match result {
+            Ok(t) => Ok(Some(t)),
+            Err(JsonRpcError::MissingParameter(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Extracts a field from the request parameters at the specified index.
     ///
     /// This function checks if the parameter exists and is of the expected type. If the parameter
-    /// doesn't exist, it returns `None`. If it exists but is of an unexpected type, it returns an
+    /// doesn't exist, it returns `default`. If it exists but is of an unexpected type, it returns an
     /// error.
-    pub fn get_optional_field<T>(
-        params: &[Value],
+    pub fn get_with_default<'de, T: Deserialize<'de>>(
+        v: &'de Value,
         index: usize,
-        opt_name: &str,
-        extractor_fn: impl Fn(&[Value], usize, &str) -> Result<T, JsonRpcError>,
-    ) -> Result<Option<T>, JsonRpcError> {
-        if params.len() <= index {
-            return Ok(None);
+        field_name: &str,
+        default: T,
+    ) -> Result<T, JsonRpcError> {
+        match get_at(v, index, field_name) {
+            Ok(t) => Ok(t),
+            Err(JsonRpcError::MissingParameter(_)) => Ok(default),
+            Err(e) => Err(e),
         }
-
-        let value = extractor_fn(params, index, opt_name)?;
-        Ok(Some(value))
     }
 }

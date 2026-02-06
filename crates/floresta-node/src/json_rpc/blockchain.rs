@@ -60,17 +60,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub fn get_rescan_interval(
         &self,
         use_timestamp: bool,
-        start: Option<u32>,
-        stop: Option<u32>,
-        confidence: Option<RescanConfidence>,
+        start: u32,
+        stop: u32,
+        confidence: RescanConfidence,
     ) -> Result<(u32, u32), JsonRpcError> {
-        let start = start.unwrap_or(0u32);
-        let stop = stop.unwrap_or(0u32);
-
         if use_timestamp {
-            let confidence = confidence.unwrap_or(RescanConfidence::Medium);
-            // `get_block_height_by_timestamp` already does the time validity checks.
-
             let start_height = self.get_block_height_by_timestamp(start, &confidence)?;
 
             let stop_height = self.get_block_height_by_timestamp(stop, &RescanConfidence::Exact)?;
