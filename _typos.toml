@@ -1,0 +1,9 @@
+[default]
+extend-ignore-re = [
+    # This regex is used to prevent https://github.com/crate-ci/typos from analyzing words
+    # with lengths between 32 and 150 characters. These lengths correspond to hashes,
+    # public keys, private keys, XPUBs, descriptors, and Bitcoin addresses.
+    # These items are usually randomly generated for testing and may contain patterns
+    # that would be flagged as errors but should not be.
+    "[0-9A-Za-z]{32,150}+",
+]

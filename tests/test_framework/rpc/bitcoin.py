@@ -6,6 +6,7 @@ A test framework for testing JsonRPC calls to a bitocoin node.
 
 import re
 from test_framework.rpc.base import BaseRPC
+from test_framework.constants import WALLET_ADDRESS
 
 REGTEST_RPC_SERVER = {
     "host": "127.0.0.1",
@@ -177,7 +178,7 @@ class BitcoinRPC(BaseRPC):
 
     def generate_block(self, nblocks: int) -> list:
         """
-        Mine blocks immediately to a address(bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch) using
+        Mine blocks immediately to a address(WALLET_ADDRESS) using
         `generate_block_to_address(nblocks, address)`
 
         Args:
@@ -186,5 +187,4 @@ class BitcoinRPC(BaseRPC):
         Returns:
             A list of block hashes of the newly mined blocks
         """
-        address = "bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch"
-        return self.generate_block_to_address(nblocks, address)
+        return self.generate_block_to_address(nblocks, WALLET_ADDRESS)

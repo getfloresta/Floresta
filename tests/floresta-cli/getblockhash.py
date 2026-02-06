@@ -7,6 +7,7 @@ This functional test cli utility to interact with a Floresta node with `getblock
 import re
 import time
 from test_framework import FlorestaTestFramework
+from test_framework.constants import WALLET_ADDRESS
 
 DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
 
@@ -17,8 +18,6 @@ class GetBlockhashTest(FlorestaTestFramework):
     After that, it will mine some blocks with utreexod and check that
     the blockhashes match between floresta, utreexod, and bitcoind.
     """
-
-    best_block = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
 
     def set_test_params(self):
         """
@@ -36,7 +35,7 @@ class GetBlockhashTest(FlorestaTestFramework):
             variant="utreexod",
             extra_args=[
                 f"--datadir={self.data_dirs[1]}",
-                "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
+                f"--miningaddr={WALLET_ADDRESS}",
                 "--prune=0",
             ],
         )

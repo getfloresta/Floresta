@@ -8,6 +8,7 @@ import re
 import time
 import os
 from test_framework import FlorestaTestFramework
+from test_framework.constants import WALLET_ADDRESS
 
 DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
 
@@ -15,7 +16,7 @@ DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
 WALLET_CONFIG = "\n".join(
     [
         "[wallet]",
-        'addresses = [ "bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y" ]',
+        f'addresses = [ "{WALLET_ADDRESS}" ]',
     ]
 )
 
@@ -50,7 +51,7 @@ class GetTxoutTest(FlorestaTestFramework):
             variant="utreexod",
             extra_args=[
                 f"--datadir={self.data_dirs[1]}",
-                "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
+                f"--miningaddr={WALLET_ADDRESS}",
                 "--prune=0",
             ],
         )

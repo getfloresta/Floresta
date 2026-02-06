@@ -16,10 +16,11 @@ kv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["alloc"] }
 tracing = { workspace = true }
+miniscript = { workspace = true, features = ["compiler", "no-std"] }
 
 # Local dependencies
 floresta-chain = { workspace = true }
-floresta-common = { workspace = true, features = ["descriptors-no-std"] }
+floresta-common = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
