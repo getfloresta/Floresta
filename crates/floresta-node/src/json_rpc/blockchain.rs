@@ -18,7 +18,6 @@ use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
 use miniscript::descriptor::checksum;
-use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
@@ -594,12 +593,12 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // floresta flavored rpcs. These are not part of the bitcoin rpc spec
     // findtxout
-    pub(super) async fn find_tx_out(
+    pub(super) fn find_tx_out(
         &self,
         txid: Txid,
         vout: u32,
         script: ScriptBuf,
-        height: u32,
+        _height: u32,
     ) -> Result<Value, JsonRpcError> {
         if let Some(txout) = self.wallet.get_utxo(&OutPoint { txid, vout }) {
             return Ok(serde_json::to_value(txout).unwrap());
@@ -610,48 +609,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::InInitialBlockDownload);
         }
 
-        // can't proceed without block filters
-        let Some(cfilters) = self.block_filter_storage.as_ref() else {
-            return Err(JsonRpcError::NoBlockFilters);
-        };
-
         self.wallet.cache_address(script.clone());
-        let filter_key = script.to_bytes();
-        let candidates = cfilters
-            .match_any(
-                vec![filter_key.as_slice()],
-                Some(height),
-                None,
-                self.chain.clone(),
-            )
-            .map_err(|e| JsonRpcError::Filters(e.to_string()))?;
-
-        for candidate in candidates {
-            let candidate = self.node.get_block(candidate).await;
-            let candidate = match candidate {
-                Err(e) => {
-                    return Err(JsonRpcError::Node(e.to_string()));
-                }
-                Ok(None) => {
-                    return Err(JsonRpcError::Node(format!(
-                        "BUG: block {candidate:?} is a match in our filters, but we can't get it?"
-                    )));
-                }
-                Ok(Some(candidate)) => candidate,
-            };
-
-            let Ok(Some(height)) = self.chain.get_block_height(&candidate.block_hash()) else {
-                return Err(JsonRpcError::BlockNotFound);
-            };
-
-            self.wallet.block_process(&candidate, height);
-        }
-
-        let val = match self.get_tx_out(txid, vout, false)? {
-            Some(gettxout) => json!(gettxout),
-            None => json!({}),
-        };
-        Ok(val)
+        todo!()
     }
 
     // getroots
