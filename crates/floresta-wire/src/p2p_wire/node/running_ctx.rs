@@ -39,6 +39,7 @@ use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
+use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
@@ -122,26 +123,43 @@ where
     /// proofs, this means the last 100 blocks, and for assumeutreexo, this means however many
     /// blocks from the hard-coded value in the config file.
     pub async fn catch_up(self) -> Result<Self, WireError> {
-        let sync = UtreexoNode {
+        let swift_sync = UtreexoNode {
             common: self.common,
-            context: SyncNode::default(),
+            context: SwiftSync::default(),
         };
 
-        let sync = sync.run(|_| {}).await;
+        let swift_sync = swift_sync.run(|_| {}).await;
+
+        // If SwiftSync couldn't complete, we need to run a full utreexo sync
+        let common = if swift_sync.was_aborted() {
+            let mut sync = UtreexoNode {
+                common: swift_sync.common,
+                context: SyncNode::default(),
+            };
+
+            // Clear the inflight requests and in-memory blocks, we'll start from genesis
+            sync.inflight.clear();
+            sync.blocks.clear();
+            assert_eq!(sync.unprocessed_blocks(), 0);
+
+            let sync = sync.run(|_| {}).await;
+            sync.common
+        } else {
+            swift_sync.common
+        };
+
+        let synced = UtreexoNode { common, context: self.context };
 
         // Once we are synced, peer diversity is the priority, as we must be able to discover
-        // newly mined blocks. However, the peer list that we have built during `SyncNode` is
-        // biased towards low-latency peers (often geographically close to our node).
+        // newly mined blocks. However, the peer list that we have built during IBD is biased
+        // towards low-latency peers (often geographically close to our node).
         //
         // Here we try disconnecting half of our connected peers to open space for new peers.
-        let peers_to_disconnect = sync.connected_peers() / 2;
+        let peers_to_disconnect = synced.connected_peers() / 2;
         let protected_services = &[service_flags::UTREEXO.into()];
-        sync.disconnect_random_peers(peers_to_disconnect, protected_services);
+        synced.disconnect_random_peers(peers_to_disconnect, protected_services);
 
-        Ok(Self {
-            common: sync.common,
-            context: self.context,
-        })
+        Ok(synced)
     }
 
     /// This function is called periodically to check if we have:
@@ -840,6 +858,10 @@ where
                         "Error: `handle_peer_msg_common` should have handled remaining PeerMessages"
                     ),
                 }
+            }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
         Ok(())
