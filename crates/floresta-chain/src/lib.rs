@@ -28,6 +28,7 @@ pub(crate) use floresta_common::prelude;
 pub use pruned_utreexo::chain_state::*;
 pub use pruned_utreexo::chainparams::*;
 pub use pruned_utreexo::chainstore::*;
+pub use pruned_utreexo::consensus::swift_sync_agg;
 pub use pruned_utreexo::error::*;
 #[cfg(feature = "flat-chainstore")]
 pub use pruned_utreexo::flat_chain_store::*;

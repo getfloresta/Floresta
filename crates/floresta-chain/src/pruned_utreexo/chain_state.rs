@@ -930,23 +930,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
         inputs: HashMap<OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
-        if !block.check_merkle_root() {
-            return Err(BlockValidationErrors::BadMerkleRoot)?;
-        }
-
-        let bip34_height = self.chain_params().params.bip34_height;
-        // If bip34 is active, check that the encoded block height is correct
-        if height >= bip34_height && Consensus::get_bip34_height(block) != Some(height) {
-            return Err(BlockValidationErrors::BadBip34)?;
-        }
-
-        if !block.check_witness_commitment() {
-            return Err(BlockValidationErrors::BadWitnessCommitment)?;
-        }
-
-        if block.weight().to_wu() > 4_000_000 {
-            return Err(BlockValidationErrors::BlockTooBig)?;
-        }
+        read_lock!(self).consensus.check_block(block, height)?;
 
         // Validate block transactions
         let subsidy = read_lock!(self).consensus.get_subsidy(height);

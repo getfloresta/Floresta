@@ -10,10 +10,12 @@ use bitcoin::block::Header as BlockHeader;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
 use bitcoin::script;
 use bitcoin::Amount;
 use bitcoin::Block;
 use bitcoin::CompactTarget;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::Target;
@@ -23,13 +25,19 @@ use bitcoin::Txid;
 use floresta_common::prelude::*;
 use rustreexo::accumulator::proof::Proof;
 use rustreexo::accumulator::stump::Stump;
+use swift_sync_agg::SwiftSyncAgg;
 
 use super::chainparams::ChainParams;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
 use super::udata;
 use crate::pruned_utreexo::utxo_data::UtxoData;
+use crate::swift_sync_agg::SipHashKeys;
+use crate::swift_sync_agg::TxidHashMidstate;
 use crate::TransactionError;
+
+/// Maximum script length in bytes, as defined [in Bitcoin Core](https://github.com/bitcoin/bitcoin/blob/v30.0/src/script/script.h#L40).
+const MAX_SCRIPT_SIZE: usize = 10_000;
 
 /// The version tag to be prepended to the leafhash. It's just the sha512 hash of the string
 /// `UtreexoV1` represented as a vector of [u8] ([85 116 114 101 101 120 111 86 49]).
@@ -62,6 +70,7 @@ pub const UNSPENDABLE_BIP30_UTXO_91812: [u8; 32] = [
     0xbc, 0x6b, 0x4b, 0xf7, 0xce, 0xbb, 0xd3, 0x3a, 0x18, 0xd6, 0xb0, 0xfe, 0x1f, 0x8e, 0xcc, 0x7a,
     0xa5, 0x40, 0x30, 0x83, 0xc3, 0x9e, 0xe3, 0x43, 0xb9, 0x85, 0xd5, 0x1f, 0xd0, 0x29, 0x5a, 0xd8,
 ];
+
 /// This struct contains all the information and methods needed to validate a block,
 /// it is used by the [ChainState](crate::ChainState) to validate blocks and transactions.
 #[derive(Debug, Clone)]
@@ -71,20 +80,66 @@ pub struct Consensus {
     pub parameters: ChainParams,
 }
 
+impl From<Network> for Consensus {
+    fn from(network: Network) -> Self {
+        Consensus {
+            parameters: network.into(),
+        }
+    }
+}
+
 impl Consensus {
     /// Returns the amount of block subsidy to be paid in a block, given it's height.
     ///
     /// The Bitcoin Core source can be found [here](https://github.com/bitcoin/bitcoin/blob/2b211b41e36f914b8d0487e698b619039cc3c8e2/src/validation.cpp#L1501-L1512).
-    pub fn get_subsidy(&self, height: u32) -> u64 {
+    pub fn get_subsidy(&self, height: u32) -> Amount {
         let halvings = height / self.parameters.subsidy_halving_interval as u32;
         // Force block reward to zero when right shift is undefined.
         if halvings >= 64 {
-            return 0;
+            return Amount::ZERO;
         }
         let mut subsidy = 50 * Amount::ONE_BTC.to_sat();
         // Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
         subsidy >>= halvings;
-        subsidy
+        Amount::from_sat(subsidy)
+    }
+
+    /// Maximum theoretical supply at the given height. Excludes the unspendable genesis subsidy.
+    pub fn max_supply_at_height(&self, height: u32) -> Amount {
+        let interval = self.parameters.subsidy_halving_interval;
+        let start_subsidy: u64 = 50 * Amount::ONE_BTC.to_sat();
+
+        // Blocks from 0..=height inclusive
+        let blocks = height as u64 + 1;
+
+        // Full epochs completely included + remainder blocks in the next epoch
+        let full_epochs = blocks / interval;
+        let rem_blocks = blocks % interval;
+
+        let mut total: u64 = 0;
+
+        // Sum all full epochs that still pay (up to epoch 64)
+        let paid_full_epochs = full_epochs.min(64);
+        for e in 0..paid_full_epochs {
+            let subsidy = start_subsidy >> (e as u32);
+            total = total.saturating_add(interval.saturating_mul(subsidy));
+        }
+
+        // Add remainder in the current epoch if it still pays
+        if full_epochs < 64 {
+            let subsidy = start_subsidy >> (full_epochs as u32);
+            total = total.saturating_add(rem_blocks.saturating_mul(subsidy));
+        }
+
+        // Remove genesis coinbase subsidy
+        total = total.saturating_sub(start_subsidy);
+        Amount::from_sat(total)
+    }
+
+    /// A script is unspendable if its length is larger than 10,000 bytes or if it starts with an
+    /// `OP_RETURN`. This follows the [Bitcoin Core implementation](https://github.com/bitcoin/bitcoin/blob/v30.0/src/script/script.h#L571).
+    pub fn is_unspendable(script: &ScriptBuf) -> bool {
+        script.len() > MAX_SCRIPT_SIZE || script.is_op_return()
     }
 
     /// Verify if all transactions in a block are valid. Here we check the following:
@@ -98,7 +153,7 @@ impl Consensus {
         height: u32,
         mut utxos: HashMap<OutPoint, UtxoData>,
         transactions: &[Transaction],
-        subsidy: u64,
+        subsidy: Amount,
         verify_script: bool,
         flags: c_uint,
     ) -> Result<(), BlockchainError> {
@@ -133,7 +188,7 @@ impl Consensus {
 
         // Check coinbase output values to ensure the miner isn't producing excess coins
         let allowed_reward = fee
-            .checked_add(Amount::from_sat(subsidy))
+            .checked_add(subsidy)
             .ok_or(BlockValidationErrors::TooManyCoins)?;
 
         let coinbase_total = transactions[0]
@@ -147,6 +202,112 @@ impl Consensus {
         }
 
         Ok(())
+    }
+
+    /// Performs all transaction checks that are independent of the spent outputs and produces
+    /// a [`SwiftSyncAgg`] given the `unspent_indexes` hints and a secret `salt`. This is the
+    /// AssumeValid SwiftSync version of [`Consensus::verify_block_transactions`].
+    ///
+    /// This function calls [`Consensus::check_transaction_context_free`] since previous outputs
+    /// are not available (we assume the unlocking script is valid). Then, it removes all input
+    /// `OutPoint`s from the aggregator and adds all hinted-as-spent outputs to it.
+    ///
+    /// Returns the resulting aggregator and the total unspent amount that has been locked in
+    /// this block. This amount can be used at the end of the SwiftSync operation to check that
+    /// the total supply is below the expected limit.
+    ///
+    /// #### Regarding amount checks
+    /// Note that, since we don't have the previous outputs, we can't verify the coinbase reward,
+    /// which requires knowledge of the total fees (out − in amounts). However, after verifying
+    /// the hints, we can still ensure that the maximum total supply is respected, but this is a
+    /// weaker amount check than that of traditional AssumeValid.
+    pub fn verify_block_transactions_swiftsync(
+        transactions: &[Transaction],
+        unspent_indexes: HashSet<u64>,
+        salt: &SipHashKeys,
+    ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
+        // Blocks must contain at least one transaction (i.e., the coinbase)
+        if transactions.is_empty() {
+            return Err(BlockValidationErrors::EmptyBlock)?;
+        }
+
+        // The block-wide output index to compare against unspent output hints
+        let mut output_index = 0;
+        let mut unspent_amount = Amount::ZERO;
+        let mut agg = SwiftSyncAgg::zero();
+
+        for (n, transaction) in transactions.iter().enumerate() {
+            if n == 0 {
+                if !transaction.is_coinbase() {
+                    return Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
+                }
+                Self::verify_coinbase(transaction)?;
+
+                // We don't know how much money is paid in fees (it would require input amounts),
+                // so we can't check the exact amount here
+                let coinbase_total = transaction
+                    .output
+                    .iter()
+                    .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
+                    .ok_or(BlockValidationErrors::TooManyCoins)?;
+
+                if coinbase_total > Amount::MAX_MONEY {
+                    return Err(BlockValidationErrors::TooManyCoins)?;
+                }
+            } else {
+                // Verify the non-coinbase transaction and remove the inputs from the aggregator
+                Self::check_transaction_context_free(transaction)?;
+
+                for input in transaction.input.iter() {
+                    agg.remove(salt, &input.previous_output);
+                }
+            }
+
+            let mut spent_vouts = Vec::new();
+            for (vout, out) in transaction.output.iter().enumerate() {
+                let hinted_unspent = unspent_indexes.contains(&output_index);
+
+                if Self::is_unspendable(&out.script_pubkey) || hinted_unspent {
+                    unspent_amount += out.value;
+                } else {
+                    spent_vouts.push(vout as u32);
+                }
+
+                output_index += 1;
+            }
+            // Only add spent outputs to the aggregator
+            Self::add_outputs_to_agg(salt, &mut agg, transaction, spent_vouts);
+        }
+
+        Ok((agg, unspent_amount))
+    }
+
+    /// Helper to compute the outputs `OutPoint` hashes efficiently and add them to the aggregator.
+    fn add_outputs_to_agg(
+        salt: &SipHashKeys,
+        agg: &mut SwiftSyncAgg,
+        transaction: &Transaction,
+        spent_vouts: Vec<u32>,
+    ) {
+        let txid = || transaction.compute_txid();
+
+        match spent_vouts.len() {
+            // Nothing needs to be added to the aggregator
+            0 => {}
+
+            // Only one `OutPoint` to add
+            1 => agg.add(salt, &OutPoint::new(txid(), spent_vouts[0])),
+
+            // All `OutPoints` to hash here will share the same txid, only differing in the vout.
+            // Thus, we can compute the midstate once, amortizing this cost for all `OutPoints`,
+            // which is around 57% less work given enough spent outputs.
+            _ => {
+                let midstate = TxidHashMidstate::new(salt, txid().as_byte_array());
+                for vout in spent_vouts {
+                    agg.add_with_vout(midstate.clone(), vout);
+                }
+            }
+        }
     }
 
     /// Verifies a single, non-coinbase transaction. To verify (the structure of) a coinbase
@@ -291,6 +452,51 @@ impl Consensus {
         }
 
         Ok(out_value)
+    }
+
+    /// Runs inexpensive, consensus-critical block checks that don't require script execution.
+    ///
+    /// This verifies:
+    /// - the header merkle root matches the block's txids
+    /// - BIP34 coinbase-encoded height once activated (at `bip34_height`)
+    /// - if there are SegWit transactions, the witness commitment is present and correct
+    /// - total block weight is within the 4,000,000 WU limit
+    pub fn check_block(&self, block: &Block, height: u32) -> Result<(), BlockchainError> {
+        if !block.check_merkle_root() {
+            return Err(BlockValidationErrors::BadMerkleRoot)?;
+        }
+
+        let bip34_height = self.parameters.params.bip34_height;
+        // If bip34 is active, check that the encoded block height is correct
+        if height >= bip34_height && Self::get_bip34_height(block) != Some(height) {
+            return Err(BlockValidationErrors::BadBip34)?;
+        }
+
+        if !block.check_witness_commitment() {
+            return Err(BlockValidationErrors::BadWitnessCommitment)?;
+        }
+
+        if block.weight().to_wu() > 4_000_000 {
+            return Err(BlockValidationErrors::BlockTooBig)?;
+        }
+
+        Ok(())
+    }
+
+    /// Performs AssumeValid SwiftSync validation and returns the resulting [`SwiftSyncAgg`]
+    /// along with the total unspent amount locked in this block.
+    ///
+    /// See [`Consensus::verify_block_transactions_swiftsync`] for verification details.
+    pub fn process_block_swiftsync(
+        &self,
+        block: &Block,
+        height: u32,
+        unspent_indexes: HashSet<u64>,
+        salt: &SipHashKeys,
+    ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
+        self.check_block(block, height)?;
+
+        Consensus::verify_block_transactions_swiftsync(&block.txdata, unspent_indexes, salt)
     }
 
     /// Returns the TxOut being spent by the given input.
@@ -458,6 +664,162 @@ impl Consensus {
     }
 }
 
+/// An order-independent 128-bit SwiftSync aggregator over `OutPoint`s.
+pub mod swift_sync_agg {
+    use core::ops::Add;
+    use core::ops::AddAssign;
+
+    use bitcoin::hashes::siphash24;
+    use bitcoin::hashes::Hash;
+    use bitcoin::hashes::HashEngine;
+    use bitcoin::OutPoint;
+
+    #[derive(Default)]
+    /// A pair of `SipHash24` secret keys, used as the [`SwiftSyncAgg`] session salt.
+    pub struct SipHashKeys {
+        k0: u64,
+        k1: u64,
+        k2: u64,
+        k3: u64,
+    }
+
+    impl SipHashKeys {
+        #[inline]
+        /// Construct a new pair of `SipHash24` keys from `(k0, k1)` and `(k2, k3)`.
+        pub fn new(k0: u64, k1: u64, k2: u64, k3: u64) -> Self {
+            Self { k0, k1, k2, k3 }
+        }
+    }
+
+    #[derive(Clone)]
+    /// Cached SipHash state after hashing a `txid`.
+    ///
+    /// This allows hashing multiple outpoints of the form `txid || vout_le` efficiently by
+    /// reusing the work for the shared 32-byte `txid` prefix.
+    pub struct TxidHashMidstate {
+        base0: siphash24::HashEngine,
+        base1: siphash24::HashEngine,
+    }
+
+    impl TxidHashMidstate {
+        /// Create a midstate by initializing both SipHash engines and inputting `txid`.
+        pub fn new(keys: &SipHashKeys, txid: &[u8; 32]) -> Self {
+            let mut midstate = Self {
+                base0: siphash24::HashEngine::with_keys(keys.k0, keys.k1),
+                base1: siphash24::HashEngine::with_keys(keys.k2, keys.k3),
+            };
+
+            midstate.base0.input(txid);
+            midstate.base1.input(txid);
+
+            midstate
+        }
+
+        /// Finalize the hash for an `OutPoint` with this cached `txid` and the provided `vout`.
+        pub fn finalize_with_vout(mut self, vout: u32) -> (u64, u64) {
+            let vout_le = vout.to_le_bytes();
+
+            self.base0.input(&vout_le);
+            self.base1.input(&vout_le);
+
+            let a = siphash24::Hash::from_engine_to_u64(self.base0);
+            let b = siphash24::Hash::from_engine_to_u64(self.base1);
+
+            (a, b)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    /// An order-independent 128-bit SwiftSync aggregator.
+    ///
+    /// Adds and removes `OutPoint`s by hashing the preimage `txid || vout_le` with **two**
+    /// `SipHash24` instances. Each instance uses its own independent 128-bit key (together,
+    /// a 32-byte secret).
+    ///
+    /// The two resulting `u64` values are accumulated into the two 64-bit limbs using
+    /// wrapping add/sub. If the same multiset of outpoints is added and removed under the
+    /// same secret, the accumulator returns to zero.
+    ///
+    /// The 32-byte [`SipHashKeys`] **must remain constant for the entire session**.
+    /// Changing it breaks cancellation.
+    pub struct SwiftSyncAgg(u64, u64);
+
+    impl SwiftSyncAgg {
+        #[inline]
+        /// Initializes an aggregator with zero value.
+        pub const fn zero() -> Self {
+            Self(0, 0)
+        }
+
+        #[inline]
+        /// Whether the aggregator is zero.
+        pub fn is_zero(&self) -> bool {
+            self.0 == 0 && self.1 == 0
+        }
+
+        /// Adds an `OutPoint` to the aggregator.
+        pub fn add(&mut self, salt: &SipHashKeys, outpoint: &OutPoint) {
+            let hash = Self::hash_outpoint(salt, outpoint);
+
+            *self = self.wrapping_add(hash);
+        }
+
+        /// Adds an `OutPoint` to the aggregator using a `SipHash24` midstate for the `txid`.
+        pub fn add_with_vout(&mut self, hasher: TxidHashMidstate, vout: u32) {
+            let hash = hasher.finalize_with_vout(vout);
+
+            *self = self.wrapping_add(hash);
+        }
+
+        /// Removes an `OutPoint` from the aggregator.
+        pub fn remove(&mut self, salt: &SipHashKeys, outpoint: &OutPoint) {
+            let hash = Self::hash_outpoint(salt, outpoint);
+
+            *self = self.wrapping_sub(hash);
+        }
+
+        /// Hashes the given `OutPoint` to a pair of `u64` values.
+        pub fn hash_outpoint(keys: &SipHashKeys, outpoint: &OutPoint) -> (u64, u64) {
+            let mut bytes = [0u8; 36];
+            bytes[..32].copy_from_slice(outpoint.txid.as_byte_array());
+            bytes[32..36].copy_from_slice(&outpoint.vout.to_le_bytes());
+
+            let a = Self::sip64(keys.k0, keys.k1, &bytes);
+            let b = Self::sip64(keys.k2, keys.k3, &bytes);
+            (a, b)
+        }
+
+        fn sip64(k0: u64, k1: u64, msg: &[u8]) -> u64 {
+            let mut h = siphash24::HashEngine::with_keys(k0, k1);
+            h.input(msg);
+            siphash24::Hash::from_engine_to_u64(h)
+        }
+
+        fn wrapping_add(&self, rhs: (u64, u64)) -> Self {
+            Self(self.0.wrapping_add(rhs.0), self.1.wrapping_add(rhs.1))
+        }
+
+        fn wrapping_sub(&self, rhs: (u64, u64)) -> Self {
+            Self(self.0.wrapping_sub(rhs.0), self.1.wrapping_sub(rhs.1))
+        }
+    }
+
+    impl Add for SwiftSyncAgg {
+        type Output = Self;
+        #[inline]
+        fn add(self, rhs: Self) -> Self::Output {
+            self.wrapping_add((rhs.0, rhs.1))
+        }
+    }
+
+    impl AddAssign for SwiftSyncAgg {
+        #[inline]
+        fn add_assign(&mut self, rhs: Self) {
+            *self = self.wrapping_add((rhs.0, rhs.1));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bitcoin::absolute::LockTime;
@@ -477,6 +839,11 @@ mod tests {
     use bitcoin::Witness;
     use floresta_common::assert_err;
     use floresta_common::assert_ok;
+    use rand::rngs::OsRng;
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::RngCore;
+    use rand::SeedableRng;
 
     use super::*;
 
@@ -827,7 +1194,7 @@ mod tests {
 
     pub fn oversized_script() -> ScriptBuf {
         let mut script = ScriptBuf::default();
-        for _ in 0..10_000 {
+        for _ in 0..MAX_SCRIPT_SIZE {
             script.push_opcode(OP_NOP);
         }
         script.push_opcode(OP_TRUE);
@@ -903,5 +1270,234 @@ mod tests {
             }
             e => panic!("Expected a TransactionError, but got: {e:?}"),
         }
+    }
+
+    /// The mainnet blocks up to height 175. At height 9 we find the first ever spent `TxOut`,
+    /// which is spent at height 170. These two blocks are especially useful for testing.
+    fn read_blocks_txt() -> Vec<Block> {
+        include_str!("../../testdata/mainnet_blocks.txt")
+            .lines()
+            .map(|b| deserialize_hex(b).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn test_swift_sync_agg_blocks() {
+        let consensus = Consensus::from(Network::Bitcoin);
+        let mainnet_blocks = read_blocks_txt();
+        assert_eq!(mainnet_blocks.len(), 176);
+        // All blocks except 9 and 170 just have a single, unspent TxOut
+        let default_unspent_idx = HashSet::from_iter(vec![0]);
+
+        let mut rng = OsRng;
+        let salt = SipHashKeys::new(
+            rng.next_u64(),
+            rng.next_u64(),
+            rng.next_u64(),
+            rng.next_u64(),
+        );
+
+        let mut supply = Amount::ZERO;
+        let mut agg = SwiftSyncAgg::zero();
+        for (i, block) in mainnet_blocks.iter().enumerate().skip(1) {
+            match i {
+                // We add the only TxOut in this block to the aggregator (spent later).
+                9 => {
+                    let unspent_indexes = HashSet::new();
+                    let (agg_blk_9, amount) = consensus
+                        .process_block_swiftsync(block, 9, unspent_indexes, &salt)
+                        .unwrap();
+
+                    assert!(!agg_blk_9.is_zero(), "block aggregator is not zero");
+                    assert!(agg.is_zero());
+                    agg += agg_blk_9;
+                    assert!(!agg.is_zero());
+
+                    supply += amount;
+                }
+                // This block spends the TxOut that was added to the aggregator in block 9.
+                170 => {
+                    let unspent_indexes = HashSet::from_iter(vec![0, 1, 2]);
+                    let (agg_blk_170, amount) = consensus
+                        .process_block_swiftsync(block, 170, unspent_indexes, &salt)
+                        .unwrap();
+
+                    assert!(!agg_blk_170.is_zero(), "block aggregator is not zero");
+                    assert!(!agg.is_zero(), "global aggregator is not zero");
+                    agg += agg_blk_170;
+                    assert!(agg.is_zero(), "aggregators cancel out to zero");
+
+                    supply += amount;
+                }
+                i => {
+                    let unspent_indexes = default_unspent_idx.clone();
+                    let (agg_i, amount) = consensus
+                        .process_block_swiftsync(block, i as u32, unspent_indexes, &salt)
+                        .unwrap();
+
+                    assert!(agg_i.is_zero());
+                    agg += agg_i;
+
+                    if i < 9 {
+                        assert!(agg.is_zero(), "first we don't have TxOuts");
+                    } else if i < 170 {
+                        assert!(!agg.is_zero(), "then we add TxOut from block 9");
+                    } else {
+                        assert!(
+                            agg.is_zero(),
+                            "finally, we remove it after finding the input"
+                        );
+                    }
+                    supply += amount;
+                }
+            }
+        }
+
+        // After the first 175 non-genesis blocks, the supply was 175 * 50 BTC
+        assert_eq!(supply, Amount::ONE_BTC * 50 * 175);
+        assert_eq!(supply, consensus.max_supply_at_height(175));
+
+        // Repeat the check using only the relevant blocks
+        let block_9 = &mainnet_blocks[9];
+        let block_170 = &mainnet_blocks[170];
+
+        let (agg_9, _) = consensus
+            .process_block_swiftsync(block_9, 9, HashSet::new(), &salt)
+            .unwrap();
+        let (agg_170, _) = consensus
+            .process_block_swiftsync(block_170, 170, HashSet::from_iter(vec![0, 1, 2]), &salt)
+            .unwrap();
+
+        assert!(!agg_9.is_zero(), "block aggregator is not zero");
+        assert!(!agg_170.is_zero(), "block aggregator is not zero");
+
+        let agg = agg_9 + agg_170;
+        assert!(agg.is_zero(), "aggregators cancel out to zero");
+    }
+
+    #[test]
+    fn test_swift_sync_agg_shuffled() {
+        let mut rng = StdRng::seed_from_u64(0xdefecade);
+        let salt = SipHashKeys::new(
+            rng.next_u64(),
+            rng.next_u64(),
+            rng.next_u64(),
+            rng.next_u64(),
+        );
+
+        // Generate a set of random unique OutPoints
+        const N: usize = 1_000;
+        let mut set: HashSet<OutPoint> = HashSet::with_capacity(N);
+
+        while set.len() < N {
+            let mut txid_bytes = [0u8; 32];
+            rng.fill_bytes(&mut txid_bytes);
+
+            let txid = Txid::from_byte_array(txid_bytes);
+            let vout = rng.next_u32() % 64;
+
+            set.insert(OutPoint::new(txid, vout));
+        }
+
+        let mut add_order: Vec<OutPoint> = set.iter().copied().collect();
+        let mut remove_order = add_order.clone();
+        // Shuffle the orders of the two identical sets
+        add_order.shuffle(&mut rng);
+        remove_order.shuffle(&mut rng);
+
+        let mut agg = SwiftSyncAgg::zero();
+
+        // We can remove before adding, or vice versa
+        for op in &remove_order {
+            agg.remove(&salt, op);
+            assert!(!agg.is_zero(), "not zero while removing");
+        }
+
+        for (i, op) in add_order.iter().enumerate() {
+            agg.add(&salt, op);
+            if i != 999 {
+                assert!(!agg.is_zero(), "not zero while adding");
+            }
+        }
+
+        assert!(agg.is_zero(), "zero at the end");
+    }
+
+    #[test]
+    fn test_swift_sync_hash_midstate() {
+        let mut rng = OsRng;
+
+        for _ in 0..10_000 {
+            let keys = SipHashKeys::new(
+                rng.next_u64(),
+                rng.next_u64(),
+                rng.next_u64(),
+                rng.next_u64(),
+            );
+
+            let mut arr = [0u8; 32];
+            rng.fill_bytes(&mut arr);
+            let txid = Txid::from_byte_array(arr);
+            let vout = rng.next_u32();
+
+            let outpoint = OutPoint::new(txid, vout);
+            let expected = SwiftSyncAgg::hash_outpoint(&keys, &outpoint);
+
+            let mid = TxidHashMidstate::new(&keys, txid.as_byte_array());
+            let got = mid.clone().finalize_with_vout(vout); // clone to match real code behavior
+
+            assert_eq!(got, expected);
+        }
+    }
+
+    #[test]
+    fn test_max_supply_at_height() {
+        let consensus = Consensus::from(Network::Bitcoin);
+        assert_eq!(consensus.parameters.subsidy_halving_interval, 210_000);
+
+        let subsidy_0 = consensus.get_subsidy(0);
+        let subsidy_1 = consensus.get_subsidy(210_000);
+        let subsidy_2 = consensus.get_subsidy(420_000);
+        let full_epoch_0 = subsidy_0 * 209_999; // No coinbase
+        let full_epoch_1 = subsidy_1 * 210_000;
+
+        assert_eq!(consensus.max_supply_at_height(0), Amount::from_sat(0));
+        assert_eq!(consensus.max_supply_at_height(1), subsidy_0);
+        assert_eq!(consensus.max_supply_at_height(209_999), full_epoch_0);
+        assert_eq!(
+            consensus.max_supply_at_height(210_000),
+            full_epoch_0 + subsidy_1
+        );
+        assert_eq!(
+            consensus.max_supply_at_height(310_006),
+            full_epoch_0 + subsidy_1 * 100_007,
+        );
+        assert_eq!(
+            consensus.max_supply_at_height(310_007),
+            full_epoch_0 + subsidy_1 * 100_008,
+        );
+        assert_eq!(
+            consensus.max_supply_at_height(420_001),
+            full_epoch_0 + full_epoch_1 + (subsidy_2 * 2),
+        );
+
+        let mut max_coins = Amount::ZERO;
+        for epoch in 0..=64 {
+            // Last height in this halving epoch
+            let height = (epoch + 1) * 210_000 - 1;
+            let subsidy = consensus.get_subsidy(height);
+            let blocks = match epoch {
+                0 => 209_999,
+                _ => 210_000,
+            };
+            max_coins += subsidy * blocks;
+            assert_eq!(consensus.max_supply_at_height(height), max_coins);
+        }
+
+        assert_eq!(consensus.max_supply_at_height(13_440_000), max_coins);
+        assert_eq!(consensus.max_supply_at_height(13_440_001), max_coins);
+        assert_eq!(consensus.max_supply_at_height(13_444_444), max_coins);
+        assert_eq!(consensus.max_supply_at_height(1_300_440_000), max_coins);
+        assert_eq!(consensus.max_supply_at_height(u32::MAX), max_coins);
     }
 }

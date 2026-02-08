@@ -21,15 +21,19 @@ use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
 use rustreexo::accumulator::proof::Proof;
 
-/// Reads the first 151 blocks (or 150 blocks on top of genesis) from blocks.txt, which are regtest
+/// Reads the first 151 blocks (or 150 blocks on top of genesis) from `regtest_blocks.txt`
 fn read_blocks_txt() -> Vec<Block> {
-    let blocks: Vec<_> = include_str!("../testdata/blocks.txt")
+    let blocks: Vec<_> = include_str!("../testdata/regtest_blocks.txt")
         .lines()
         .take(151)
         .map(|b| deserialize(&hex::decode(b).unwrap()).unwrap())
         .collect();
 
-    assert_eq!(blocks.len(), 151, "Expected 151 blocks in blocks.txt");
+    assert_eq!(
+        blocks.len(),
+        151,
+        "Expected 151 blocks in regtest_blocks.txt"
+    );
     blocks
 }
 
