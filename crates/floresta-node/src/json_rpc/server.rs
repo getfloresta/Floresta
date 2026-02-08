@@ -4,8 +4,12 @@ use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 
+use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::Method;
+use axum::http::Response;
+use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Json;
 use axum::Router;
@@ -515,8 +519,28 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
 
 async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
-    Json(req): Json<RpcRequest>,
-) -> axum::http::Response<axum::body::Body> {
+    body: Bytes,
+) -> Response<Body> {
+    let req: RpcRequest = match serde_json::from_slice(&body) {
+        Ok(req) => req,
+        Err(e) => {
+            let error = RpcError {
+                code: -32700,
+                message: format!("Parse error: {e}"),
+                data: None,
+            };
+            let body = json!({
+                "error": error,
+                "id": Value::Null,
+            });
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+        }
+    };
+
     debug!("Received JSON-RPC request: {req:?}");
 
     let id = req.id.clone();
