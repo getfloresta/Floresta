@@ -220,6 +220,9 @@ pub enum JsonRpcError {
 
     /// Something went wrong when attempting to publish a transaction to mempool
     MempoolAccept(AcceptToMempoolError),
+
+    /// This error is returned when a proof is well-formed but invalid (stale or verification failed)
+    InvalidProof(String),
 }
 
 impl_error_from!(JsonRpcError, AcceptToMempoolError, MempoolAccept);
@@ -254,6 +257,7 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidDisconnectNodeCommand => write!(f, "Invalid disconnectnode command"),
             JsonRpcError::PeerNotFound => write!(f, "Peer not found in the peer list"),
             JsonRpcError::MempoolAccept(e) => write!(f, "Could not send transaction to mempool due to {e}"),
+            JsonRpcError::InvalidProof(e) => write!(f, "Invalid proof: {e}"),
         }
     }
 }
