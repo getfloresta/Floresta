@@ -499,7 +499,6 @@ impl Florestad {
             cfilters,
             chain_provider.get_handle(),
         )
-        .await
         .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
         // Default Electrum Server port.
@@ -526,7 +525,7 @@ impl Florestad {
 
         task::spawn(client_accept_loop(
             non_tls_listener,
-            electrum_server.message_transmitter.clone(),
+            electrum_server.get_notifier(),
             None,
         ));
         info!("Electrum Server is running at {electrum_addr}");
@@ -591,7 +590,7 @@ impl Florestad {
             let tls_acceptor: TlsAcceptor = TlsAcceptor::from(tls_config);
             task::spawn(client_accept_loop(
                 tls_listener,
-                electrum_server.message_transmitter.clone(),
+                electrum_server.get_notifier(),
                 Some(tls_acceptor),
             ));
             info!("Electrum TLS Server is running at {electrum_addr_tls}");
