@@ -53,6 +53,9 @@ use super::transport::TransportProtocol;
 use super::UtreexoNodeConfig;
 use crate::node_context::PeerId;
 
+/// As per BIP 155, limit the number of addresses to 1,000
+pub const MAX_ADDRV2_ADDRESSES: usize = 1_000;
+
 #[derive(Debug)]
 pub enum NodeNotification {
     DnsSeedAddresses(Vec<LocalAddress>),
@@ -123,6 +126,9 @@ pub(crate) enum InflightRequests {
 
     /// Requests the peer to send us the utreexo proof for a given block
     UtreexoProof(BlockHash),
+
+    /// We've requested addresses from a peer
+    GetAddresses,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -237,6 +243,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) last_feeler: Instant,
     pub(crate) startup_time: Instant,
     pub(crate) last_dns_seed_call: Instant,
+    pub(crate) used_fixed_addresses: bool,
 
     // 6. Configuration and Metadata
     pub(crate) config: UtreexoNodeConfig,
@@ -332,6 +339,7 @@ where
                 blocks: HashMap::new(),
                 last_get_address_request: Instant::now(),
                 last_send_addresses: Instant::now(),
+                used_fixed_addresses: false,
                 datadir: config.datadir.clone(),
                 max_banscore: config.max_banscore,
                 socks5,

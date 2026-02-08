@@ -319,7 +319,7 @@ pub async fn setup_node(
         mempool,
         None,
         kill_signal.clone(),
-        AddressMan::default(),
+        AddressMan::new(None, &[]),
     )
     .unwrap();
 

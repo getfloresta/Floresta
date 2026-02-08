@@ -5,6 +5,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use bitcoin::p2p::address::AddrV2;
+use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Transaction;
@@ -201,6 +202,17 @@ where
         version: &Version,
     ) -> Result<(), WireError> {
         self.inflight.remove(&InflightRequests::Connect(peer));
+
+        // Mark this peer as ready to communicate with
+        self.peers.entry(peer).and_modify(|p| {
+            p.state = PeerStatus::Ready;
+        });
+
+        // Ask for new addresses to populate our address manager
+        self.send_to_peer(peer, NodeRequest::GetAddresses)?;
+        self.inflight
+            .insert(InflightRequests::GetAddresses, (peer, Instant::now()));
+
         if version.kind == ConnectionKind::Feeler {
             self.peers.entry(peer).and_modify(|p| {
                 p.state = PeerStatus::Ready;
@@ -211,7 +223,6 @@ where
                 .unwrap()
                 .as_secs();
 
-            self.send_to_peer(peer, NodeRequest::Shutdown)?;
             self.address_man
                 .update_set_service_flag(version.address_id, version.services)
                 .update_set_state(version.address_id, AddressState::Tried(now));
@@ -235,7 +246,6 @@ where
         );
 
         if let Some(peer_data) = self.common.peers.get_mut(&peer) {
-            peer_data.state = PeerStatus::Ready;
             peer_data.services = version.services;
             peer_data.user_agent.clone_from(&version.user_agent);
             peer_data.height = version.blocks;
@@ -373,10 +383,7 @@ where
     ) -> Result<Option<PeerMessages>, WireError> {
         match msg {
             PeerMessages::Addr(addresses) => {
-                debug!("Got {} addresses from peer {peer}", addresses.len());
-                let addresses: Vec<_> = addresses.into_iter().map(|addr| addr.into()).collect();
-
-                self.address_man.push_addresses(&addresses);
+                self.handle_addresses_from_peer(peer, addresses)?;
                 Ok(None)
             }
             PeerMessages::NotFound(inv) => {
@@ -508,6 +515,16 @@ where
                 continue;
             };
 
+            // If a feeler connection times out, we ban them at the first message
+            if let Some(peer_data) = self.peers.get(&peer) {
+                if peer_data.kind == ConnectionKind::Feeler {
+                    debug!("Feeler peer {peer} timed out request");
+                    self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                    self.peers.remove(&peer);
+                    continue;
+                }
+            }
+
             if let InflightRequests::Connect(_) = req {
                 // ignore the output as it might fail due to the task being cancelled
                 let _ = self.send_to_peer(peer, NodeRequest::Shutdown);
@@ -518,6 +535,29 @@ where
             debug!("Request timed out: {req:?}");
             self.increase_banscore(peer, 1)?;
             self.redo_inflight_request(req)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_addresses_from_peer(
+        &mut self,
+        peer: u32,
+        addresses: Vec<AddrV2Message>,
+    ) -> Result<(), WireError> {
+        self.inflight.remove(&InflightRequests::GetAddresses);
+        debug!("Got {} addresses from peer {}", addresses.len(), peer);
+        let addresses: Vec<_> = addresses.into_iter().map(|addr| addr.into()).collect();
+        self.address_man.push_addresses(&addresses);
+
+        // For feeler peers, we ask for addresses to populate our address manager,
+        // then disconnect them
+        let Some(peer_data) = self.peers.get(&peer) else {
+            return Ok(());
+        };
+
+        if matches!(peer_data.kind, ConnectionKind::Feeler) {
+            self.send_to_peer(peer, NodeRequest::Shutdown)?;
         }
 
         Ok(())
@@ -557,6 +597,7 @@ where
             InflightRequests::Blocks(block) => {
                 self.request_blocks(vec![block])?;
             }
+
             InflightRequests::Headers => {
                 let peer = self.send_to_fast_peer(
                     NodeRequest::GetHeaders(vec![]),
@@ -566,6 +607,7 @@ where
                 self.inflight
                     .insert(InflightRequests::Headers, (peer, Instant::now()));
             }
+
             InflightRequests::UtreexoState(_) => {
                 let peer = self.send_to_fast_peer(
                     NodeRequest::GetUtreexoState((self.chain.get_block_hash(0).unwrap(), 0)),
@@ -574,6 +616,7 @@ where
                 self.inflight
                     .insert(InflightRequests::UtreexoState(peer), (peer, Instant::now()));
             }
+
             InflightRequests::GetFilters => {
                 if !self.has_compact_filters_peer() {
                     return Ok(());
@@ -586,7 +629,8 @@ where
                 self.inflight
                     .insert(InflightRequests::GetFilters, (peer, Instant::now()));
             }
-            InflightRequests::Connect(_) => {
+
+            InflightRequests::Connect(_) | InflightRequests::GetAddresses => {
                 // We don't need to do anything here
             }
         }
@@ -751,6 +795,13 @@ where
             return Err(WireError::PeerAlreadyExists(addr, port));
         }
 
+        // Add this address to our address manager for later
+        // assume it has the bare-minimum services, otherwise `push_addresses` will ignore it
+        let mut local_address = LocalAddress::from(address.clone());
+        local_address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
+
+        self.address_man.push_addresses(&[local_address]);
+
         // Add a simple reference to the peer
         self.added_peers.push(AddedPeerInfo {
             address,
@@ -828,18 +879,18 @@ where
         }
 
         let kind = ConnectionKind::Regular(ServiceFlags::NONE);
-        let peer_id = self.peer_id_count;
-        let address = LocalAddress::new(
-            self.to_addr_v2(addr),
-            0,
-            AddressState::NeverTried,
-            ServiceFlags::NONE,
-            port,
-            peer_id as usize,
-        );
 
+        // Add this address to our address manager for later
+        // assume it has the bare-minimum services, otherwise `push_addresses` will ignore it
+        let address_v2 = self.to_addr_v2(addr);
+        let mut local_address = LocalAddress::from(address_v2.clone());
+
+        local_address.set_port(port);
+        local_address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
+
+        self.address_man.push_addresses(&[local_address.clone()]);
         // Return true if exists or false if anything fails during connection
         // We allow V1 fallback iff the `v2` flag is not set
-        self.open_connection(kind, peer_id as usize, address, !v2_transport)
+        self.open_connection(kind, local_address.id, local_address, !v2_transport)
     }
 }
