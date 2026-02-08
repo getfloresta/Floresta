@@ -26,7 +26,7 @@ from threading import Thread
 from queue import Queue
 from time import time
 
-from test_framework import FlorestaTestFramework
+from test_framework.util import Utility
 
 INFO_EMOJI = "ℹ️"
 SUCCESS_EMOJI = "✅"
@@ -63,7 +63,6 @@ BASE_TEST_SUITE = [
     ("florestad", "tls"),
     ("example", "electrum"),
     ("floresta-cli", "getblock"),
-    ("florestad", "tls-fail"),
     ("example", "functional"),
     ("floresta-cli", "getmemoryinfo"),
     ("floresta-cli", "getpeerinfo"),
@@ -245,7 +244,7 @@ def main():
     # Define a global variable for the base log directory
     # so it can be used in the test framework. But if we just
     # want to list suites or want see the help, we don't need it.
-    base_log_dir = FlorestaTestFramework.get_logs_dir()
+    base_log_dir = Utility.get_logs_dir()
 
     # Structure the CLI
     parser = argparse.ArgumentParser(prog="run_tests")

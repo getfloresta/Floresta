@@ -12,8 +12,7 @@ import re
 import time
 
 from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework.node import NodeType
 
 
 class AddnodeTestV2(FlorestaTestFramework):
@@ -24,18 +23,12 @@ class AddnodeTestV2(FlorestaTestFramework):
         in the same regtest network.
         """
         self.v2transport = True
-        self.data_dirs = AddnodeTestV2.create_data_dirs(
-            DATA_DIR, "addnode_v2_transport", 2
-        )
 
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[f"--data-dir={self.data_dirs[0]}"],
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
-            extra_args=[f"-datadir={self.data_dirs[1]}", "-v2transport=1"],
+        self.bitcoind = self.add_node_extra_args(
+            variant=NodeType.BITCOIND,
+            extra_args=[f"-v2transport=1"],
         )
 
     def verify_peer_connection_state(self, is_connected: bool):
@@ -62,14 +55,12 @@ class AddnodeTestV2(FlorestaTestFramework):
         """
         Send an `addnode` RPC from Floresta to the bitcoind peer using the given command.
         """
-        self.log(f"Floresta adding node {self.bitcoind_addr} with command '{command}'")
-        result = self.florestad.rpc.addnode(
-            node=self.bitcoind_addr,
-            command=command,
-            v2transport=self.v2transport,
+        self.log(
+            f"Floresta adding node {self.bitcoind.p2p_url} with command '{command}'"
         )
-
-        self.assertIsNone(result)
+        self.connect_nodes(
+            self.florestad, self.bitcoind, command, v2transport=self.v2transport
+        )
 
     def stop_bitcoind(self):
         """
@@ -88,8 +79,6 @@ class AddnodeTestV2(FlorestaTestFramework):
         self.log("===== Starting florestad and bitcoind nodes")
         self.run_node(self.florestad)
         self.run_node(self.bitcoind)
-
-        self.bitcoind_addr = f"127.0.0.1:{self.bitcoind.get_port('p2p')}"
 
         self.log("===== Add bitcoind as a persistent peer to Floresta")
         self.floresta_addnode_with_command("add")

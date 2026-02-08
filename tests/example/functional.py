@@ -6,6 +6,7 @@ see `tests/test_framework/test_framework.py` for more info.
 """
 
 from test_framework import FlorestaTestFramework
+from test_framework.node import NodeType
 
 
 class FunctionalTest(FlorestaTestFramework):
@@ -25,7 +26,7 @@ class FunctionalTest(FlorestaTestFramework):
         """
         Here we define setup for test adding a node definition
         """
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
     # All tests should override the run_test method
     def run_test(self):

@@ -6,6 +6,7 @@ see `tests/test_framework/test_framework.py` for more info.
 """
 
 from test_framework import FlorestaTestFramework
+from test_framework.node import NodeType
 
 
 class UtreexodTest(FlorestaTestFramework):
@@ -28,7 +29,7 @@ class UtreexodTest(FlorestaTestFramework):
         """
         Here we define setup for test adding a node definition
         """
-        self.utreexod = self.add_node(variant="utreexod")
+        self.utreexod = self.add_node_default_args(variant=NodeType.UTREEXOD)
 
     # All tests should override the run_test method
     def run_test(self):

@@ -11,8 +11,7 @@ from requests.exceptions import HTTPError
 from typing import Optional
 
 from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework.node import NodeType
 
 
 class DisconnectNodeTest(FlorestaTestFramework):
@@ -21,18 +20,8 @@ class DisconnectNodeTest(FlorestaTestFramework):
         Setup `bitcoind` and `florestad` in the same regtest network.
         """
 
-        test_dir_name = self.__class__.__name__.lower()
-        self.data_dirs = DisconnectNodeTest.create_data_dirs(DATA_DIR, test_dir_name, 2)
-
-        # Add `bitcoind` and `florestad` instances to the test's parameters.
-        self.bitcoind = self.add_node(
-            variant="bitcoind",
-            extra_args=[f"-datadir={self.data_dirs[0]}"],
-        )
-        self.florestad = self.add_node(
-            variant="florestad",
-            extra_args=[f"--data-dir={self.data_dirs[1]}"],
-        )
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
+        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
 
     def check_peer_connection_state(self, is_connected: bool):
         """
@@ -58,14 +47,12 @@ class DisconnectNodeTest(FlorestaTestFramework):
         """
         Call the `addnode` RPC from `florestad`.
         """
-        self.log(f"florestad: addnode {self.bitcoind_addr} add")
-        res = self.florestad.rpc.addnode(
-            node=self.bitcoind_addr,
-            command="add",
-        )
-        self.assertIsNone(res)
+        self.log(f"florestad: addnode {self.bitcoind.p2p_url} add")
+        self.connect_nodes(self.florestad, self.bitcoind)
 
-    def floresta_cli_disconnectnode(self, node_address: str, node_id: Optional[int]):
+    def floresta_cli_disconnectnode(
+        self, node_address: str = "", node_id: int | None = None
+    ):
         """
         Call the `disconnectnode` RPC from `florestad`.
         """
@@ -93,7 +80,6 @@ class DisconnectNodeTest(FlorestaTestFramework):
         self.run_node(self.florestad)
 
         self.log("===== Adding bitcoind as a peer =====")
-        self.bitcoind_addr = f"127.0.0.1:{self.bitcoind.get_port('p2p')}"
         self.floresta_cli_addnode()
         self.check_peer_connection_state(is_connected=True)
 
@@ -108,40 +94,38 @@ class DisconnectNodeTest(FlorestaTestFramework):
         self.log(
             "===== Attempting to disconnect the peer with an invalid node_address (wrong port) ====="
         )
+        bitcoind_array = self.bitcoind.p2p_url.split(":")
+        bitcoind_ip: str = bitcoind_array[0]
+        bitcoind_port: int = int(bitcoind_array[1])
         # Call `disconnectnode` with an invalid `node_address` (wrong port).
-        node_address = f"127.0.0.1:{self.bitcoind.get_port('p2p') + 1}"
-        node_id = None
+        node_address = f"{bitcoind_ip}:{bitcoind_port + 1}"
         with self.assertRaises(HTTPError):
-            self.floresta_cli_disconnectnode(node_address, node_id)
+            self.floresta_cli_disconnectnode(node_address)
         self.check_peer_connection_state(is_connected=True)
 
         self.log(
             "===== Attempting to disconnect the peer with an invalid node_address (wrong IP address) ====="
         )
         # Call `disconnectnode` with an invalid `node_address` (wrong IP address: 127.0.0.2).
-        node_address = f"127.0.0.2:{self.bitcoind.get_port('p2p')}"
-        node_id = None
+        node_address = f"127.0.0.2:{bitcoind_port}"
         with self.assertRaises(HTTPError):
-            self.floresta_cli_disconnectnode(node_address, node_id)
+            self.floresta_cli_disconnectnode(node_address)
         self.check_peer_connection_state(is_connected=True)
 
         self.log(
             "===== Attempting to disconnect the peer with an invalid node_address (malformed address) ====="
         )
         # Call `disconnectnode` with an invalid `node_address` (wrong IP address).
-        node_address = f"127.0.0:{self.bitcoind.get_port('p2p')}"
-        node_id = None
+        node_address = f"127.0.0:{bitcoind_port}"
         with self.assertRaises(HTTPError):
-            self.floresta_cli_disconnectnode(node_address, node_id)
+            self.floresta_cli_disconnectnode(node_address)
         self.check_peer_connection_state(is_connected=True)
 
         self.log(
             "===== Attempting to disconnect the peer with a valid node_address ====="
         )
         # Call `disconnectnode` with a valid `node_address`.
-        node_address = f"127.0.0.1:{self.bitcoind.get_port('p2p')}"
-        node_id = None
-        res = self.floresta_cli_disconnectnode(node_address, node_id)
+        res = self.floresta_cli_disconnectnode(self.bitcoind.p2p_url)
         self.assertIsNone(res)
         self.check_peer_connection_state(is_connected=False)
 
@@ -160,9 +144,8 @@ class DisconnectNodeTest(FlorestaTestFramework):
 
         self.log("===== Attempting to disconnect the peer with a valid node_id =====")
         # Call `disconnectnode` with a valid `node_id`)
-        node_address = ""
         node_id = self.florestad.rpc.get_peerinfo()[0]["id"]
-        res = self.floresta_cli_disconnectnode(node_address, node_id)
+        res = self.floresta_cli_disconnectnode(node_id=node_id)
         self.assertIsNone(res)
 
 

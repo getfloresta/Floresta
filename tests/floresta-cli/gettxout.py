@@ -8,8 +8,7 @@ import re
 import time
 import os
 from test_framework import FlorestaTestFramework
-
-DATA_DIR = FlorestaTestFramework.get_integration_test_dir()
+from test_framework.node import NodeType
 
 # TODO Use many addresses types as possible to test the gettxout command
 WALLET_CONFIG = "\n".join(
@@ -31,32 +30,29 @@ class GetTxoutTest(FlorestaTestFramework):
         Also create a config.toml file for the floresta wallet so we can track the address.
         """
         name = self.__class__.__name__.lower()
-        config_path = os.path.join(DATA_DIR, "data", name, "config.toml")
-
-        self.data_dirs = self.create_data_dirs(DATA_DIR, name, 3)
+        data_dir = self.create_data_dir_for_daemon(NodeType.FLORESTAD)
+        config_path = os.path.join(data_dir, "config.toml")
 
         with open(config_path, "w") as f:
             f.write(WALLET_CONFIG)
 
-        self.florestad = self.add_node(
-            variant="florestad",
+        self.florestad = self.add_node_extra_args(
+            variant=NodeType.FLORESTAD,
             extra_args=[
                 f"--config-file={config_path}",
-                f"--data-dir={self.data_dirs[0]}",
             ],
         )
 
-        self.utreexod = self.add_node(
-            variant="utreexod",
+        self.utreexod = self.add_node_extra_args(
+            variant=NodeType.UTREEXOD,
             extra_args=[
-                f"--datadir={self.data_dirs[1]}",
                 "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
                 "--prune=0",
             ],
         )
 
-        self.bitcoind = self.add_node(
-            variant="bitcoind", extra_args=[f"-datadir={self.data_dirs[2]}"]
+        self.bitcoind = self.add_node_default_args(
+            variant=NodeType.BITCOIND,
         )
 
     # TODO create and sign some transactions to test the gettxout command
@@ -74,25 +70,24 @@ class GetTxoutTest(FlorestaTestFramework):
         time.sleep(5)
 
         self.log("=== Connect floresta to utreexod")
-        host = self.utreexod.get_host()
-        port = self.utreexod.get_port("p2p")
-        self.florestad.rpc.addnode(
-            f"{host}:{port}", command="onetry", v2transport=False
-        )
-
-        self.log("=== Waiting for floresta to connect to utreexod...")
-        self.wait_for_peers_connections(self.florestad, self.utreexod)
+        self.connect_nodes(self.florestad, self.utreexod)
 
         self.log("=== Connect bitcoind to utreexod")
-        host = self.utreexod.get_host()
-        port = self.utreexod.get_port("p2p")
-        self.bitcoind.rpc.addnode(f"{host}:{port}", command="onetry", v2transport=False)
-
-        self.log("=== Waiting for bitcoind to connect to utreexod...")
-        self.wait_for_peers_connections(self.bitcoind, self.utreexod)
+        self.connect_nodes(self.bitcoind, self.utreexod)
 
         self.log("=== Wait for the nodes to sync...")
-        time.sleep(5)
+        end = time.time() + 20
+        while time.time() < end:
+            if (
+                self.florestad.rpc.get_block_count()
+                == self.bitcoind.rpc.get_block_count()
+                == self.utreexod.rpc.get_block_count()
+            ) and not self.florestad.rpc.get_blockchain_info()["ibd"]:
+                break
+
+            time.sleep(1)
+
+        self.assertFalse(self.florestad.rpc.get_blockchain_info()["ibd"])
 
         self.log("=== Get a list of transactions")
         blocks = self.florestad.rpc.get_block_count()

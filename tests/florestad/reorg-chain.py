@@ -11,6 +11,7 @@ import re
 import time
 
 from test_framework import FlorestaTestFramework
+from test_framework.node import NodeType
 
 
 class ChainReorgTest(FlorestaTestFramework):
@@ -19,10 +20,10 @@ class ChainReorgTest(FlorestaTestFramework):
     expected_chain = "regtest"
 
     def set_test_params(self):
-        self.florestad = self.add_node(variant="florestad")
+        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
 
-        self.utreexod = self.add_node(
-            variant="utreexod",
+        self.utreexod = self.add_node_extra_args(
+            variant=NodeType.UTREEXOD,
             extra_args=[
                 "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
                 "--utreexoproofindex",
@@ -40,14 +41,7 @@ class ChainReorgTest(FlorestaTestFramework):
         self.utreexod.rpc.generate(10)
 
         self.log("=== Connect floresta to utreexod")
-        host = self.florestad.get_host()
-        port = self.utreexod.get_port("p2p")
-        self.florestad.rpc.addnode(
-            f"{host}:{port}", command="onetry", v2transport=False
-        )
-
-        self.log("=== Waiting for floresta to connect to utreexod.rpc...")
-        self.wait_for_peers_connections(self.florestad, self.utreexod)
+        self.connect_nodes(self.florestad, self.utreexod)
 
         self.log("=== Wait for the nodes to sync...")
         time.sleep(20)

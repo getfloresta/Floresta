@@ -22,136 +22,18 @@ import contextlib
 import subprocess
 import time
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Pattern, Tuple, Optional
 
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
 )
-from test_framework.daemon.bitcoin import BitcoinDaemon
-from test_framework.daemon.floresta import FlorestaDaemon
-from test_framework.daemon.utreexo import UtreexoDaemon
-from test_framework.rpc.bitcoin import BitcoinRPC
-from test_framework.rpc.floresta import FlorestaRPC
-from test_framework.rpc.utreexo import UtreexoRPC
-from test_framework.rpc.bitcoin import REGTEST_RPC_SERVER as bitcoind_rpc_server
-from test_framework.rpc.floresta import REGTEST_RPC_SERVER as florestad_rpc_server
-from test_framework.rpc.utreexo import REGTEST_RPC_SERVER as utreexod_rpc_server
-
-
-class Node:
-    """
-    A node object to be used in the test framework.
-    It contains the `daemon`, `rpc` and `rpc_config` objects.
-    """
-
-    def __init__(self, daemon, rpc, rpc_config, variant):
-        self.daemon = daemon
-        self.rpc = rpc
-        self.rpc_config = rpc_config
-        self.variant = variant
-
-    def start(self):
-        """
-        Start the node.
-        """
-        if self.daemon.is_running:
-            raise RuntimeError(f"Node '{self.variant}' is already running.")
-        self.daemon.start()
-        self.rpc.wait_for_connections(opened=True)
-
-    def stop(self):
-        """
-        Stop the node.
-        """
-        response = None
-        if self.daemon.is_running:
-            try:
-                response = self.rpc.stop()
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                self.daemon.process.terminate()
-
-            self.daemon.process.wait()
-            self.rpc.wait_for_connections(opened=False)
-
-        return response
-
-    def get_host(self) -> str:
-        """
-        Get the host address of the node.
-        """
-        return self.rpc_config["host"]
-
-    def get_ports(self) -> int:
-        """Get all ports of the node."""
-        return self.rpc_config["ports"]
-
-    def get_port(self, port_type: str) -> int:
-        """
-        Get the port of the node based on the port type.
-        This is a convenience method for `get_ports`.
-        """
-        if port_type not in self.rpc_config["ports"]:
-            raise ValueError(
-                f"Port type '{port_type}' not found in node ports: {self.rpc_config['ports']}"
-            )
-        return self.rpc_config["ports"][port_type]
-
-    def get_connection_info(self) -> Tuple[str, Optional[str]]:
-        """
-        Get the user agent and host for the current node.
-        """
-        address = (
-            f"{self.get_host()}:{self.get_port('p2p')}"
-            if "p2p" in self.rpc_config["ports"]
-            else None  # The p2p port is not configurable in floresta
-        )
-        variants = {
-            "florestad": ("Floresta", address),
-            "utreexod": ("utreexod", address),
-            "bitcoind": ("Satoshi", address),
-        }
-
-        if self.variant not in variants:
-            raise ValueError(f"Unknown peer variant: {self.variant}")
-
-        return variants[self.variant]
-
-    def is_peer_connected(self, peer: "Node") -> bool:
-        """
-        Check if the given peer is connected to this node via RPC.
-        """
-        keys = {
-            "florestad": ("user_agent", "address"),
-            "bitcoind": ("subver", "addr"),
-            "utreexod": ("subver", "addr"),
-        }
-
-        if self.variant not in keys:
-            raise ValueError(f"Unknown peer variant: {self.variant}")
-
-        user_agent_key, address_key = keys[self.variant]
-        peers_info = self.rpc.get_peerinfo()
-        user_agent, address = peer.get_connection_info()
-
-        return any(
-            user_agent in peer_info.get(user_agent_key)
-            and (
-                address == peer_info.get(address_key)
-                # The p2p port is not configurable in floresta
-                or address is None
-                # Utreexo nodes use `addrlocal` instead of `addr` to show connection information.
-                or self.variant == "utreexod"
-            )
-            for peer_info in peers_info
-        )
-
-    def send_kill_signal(self, sigcode="SIGTERM"):
-        """Send a signal to kill the daemon process."""
-        with contextlib.suppress(ProcessLookupError):
-            pid = self.daemon.process.pid
-            os.kill(pid, getattr(signal, sigcode, signal.SIGTERM))
+from test_framework.daemon import ConfigP2P
+from test_framework.rpc import ConfigRPC
+from test_framework.electrum import ConfigElectrum, ConfigTls
+from test_framework.node import Node, NodeType
+from test_framework.util import Utility
 
 
 class FlorestaTestMetaClass(type):
@@ -193,46 +75,26 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
     - implement set_test_params();
     - implement run_test();
 
-    The `set_test_params` method is called before the test starts
-    and aims to configure the node variant, its daemon parameters
-    or whatever you think should be defined. It is a good practice
-    to set the number of nodes and their configuration in this method
-    with `self.add_node`.
 
-    The `run_test` method is the test itself, where one (or more) node(s)
-    are started with the `self.run_node` method. This method will return
-    a index integer for a `Node` object stored in a `self.nodes` property,
-    each node containing the initialized `daemon` process, a `rpc` and
-    `rpc_config` objects. The `rpc` object can be a `FlorestaRPC` or
-    `UtreexoRPC` object, depending on the node variant defined.
+    This class provides the foundational structure for writing and executing tests
+    that interact with Floresta nodes. including their daemons, RPC interfaces, and
+    Electrum clients. It abstracts common operations such as node initialization,
+    configuration, startup, shutdown, and assertions. Thus allowing test developers
+    to focus on the specific logic of their tests.
 
-    When a node start, it will wait for ALL node's socket ports to be opened.
-    Inversely, the method `self.stop_node` will wait for ALL node's ports to
-    be closed (you could also use `self.stop` to stop all nodes). Internally,
-    it uses `node.rpc.wait_for_connections(opened=True)` to wait for all ports
-    to be opened, or `node.rpc.wait_for_connections(opened=False)` to wait for
-    all ports to be closed. You could use them if you want more control.
+    The framework is designed to be extensible and enforces a consistent structure
+    for all test scripts. It ensures that nodes are properly managed during the
+    lifecycle of a test, including setup, execution, and teardown phases.
 
-    Also, the `self.run_test` method is where you should call for assertions
-    like `self.assertIsNone`, `self.assertIsSome`, `self.assertEqual`,
-    `self.assertIn`, `self.assertMatch`, `self.assertTrue` and
-    `self.assertRaises`. If the assertion passes, the test will continue.
-    If it fails, the test will stop all nodes and raise an `AssertionError`.
-
-    The `self.assertRaises` method is a special case. It should be used in a
-    context manager, i.e., the `with self.assertRaises(<SomeException>)`
-    clause. The context will expect for some exception to be raised and,
-    if it raises, the script will continue. If it does not raise, it will stop
-    all nodes and raise an `AssertionError`.
-
-    In both methods, you can use `self.log` to log messages.
-
-    At the end of file, you should execute `MyTest().main()` method.
-
-    For more details, see the tests/example/*.py file to see how
-    the Floresta team thought the test framework should be used and
-    test/test_framework/{crypto,daemon,rpc,electrum}/*.py to see
-    how the test framework was structured.
+    Key Features:
+    - Node Management: Simplifies the process of adding, starting, stopping, and
+      configuring nodes of different types (e.g., FLORESTAD, UTREEXOD, BITCOIND).
+    - Assertions: Provides a set of built-in assertion methods to validate test
+      conditions and automatically handle node cleanup on failure.
+    - Logging: Includes utilities for structured logging to help debug and
+      understand test execution.
+    - Port Management: Dynamically allocates random ports for RPC, P2P, and
+      Electrum services to avoid conflicts during parallel test runs.
     """
 
     class _AssertRaisesContext:
@@ -300,6 +162,8 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         except Exception as err:
             processes = []
             for node in self._nodes:
+                if node.daemon.is_running:
+                    continue
 
                 # If the node has an RPC server, stop it gracefully
                 # otherwise (maybe the error occurred before the RPC server
@@ -339,75 +203,12 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         raise NotImplementedError
 
-    @staticmethod
-    def get_integration_test_dir():
-        """
-        Get path for florestad used in integration tests, generally set on
-        $FLORESTA_TEMP_DIR/binaries
-        """
-        if os.getenv("FLORESTA_TEMP_DIR") is None:
-            raise RuntimeError(
-                "FLORESTA_TEMP_DIR not set. "
-                + " Please set it to the path of the integration test directory."
-            )
-        return os.getenv("FLORESTA_TEMP_DIR")
-
-    @staticmethod
-    def get_logs_dir():
-        """
-        Get the logs directory path for the project.
-
-        Note: This directory is based on the git describe value to
-        separate logs from different commits.
-        """
-        try:
-            git_describe = subprocess.check_output(
-                ["git", "describe", "--tags", "--always"], text=True
-            ).strip()
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                "Failed to run 'git describe'. Run this at the Floresta directory."
-            ) from exc
-
-        base_dir = FlorestaTestFramework.get_integration_test_dir()
-        logs_data_dir = os.path.join(base_dir, "logs", git_describe)
-
-        return logs_data_dir
-
-    @staticmethod
-    def create_data_dirs(data_dir: str, base_name: str, nodes: int) -> list[str]:
-        """
-        Create the data directories for any nodes to be used in the test.
-        """
-        paths = []
-        for i in range(nodes):
-            p = os.path.join(data_dir, "data", base_name, f"node-{i}")
-            os.makedirs(p, exist_ok=True)
-            paths.append(p)
-
-        return paths
-
-    @staticmethod
-    def get_available_random_port(start: int, end: int = 65535):
-        """Get an available random port in the range [start, end]"""
-        while True:
-            port = random.randint(start, end)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                # Check if the port is available
-                if s.connect_ex(("127.0.0.1", port)) != 0:
-                    return port
-
-    @staticmethod
-    def get_random_port():
-        """Get a random port in the range [2000, 65535]"""
-        return FlorestaTestFramework.get_available_random_port(2000, 65535)
-
     def get_test_log_path(self) -> str:
         """
         Get the path for the test name log file, which is the class name in lowercase.
         This is used to create a log file for the test.
         """
-        tempdir = str(FlorestaTestFramework.get_logs_dir())
+        tempdir = str(Utility.get_logs_dir())
 
         # Get the class's base filename
         filename = sys.modules[self.__class__.__module__].__file__
@@ -415,35 +216,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         filename = filename.replace(".py", "")
 
         return os.path.join(tempdir, f"{filename}.log")
-
-    def create_tls_key_cert(self) -> tuple[str, str]:
-        """
-        Create a PKCS#8 formatted private key and a self-signed certificate.
-        These keys are intended to be used with florestad's --tls-key-path and --tls-cert-path
-        options.
-        """
-        # If we're in CI, we need to use the
-        # path to the integration test dir
-        # tempfile will be used to get the proper
-        # temp dir for the OS
-        tls_rel_path = os.path.join(
-            FlorestaTestFramework.get_integration_test_dir(), "data", "tls"
-        )
-        tls_path = os.path.normpath(os.path.abspath(tls_rel_path))
-
-        # Create the folder if not exists
-        os.makedirs(tls_path, exist_ok=True)
-
-        # Create certificates
-        pk_path, private_key = create_pkcs8_private_key(tls_path)
-        self.log(f"Created PKCS#8 key at {pk_path}")
-
-        cert_path = create_pkcs8_self_signed_certificate(
-            tls_path, private_key, common_name="florestad", validity_days=365
-        )
-        self.log(f"Created self-signed certificate at {cert_path}")
-
-        return (pk_path, cert_path)
 
     def is_option_set(self, extra_args: list[str], option: str) -> bool:
         """
@@ -478,212 +250,111 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             for opt in electrum_listener_options
         )
 
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def create_data_dir_for_daemon(
-        self,
-        data_dir_arg: str,
-        default_args: list[str],
-        extra_args: list[str],
-        tempdir: str,
-        testname: str,
-    ):
+    def create_data_dir_for_daemon(self, node_type: NodeType) -> str:
         """
         Create a data directory for the daemon to be run.
         """
-        # Add a default data-dir if not set
-        if not self.is_option_set(extra_args, data_dir_arg):
-            datadir = os.path.normpath(os.path.join(tempdir, "data", testname))
-            default_args.append(f"{data_dir_arg}={datadir}")
-
-        else:
-            data_dir_arg = next(
-                (arg for arg in extra_args if arg.startswith(f"{data_dir_arg}="))
-            )
-            datadir = data_dir_arg.split("=", 1)[1]
-
-        if not os.path.exists(datadir):
-            self.log(f"Creating data directory for {data_dir_arg} in {datadir}")
-            os.makedirs(datadir, exist_ok=True)
-
-    # pylint: disable=too-many-positional-arguments,too-many-arguments
-    def setup_florestad_daemon(
-        self,
-        targetdir: str,
-        tempdir: str,
-        testname: str,
-        extra_args: List[str],
-        tls: bool,
-    ) -> Node:
-        """Add default args to a florestad node settings to be run and return a Node object."""
-        daemon = FlorestaDaemon()
-        daemon.create(target=targetdir)
-        default_args = []
-        ports = {}
-
-        self.create_data_dir_for_daemon(
-            "--data-dir", default_args, extra_args, tempdir, testname
+        tempdir = str(Utility.get_integration_test_dir())
+        path_name = node_type.value.lower() + str(
+            self.count_nodes_by_variant(node_type)
         )
-
-        if not self.is_option_set(extra_args, "--rpc-address"):
-            ports["rpc"] = self.get_random_port()
-            default_args.append(f"--rpc-address=127.0.0.1:{ports['rpc']}")
-        else:
-            ports["rpc"] = self.extract_port_from_args(extra_args, "--rpc-address")
-
-        if not self.is_option_set(extra_args, "--electrum-address"):
-            ports["electrum-server"] = self.get_random_port()
-            default_args.append(
-                f"--electrum-address=127.0.0.1:{ports['electrum-server']}"
-            )
-        else:
-            ports["electrum-server"] = self.extract_port_from_args(
-                extra_args, "--electrum-address"
-            )
-
-        if tls:
-            key, cert = self.create_tls_key_cert()
-            default_args.append("--enable-electrum-tls")
-            default_args.append(f"--tls-key-path={key}")
-            default_args.append(f"--tls-cert-path={cert}")
-
-            if not self.is_option_set(extra_args, "--electrum-address-tls"):
-                ports["electrum-server-tls"] = self.get_random_port()
-                default_args.append(
-                    f"--electrum-address-tls=127.0.0.1:{ports['electrum-server-tls']}"
-                )
-            else:
-                ports["electrum-server-tls"] = self.extract_port_from_args(
-                    extra_args, "--electrum-address-tls"
-                )
-
-        daemon.add_daemon_settings(default_args + extra_args)
-        rpcserver = copy.deepcopy(florestad_rpc_server)
-        rpcserver["ports"] = ports
-        return Node(daemon, None, rpcserver, "florestad")
-
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def setup_utreexod_daemon(
-        self,
-        targetdir: str,
-        tempdir: str,
-        testname: str,
-        extra_args: List[str],
-        tls: bool,
-    ) -> Node:
-        """Add default args to a utreexod node settings to be run and return a Node object."""
-        daemon = UtreexoDaemon()
-        daemon.create(target=targetdir)
-        default_args = []
-        ports = {}
-
-        self.create_data_dir_for_daemon(
-            "--datadir", default_args, extra_args, tempdir, testname
+        datadir = os.path.normpath(
+            os.path.join(tempdir, "data", self.__class__.__name__.lower(), path_name)
         )
-        if not self.is_option_set(extra_args, "--listen"):
-            ports["p2p"] = self.get_random_port()
-            default_args.append(f"--listen=127.0.0.1:{ports['p2p']}")
-        else:
-            ports["p2p"] = self.extract_port_from_args(extra_args, "--listen")
+        os.makedirs(datadir, exist_ok=True)
 
-        if not self.is_option_set(extra_args, "--rpclisten"):
-            ports["rpc"] = self.get_random_port()
-            default_args.append(f"--rpclisten=127.0.0.1:{ports['rpc']}")
-        else:
-            ports["rpc"] = self.extract_port_from_args(extra_args, "--rpclisten")
+        return datadir
 
-        electrum_enabled = self.should_enable_electrum_for_utreexod(extra_args)
-
-        if electrum_enabled and self.is_option_set(extra_args, "--electrumlisteners"):
-            ports["electrum-server"] = self.extract_port_from_args(
-                extra_args, "--electrumlisteners"
-            )
-
-        if tls:
-            key, cert = self.create_tls_key_cert()
-            default_args.extend([f"--rpckey={key}", f"--rpccert={cert}"])
-
-            if electrum_enabled and self.is_option_set(
-                extra_args, "--tlselectrumlisteners"
-            ):
-                ports["electrum-server-tls"] = self.extract_port_from_args(
-                    extra_args, "--tlselectrumlisteners"
-                )
-        else:
-            default_args.append("--notls")
-
-        daemon.add_daemon_settings(default_args + extra_args)
-        rpcserver = copy.deepcopy(utreexod_rpc_server)
-        rpcserver["ports"] = ports
-        return Node(daemon, None, rpcserver, "utreexod")
-
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def setup_bitcoind_daemon(
-        self,
-        targetdir: str,
-        tempdir: str,
-        testname: str,
-        extra_args: List[str],
-    ) -> Node:
-        """Add default args to a bitcoind node settings to be run and return a Node object."""
-        daemon = BitcoinDaemon()
-        daemon.create(target=targetdir)
-        default_args = []
-        ports = {}
-
-        self.create_data_dir_for_daemon(
-            "-datadir", default_args, extra_args, tempdir, testname
-        )
-
-        if not self.is_option_set(extra_args, "-bind"):
-            ports["p2p"] = self.get_random_port()
-            default_args.append(f"-bind=127.0.0.1:{ports['p2p']}")
-        else:
-            ports["p2p"] = self.extract_port_from_args(extra_args, "-bind")
-
-        if not self.is_option_set(extra_args, "-rpcbind"):
-            ports["rpc"] = self.get_random_port()
-            default_args.extend(
-                ["-rpcallowip=127.0.0.1", f"-rpcbind=127.0.0.1:{ports['rpc']}"]
-            )
-        else:
-            ports["rpc"] = self.extract_port_from_args(extra_args, "-rpcbind")
-
-        daemon.add_daemon_settings(default_args + extra_args)
-        rpcserver = copy.deepcopy(bitcoind_rpc_server)
-        rpcserver["ports"] = ports
-        return Node(daemon, None, rpcserver, "bitcoind")
-
-    # pylint: disable=dangerous-default-value
-    def add_node(
-        self,
-        extra_args: List[str] = [],
-        variant: str = "florestad",
-        tls: bool = False,
-    ) -> Node:
+    def count_nodes_by_variant(self, variant: NodeType) -> int:
         """
-        Add a node settings to be run. Use this on set_test_params method
-        many times you want. Extra_args should be a list of string in the
-        --key=value strings (see florestad --help for a list of available
-        commands)
+        Count the number of nodes of a given variant.
         """
-        tempdir = str(self.get_integration_test_dir())
-        targetdir = os.path.join(tempdir, "binaries")
-        testname = self.__class__.__name__.lower()
+        return sum(1 for node in self._nodes if node.variant == variant)
 
-        if variant == "florestad":
-            node = self.setup_florestad_daemon(
-                targetdir, tempdir, testname, extra_args, tls
-            )
-        elif variant == "utreexod":
-            node = self.setup_utreexod_daemon(
-                targetdir, tempdir, testname, extra_args, tls
-            )
-        elif variant == "bitcoind":
-            node = self.setup_bitcoind_daemon(targetdir, tempdir, testname, extra_args)
-        else:
-            raise ValueError(f"Unsupported variant: {variant}")
+    def add_node_default_args(self, variant: NodeType) -> Node:
+        """
+        Add a node with default configurations.
+
+        This function initializes a node of the specified variant
+        (e.g., FLORESTAD, UTREEXOD, BITCOIND) using default RPC, P2P, and
+        Electrum configurations.
+        """
+        return self._add_node_default_config(variant=variant, extra_args=[], tls=False)
+
+    def add_node_with_tls(self, variant: NodeType) -> Node:
+        """
+        Add a node with default configurations and TLS enabled.
+
+        This function creates a node with default RPC, P2P, and Electrum configurations,
+        enabling TLS for the Electrum server.
+        """
+        return self._add_node_default_config(variant=variant, extra_args=[], tls=True)
+
+    def add_node_extra_args(self, variant: NodeType, extra_args: List[str]) -> Node:
+        """
+        Add a node with the specified variant and custom extra arguments.
+
+        This function uses default configurations for RPC, P2P, and Electrum,
+        and applies the provided extra arguments to the node.
+        """
+        return self._add_node_default_config(
+            variant=variant, extra_args=extra_args, tls=False
+        )
+
+    def _add_node_default_config(
+        self, variant: NodeType, extra_args: List[str], tls: bool
+    ) -> Node:
+
+        tempdir = str(Utility.get_integration_test_dir())
+        targetdir = os.path.normpath(os.path.join(tempdir, "binaries"))
+        data_dir = self.create_data_dir_for_daemon(variant)
+
+        node = Node.create_node_default_config(
+            variant=variant,
+            extra_args=extra_args,
+            data_dir=data_dir,
+            targetdir=targetdir,
+            tls=tls,
+        )
 
         self._nodes.append(node)
+
+        return node
+
+    # pylint: disable=too-many-arguments too-many-positional-arguments
+    def add_node(
+        self,
+        variant: NodeType,
+        rpc_config: ConfigRPC,
+        p2p_config: ConfigP2P,
+        extra_args: List[str],
+        electrum_config: ConfigElectrum,
+        tls: bool,
+    ) -> Node:
+        """
+        Add a node configuration to the test framework.
+
+        This function initializes a node of the specified variant
+        (e.g., FLORESTAD, UTREEXOD, BITCOIND) with the provided RPC, P2P, and
+        Electrum configurations, as well as any additional arguments.
+        The node is added to the framework's list of nodes for testing.
+        """
+        tempdir = str(Utility.get_integration_test_dir())
+        targetdir = os.path.normpath(os.path.join(tempdir, "binaries"))
+        data_dir = self.create_data_dir_for_daemon(variant)
+
+        node = Node(
+            variant=variant,
+            rpc_config=rpc_config,
+            p2p_config=p2p_config,
+            extra_args=extra_args,
+            electrum_config=electrum_config,
+            targetdir=targetdir,
+            data_dir=data_dir,
+            tls=tls,
+        )
+        self._nodes.append(node)
+
         return node
 
     def get_node(self, index: int) -> Node:
@@ -698,25 +369,28 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         return self._nodes[index]
 
     def run_node(self, node: Node):
-        """Start a node and initialize its RPC connection."""
-        if node.variant == "florestad":
-            node.rpc = FlorestaRPC(node.daemon.process, node.rpc_config)
-        elif node.variant == "utreexod":
-            node.rpc = UtreexoRPC(node.daemon.process, node.rpc_config)
-        elif node.variant == "bitcoind":
-            node.rpc = BitcoinRPC(node.daemon.process, node.rpc_config)
+        """
+        Start a node and wait for its RPC server to become available.
 
+        Attempts to start the node up to 3 times, checking if the RPC
+        connection is established. If the node fails to start, it is
+        terminated and retried.
+        """
         for _ in range(3):
             try:
                 node.start()
-                self.log(
-                    f"Node '{node.variant}' started on ports: {node.rpc_config['ports']}"
-                )
+                # Mark the node as having static values
+                node.static_values = True
+                self.log(f"Node '{node.variant}' started")
                 return
+
             # pylint: disable=broad-exception-caught
             except Exception as e:
                 node.stop()
                 error = e
+                if not node.static_values:
+                    self.log(f"Node '{node.variant}' failed to start, updating configs")
+                    node.update_configs()
 
         raise RuntimeError(f"Error starting node '{node.variant}': {error}")
 
@@ -770,7 +444,8 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         """
         Wait for two peers to connect/disconnect to each other.
         """
-        timeout = time.time() + 15
+        attempts = 0
+        timeout = time.time() + 30
         while time.time() < timeout:
             if self.check_connection(peer_one, peer_two, is_connected):
                 self.log(
@@ -779,19 +454,51 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
                 )
                 return
 
-            time.sleep(1)
+            if attempts < 10:
+                time.sleep(1)
+            else:
+                time.sleep(2)
+
+            attempts += 1
 
             # Send a ping to both peers to trigger a peer state update
             if peer_one.daemon.is_running:
                 peer_one.rpc.ping()
+                self.log(
+                    f"Peer one {peer_one.variant} is connected to peer two {peer_two.variant}: "
+                    f"{peer_one.is_peer_connected(peer_two)}"
+                )
 
             if peer_two.daemon.is_running:
                 peer_two.rpc.ping()
+                self.log(
+                    f"Peer two {peer_two.variant} is connected to peer one {peer_one.variant}: "
+                    f"{peer_two.is_peer_connected(peer_one)}"
+                )
 
         raise AssertionError(
             f"Peers {peer_one.variant} and {peer_two.variant} failed to reach the expected "
             f"connection state within the timeout. Expected connected: {is_connected}."
         )
+
+    def connect_nodes(
+        self,
+        peer_one: Node,
+        peer_two: Node,
+        command: str = "add",
+        v2transport: bool = False,
+    ):
+        """
+        Connect two peers to each other and verify their connection state.
+        """
+        if peer_two.variant == NodeType.FLORESTAD:
+            result = peer_two.connect_node(peer_one, command, v2transport=v2transport)
+        else:
+            result = peer_one.connect_node(peer_two, command, v2transport=v2transport)
+
+        self.assertIsNone(result)
+
+        self.wait_for_peers_connections(peer_one, peer_two)
 
     # pylint: disable=invalid-name
     def assertTrue(self, condition: bool):
