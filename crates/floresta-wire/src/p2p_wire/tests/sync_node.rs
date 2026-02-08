@@ -5,11 +5,12 @@ mod tests {
     use bitcoin::Network;
     use floresta_chain::pruned_utreexo::BlockchainInterface;
 
-    use crate::p2p_wire::tests::utils::invalid_block_h7;
-    use crate::p2p_wire::tests::utils::setup_node;
+    use crate::p2p_wire::tests::utils::make_block_invalid;
+    use crate::p2p_wire::tests::utils::setup_sync_node;
     use crate::p2p_wire::tests::utils::signet_blocks;
     use crate::p2p_wire::tests::utils::signet_headers;
     use crate::p2p_wire::tests::utils::PeerData;
+    use crate::p2p_wire::tests::utils::SetupNodeArgs;
 
     const NUM_BLOCKS: usize = 9;
 
@@ -20,7 +21,9 @@ mod tests {
         let blocks = signet_blocks();
 
         let peer = vec![PeerData::new(Vec::new(), blocks, HashMap::new())];
-        let chain = setup_node(peer, false, Network::Signet, &datadir, NUM_BLOCKS).await;
+        let args = SetupNodeArgs::new(peer, false, Network::Signet, datadir, NUM_BLOCKS);
+
+        let chain = setup_sync_node(args).await;
 
         assert_eq!(chain.get_validation_index().unwrap(), 9);
         assert_eq!(chain.get_best_block().unwrap().1, headers[9].block_hash());
@@ -34,10 +37,14 @@ mod tests {
 
         let mut blocks = signet_blocks();
         // Replace the height 7 block with an invalid one
-        blocks.insert(headers[7].block_hash(), invalid_block_h7());
+        if let Some(block) = blocks.get_mut(&headers[7].block_hash()) {
+            make_block_invalid(block);
+        }
 
         let peer = vec![PeerData::new(Vec::new(), blocks, HashMap::new())];
-        let chain = setup_node(peer, false, Network::Signet, &datadir, NUM_BLOCKS).await;
+        let args = SetupNodeArgs::new(peer, false, Network::Signet, datadir, NUM_BLOCKS);
+
+        let chain = setup_sync_node(args).await;
 
         // Block at height 7 was invalidated when connecting it to the chain
         assert_eq!(chain.get_validation_index().unwrap(), 6);

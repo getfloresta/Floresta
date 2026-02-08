@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use bitcoin::p2p::ServiceFlags;
@@ -40,13 +41,16 @@ pub(crate) struct InflightBlock {
     pub peer: PeerId,
 
     /// The block itself
-    pub block: Block,
+    pub block: Arc<Block>,
 
     /// The udata associated with the block, if any
     pub leaf_data: Option<Vec<CompactLeafData>>,
 
     /// The proof associated with the block, if any
     pub proof: Option<Proof>,
+
+    /// If this block is currently being processed in a worker, this is the start time.
+    pub processing_since: Option<Instant>,
 }
 
 impl<T, Chain> UtreexoNode<Chain, T>
@@ -55,6 +59,29 @@ where
     Chain: ChainBackend + 'static,
     WireError: From<Chain::Error>,
 {
+    /// Returns `true` only if we can request `BLOCKS_PER_GETDATA` without exceeding the maximum
+    /// unprocessed blocks allowed.
+    pub(crate) fn can_request_more_blocks(&self) -> bool {
+        let max_inflight_blocks = T::BLOCKS_PER_GETDATA * T::MAX_CONCURRENT_GETDATA;
+
+        // If we do a GETDATA request, this will be the new unprocessed count
+        let next_unprocessed = self.unprocessed_blocks() + T::BLOCKS_PER_GETDATA;
+
+        next_unprocessed <= max_inflight_blocks
+    }
+
+    /// Returns the number of blocks awaiting processing (in memory or requested).
+    pub(crate) fn unprocessed_blocks(&self) -> usize {
+        let blocks_in_mem = self.blocks.len();
+        let requested_blocks = self
+            .inflight
+            .keys()
+            .filter(|inflight| matches!(inflight, InflightRequests::Blocks(_)))
+            .count();
+
+        blocks_in_mem + requested_blocks
+    }
+
     pub(crate) fn request_blocks(&mut self, blocks: Vec<BlockHash>) -> Result<(), WireError> {
         let should_request = |block: &BlockHash| {
             let is_inflight = self
@@ -100,8 +127,9 @@ where
             let inflight_block = InflightBlock {
                 leaf_data: Some(Vec::new()),
                 proof: Some(Proof::default()),
-                block,
+                block: Arc::new(block),
                 peer,
+                processing_since: None,
             };
 
             self.blocks.insert(block_hash, inflight_block);
@@ -111,8 +139,9 @@ where
         let inflight_block = InflightBlock {
             leaf_data: None,
             proof: None,
-            block,
+            block: Arc::new(block),
             peer,
+            processing_since: None,
         };
 
         debug!(

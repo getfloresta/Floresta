@@ -7,6 +7,7 @@ pub mod chain_selector_ctx;
 mod conn;
 mod peer_man;
 pub mod running_ctx;
+pub mod swift_sync_ctx;
 pub mod sync_ctx;
 mod user_req;
 
@@ -20,10 +21,13 @@ use std::time::Instant;
 
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::ServiceFlags;
+use bitcoin::Amount;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin::Txid;
 pub(crate) use blocks::InflightBlock;
+use floresta_chain::swift_sync_agg::SwiftSyncAgg;
+use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
 use floresta_common::Ema;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
@@ -53,11 +57,16 @@ use super::transport::TransportProtocol;
 use super::UtreexoNodeConfig;
 use crate::node_context::PeerId;
 
+type WorkerResult = Result<(SwiftSyncAgg, Amount), BlockchainError>;
+
 #[derive(Debug)]
 pub enum NodeNotification {
     DnsSeedAddresses(Vec<LocalAddress>),
     FromPeer(u32, PeerMessages, Instant),
     FromUser(UserRequest, oneshot::Sender<NodeResponse>),
+    /// Returns the validation result with the delta SwiftSync aggregator and the total unspent
+    /// amount sum, together with the block hash and height.
+    FromWorker((WorkerResult, BlockHash, u32)),
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]

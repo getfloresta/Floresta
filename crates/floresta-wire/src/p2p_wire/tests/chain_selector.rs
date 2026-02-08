@@ -11,11 +11,12 @@ mod tests {
     use rustreexo::accumulator::stump::Stump;
 
     use crate::p2p_wire::tests::utils::create_false_acc;
-    use crate::p2p_wire::tests::utils::setup_node;
+    use crate::p2p_wire::tests::utils::setup_sync_node;
     use crate::p2p_wire::tests::utils::signet_blocks;
     use crate::p2p_wire::tests::utils::signet_headers;
     use crate::p2p_wire::tests::utils::signet_roots;
     use crate::p2p_wire::tests::utils::PeerData;
+    use crate::p2p_wire::tests::utils::SetupNodeArgs;
     const STARTING_LIE_BLOCK_HEIGHT: usize = 30;
 
     pub const NUM_BLOCKS: usize = 120;
@@ -44,8 +45,9 @@ mod tests {
             PeerData::new(headers.clone(), blocks.clone(), true_accs),
             PeerData::new(headers.clone(), blocks, false_accs),
         ];
+        let args = SetupNodeArgs::new(peers, true, Network::Signet, datadir, NUM_BLOCKS);
 
-        let chain = setup_node(peers, true, Network::Signet, &datadir, NUM_BLOCKS).await;
+        let chain = setup_sync_node(args).await;
         let best_block = chain.get_best_block().unwrap();
         assert_eq!(best_block.1, headers[NUM_BLOCKS].block_hash());
 
@@ -93,8 +95,9 @@ mod tests {
         }
 
         peers.push(PeerData::new(headers.clone(), blocks, true_accs));
+        let args = SetupNodeArgs::new(peers, true, Network::Signet, datadir, NUM_BLOCKS);
 
-        let chain = setup_node(peers, true, Network::Signet, &datadir, NUM_BLOCKS).await;
+        let chain = setup_sync_node(args).await;
         let best_block = chain.get_best_block().unwrap();
         assert_eq!(best_block.1, headers[NUM_BLOCKS].block_hash());
 

@@ -171,19 +171,7 @@ impl PartialChainStateInner {
         height: u32,
         inputs: HashMap<bitcoin::OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
-        if !block.check_merkle_root() {
-            return Err(BlockValidationErrors::BadMerkleRoot)?;
-        }
-
-        if height >= self.chain_params().params.bip34_height
-            && block.bip34_block_height() != Ok(height as u64)
-        {
-            return Err(BlockValidationErrors::BadBip34)?;
-        }
-
-        if !block.check_witness_commitment() {
-            return Err(BlockValidationErrors::BadWitnessCommitment)?;
-        }
+        self.consensus.check_block(block, height)?;
 
         let prev_block = self.get_ancestor(height)?;
         if block.header.prev_blockhash != prev_block.block_hash() {
@@ -528,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_updating_single_chain() {
-        let blocks = include_str!("../../testdata/blocks.txt");
+        let blocks = include_str!("../../testdata/regtest_blocks.txt");
         let mut parsed_blocks = vec![];
         for (i, block) in blocks.lines().enumerate() {
             if i > 100 {
@@ -564,7 +552,7 @@ mod tests {
     fn test_updating_multiple_chains() {
         // We have two chains, one with 100 blocks, one with 50 blocks. We expect the
         // accumulator to be what we expect after 100 blocks and after 150 blocks.
-        let blocks = include_str!("../../testdata/blocks.txt");
+        let blocks = include_str!("../../testdata/regtest_blocks.txt");
         let mut parsed_blocks = vec![];
         for block in blocks.lines() {
             parsed_blocks.push(parse_block(block));
