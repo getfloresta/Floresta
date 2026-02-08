@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_updating_single_chain() {
-        let blocks = include_str!("../../testdata/blocks.txt");
+        let blocks = include_str!("../../testdata/regtest_blocks.txt");
         let mut parsed_blocks = vec![];
         for (i, block) in blocks.lines().enumerate() {
             if i > 100 {
@@ -552,7 +552,7 @@ mod tests {
     fn test_updating_multiple_chains() {
         // We have two chains, one with 100 blocks, one with 50 blocks. We expect the
         // accumulator to be what we expect after 100 blocks and after 150 blocks.
-        let blocks = include_str!("../../testdata/blocks.txt");
+        let blocks = include_str!("../../testdata/regtest_blocks.txt");
         let mut parsed_blocks = vec![];
         for block in blocks.lines() {
             parsed_blocks.push(parse_block(block));

@@ -46,6 +46,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -497,8 +498,9 @@ where
 
                     return Ok(InflightBlock {
                         peer,
-                        block,
+                        block: Arc::new(block),
                         aux_data: Some((uproof.leaf_data, proof, peer)),
+                        processing_since: None,
                     });
                 }
                 _ => {}
@@ -928,6 +930,10 @@ where
                     NodeNotification::FromUser(request, responder) => {
                         self.perform_user_request(request, responder).await;
                     }
+
+                    NodeNotification::FromWorker(msg) => {
+                        error!("Received a notification from the worker thread {msg:?}");
+                    }
                 }
             }
 
@@ -974,6 +980,10 @@ where
 
             NodeNotification::DnsSeedAddresses(addresses) => {
                 self.address_man.push_addresses(&addresses);
+            }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
         Ok(())
