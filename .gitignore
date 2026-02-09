@@ -38,3 +38,6 @@ tests/**/__pycache__/*
 
 # commitizen under nixdevshell
 .cz.toml
+
+# shit mac stuff
+**.DS_STORE
