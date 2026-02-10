@@ -112,6 +112,9 @@ This project is licensed under the [MIT License](https://github.com/getfloresta/
 ## Acknowledgments
 
 * [Utreexo](https://eprint.iacr.org/2019/611)
+    * [BIPs 181](https://github.com/bitcoin/bips/blob/master/bip-0181.mediawiki)
+    * [BIPs 182](https://github.com/bitcoin/bips/blob/master/bip-0182.mediawiki)
+    * [BIPs 183](https://github.com/bitcoin/bips/blob/master/bip-0183.mediawiki)
 * [Bitcoin Core](https://github.com/bitcoin/bitcoin)
 * [Rust Bitcoin](https://github.com/rust-bitcoin/rust-bitcoin)
 * [Rust Miniscript](https://github.com/rust-bitcoin/rust-miniscript)
