@@ -525,14 +525,12 @@ impl Consensus {
         unimplemented!("validate_locktime")
     }
 
-    /// Validates the script size and the number of sigops in a scriptpubkey or scriptsig.
+    /// Validates the script size and the number of sigops in a prevout scriptPubKey or scriptSig.
     fn validate_script_size<F: Fn() -> Txid>(
         script: &ScriptBuf,
         txid: F,
     ) -> Result<(), TransactionError> {
-        // The maximum script size for non-taproot spends is 10,000 bytes
-        // https://github.com/bitcoin/bitcoin/blob/v28.0/src/script/script.h#L39
-        if script.len() > 10_000 {
+        if Self::is_unspendable(script) {
             return Err(tx_err!(txid, ScriptError));
         }
         if script.count_sigops() > 80_000 {
