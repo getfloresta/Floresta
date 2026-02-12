@@ -191,11 +191,7 @@ impl Consensus {
             .checked_add(subsidy)
             .ok_or(BlockValidationErrors::TooManyCoins)?;
 
-        let coinbase_total = transactions[0]
-            .output
-            .iter()
-            .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
-            .ok_or(BlockValidationErrors::TooManyCoins)?;
+        let coinbase_total = Self::total_out_value(&transactions[0])?;
 
         if coinbase_total > allowed_reward {
             return Err(BlockValidationErrors::BadCoinbaseOutValue)?;
@@ -242,15 +238,10 @@ impl Consensus {
                     return Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
                 }
                 Self::verify_coinbase(transaction)?;
+                let coinbase_total = Self::total_out_value(transaction)?;
 
                 // We don't know how much money is paid in fees (it would require input amounts),
                 // so we can't check the exact amount here
-                let coinbase_total = transaction
-                    .output
-                    .iter()
-                    .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
-                    .ok_or(BlockValidationErrors::TooManyCoins)?;
-
                 if coinbase_total > Amount::MAX_MONEY {
                     return Err(BlockValidationErrors::TooManyCoins)?;
                 }
@@ -308,6 +299,18 @@ impl Consensus {
                 }
             }
         }
+    }
+
+    /// Returns the total sum of money in the outputs of the given transaction.
+    fn total_out_value(transaction: &Transaction) -> Result<Amount, BlockchainError> {
+        let mut value = Amount::ZERO;
+        for out in &transaction.output {
+            value = value
+                .checked_add(out.value)
+                .ok_or(BlockValidationErrors::TooManyCoins)?;
+        }
+
+        Ok(value)
     }
 
     /// Verifies a single, non-coinbase transaction. To verify (the structure of) a coinbase
@@ -440,11 +443,7 @@ impl Consensus {
             // TODO check also witness script size
         }
 
-        let out_value = transaction
-            .output
-            .iter()
-            .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
-            .ok_or(BlockValidationErrors::TooManyCoins)?;
+        let out_value = Self::total_out_value(transaction)?;
 
         // Sanity check
         if out_value > Amount::MAX_MONEY {
@@ -1135,6 +1134,19 @@ mod tests {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManyCoins)) => (),
             other => panic!("Expected TooManyCoins, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_total_out_value() {
+        let tx: Transaction = deserialize_hex("010000000001018723232750a7a1ec07f650535a9f5d1ccbfdb311919dd7e58d04b61460acb3761600000000fdffffff0310aa0200000000001600144a36b0334c4f32fb7cdc0dbceaae0d61dd08db32f9bb08000000000016001497e7645f99db8913ae7eb08f06a8b735ef97bcd1df61040200000000220020099ee9d3c6fb2d278ab0b602db3dca4eef0a09368ab472dabe7b0df599b92e490400473044022003d0e0fb7ed7723e65bae57ad848f0efacd96eaa97d5fc789ebd19eb84a39dfa022044f58aa40845017779260a827583bb88e8065fb582222588513ce135a614849a014730440220501c20145b38d50abe25ef4719b447cc58075ee0c2e7a701abdc7a9e78d9752402206d64a8790010fa4a27ecf27473eb4f8195e1f6e28583a073c56dc58d577652ad01695221038aa0f2da0ba95cc2b75ccb7e8492a7fb74fe74f60fe90983b4b7f3ddc109088c210235df4fc22cf11f810b1fe3d98f53bb21252add45b9062f4df8a52b07d377a61f2103b65ac7a33844ecdcdef741afee2b009432fa2fc486af4d5155c12d0cf122158253ae00000000").unwrap();
+        let expected_txid =
+            Txid::from_str("28b5daa19149e892000bef5d1f53fdb8e366a6c7da2b10cd6f9d4ff4a33c667d")
+                .unwrap();
+
+        assert_eq!(tx.compute_txid(), expected_txid, "real tx mined at 936,305");
+
+        let total_outs = Consensus::total_out_value(&tx).unwrap();
+        assert_eq!(total_outs, Amount::from_sat(34_588_648));
     }
 
     // Test cases for Bitcoin script limits in the format <spending_tx>:<prevout>.
