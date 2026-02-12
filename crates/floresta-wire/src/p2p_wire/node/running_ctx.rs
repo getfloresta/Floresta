@@ -10,11 +10,11 @@ use bitcoin::bip158::BlockFilter;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::BlockHash;
-use floresta_chain::proof_util;
+use floresta_chain::proof_util::UtreexoLeafError;
 use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
-use floresta_chain::ThreadSafeChain;
+use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::service_flags::UTREEXO;
 use rand::random;
@@ -51,6 +51,7 @@ pub struct RunningNode {
     /// in a timely manner, but keep the ones that notified us of a new blocks the fastest.
     /// We also keep the moment we received the first inv message
     pub(crate) last_invs: HashMap<BlockHash, (Instant, Vec<PeerId>)>,
+    #[allow(dead_code)]
     pub(crate) inflight_filters: BTreeMap<u32, BlockFilter>,
 }
 
@@ -76,9 +77,9 @@ impl Default for RunningNode {
 
 impl<Chain> UtreexoNode<Chain, RunningNode>
 where
-    Chain: ThreadSafeChain + Clone,
+    Chain: ChainBackend + Clone + Send + 'static,
+    Chain::Error: From<UtreexoLeafError>,
     WireError: From<Chain::Error>,
-    Chain::Error: From<proof_util::UtreexoLeafError>,
 {
     fn send_addresses(&mut self) -> Result<(), WireError> {
         let addresses = self
@@ -147,9 +148,6 @@ where
         }
 
         if !self.has_compact_filters_peer() {
-            if self.block_filters.is_none() {
-                return Ok(());
-            }
             if self.peer_ids.len() == 10 {
                 let peer = random::<usize>() % self.peer_ids.len();
                 let peer = self
@@ -323,20 +321,6 @@ where
         }
 
         self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
-        if let Some(ref cfilters) = self.block_filters {
-            self.last_filter = self
-                .chain
-                .get_block_hash(cfilters.get_height().unwrap_or(1))
-                .unwrap();
-        }
-
-        self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
-        if let Some(ref cfilters) = self.block_filters {
-            self.last_filter = self
-                .chain
-                .get_block_hash(cfilters.get_height().unwrap_or(1))
-                .unwrap();
-        }
 
         let mut ticker = time::interval(RunningNode::MAINTENANCE_TICK);
         // If we fall behind, don't "catch up" by running maintenance repeatedly
@@ -441,9 +425,6 @@ where
             RunningNode::ASSUME_STALE,
         );
 
-        // tries to download filters from the network
-        try_and_log!(self.download_filters());
-
         // requests that need a utreexo peer
         if !self.has_utreexo_peers() {
             return LoopControl::Continue;
@@ -454,60 +435,6 @@ where
             try_and_log!(self.ask_missed_block());
         }
         LoopControl::Continue
-    }
-
-    fn download_filters(&mut self) -> Result<(), WireError> {
-        if self.inflight.contains_key(&InflightRequests::GetFilters) {
-            return Ok(());
-        }
-
-        if !self.has_compact_filters_peer() {
-            return Ok(());
-        }
-
-        let Some(ref filters) = self.block_filters else {
-            return Ok(());
-        };
-
-        let mut height = filters.get_height()?;
-        let best_height = self.chain.get_height()?;
-
-        if height == 0 {
-            let user_height = self.config.filter_start_height.unwrap_or(1);
-
-            height = if user_height < 0 {
-                best_height.saturating_sub(user_height.unsigned_abs())
-            } else {
-                user_height as u32
-            };
-
-            height = height.saturating_sub(1);
-            filters.save_height(height)?;
-        }
-
-        if height >= best_height {
-            return Ok(());
-        }
-
-        info!("Downloading filters from height {}", filters.get_height()?);
-        let stop = if height + 500 > best_height {
-            best_height
-        } else {
-            height + 500
-        };
-
-        let stop_hash = self.chain.get_block_hash(stop)?;
-        self.last_filter = stop_hash;
-
-        let peer = self.send_to_fast_peer(
-            NodeRequest::GetFilter((stop_hash, height + 1)),
-            ServiceFlags::COMPACT_FILTERS,
-        )?;
-
-        self.inflight
-            .insert(InflightRequests::GetFilters, (peer, Instant::now()));
-
-        Ok(())
     }
 
     fn ask_missed_block(&mut self) -> Result<(), WireError> {
@@ -625,6 +552,10 @@ where
                         self.process_pending_blocks()?;
                     }
 
+                    PeerMessages::FilterHeader(_) => {
+                        // Running node doesn't handle filter headers
+                    }
+
                     PeerMessages::NewBlock(block) => {
                         debug!("We got an inv with block {block} requesting it");
                         self.context
@@ -737,40 +668,12 @@ where
                         self.handle_disconnection(peer, idx)?;
                     }
 
-                    PeerMessages::BlockFilter((hash, filter)) => {
-                        debug!("Got a block filter for block {hash} from peer {peer}");
+                    PeerMessages::Addr(addresses) => {
+                        debug!("Got {} addresses from peer {}", addresses.len(), peer);
+                        let addresses: Vec<_> =
+                            addresses.into_iter().map(|addr| addr.into()).collect();
 
-                        if let Some(filters) = self.common.block_filters.as_ref() {
-                            let mut current_height = filters.get_height()?;
-                            let Some(this_height) = self.chain.get_block_height(&hash)? else {
-                                warn!("Filter for block {hash} received, but we don't have it");
-                                return Ok(());
-                            };
-
-                            if current_height + 1 != this_height {
-                                self.context.inflight_filters.insert(this_height, filter);
-                                return Ok(());
-                            }
-
-                            filters.push_filter(filter, current_height + 1)?;
-                            current_height += 1;
-
-                            while let Some(filter) =
-                                self.context.inflight_filters.remove(&(current_height))
-                            {
-                                filters.push_filter(filter, current_height)?;
-                                current_height += 1;
-                            }
-
-                            filters.save_height(current_height)?;
-                            let current_hash = self.chain.get_block_hash(current_height)?;
-                            if self.last_filter == current_hash
-                                && self.context.inflight_filters.is_empty()
-                            {
-                                self.inflight.remove(&InflightRequests::GetFilters);
-                                self.download_filters()?;
-                            }
-                        }
+                        self.address_man.push_addresses(&addresses);
                     }
 
                     _ => unreachable!("Error: `handle_peer_msg_common` should have handled remaining PeerMessages"),

@@ -18,10 +18,6 @@ use floresta_chain::BlockchainError;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore as ChainStore;
 use floresta_chain::FlatChainStoreConfig;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_mempool::Mempool;
@@ -373,25 +369,6 @@ impl Florestad {
             self.config.assume_valid,
         )?);
 
-        #[cfg(feature = "compact-filters")]
-        let cfilters = if self.config.cfilters {
-            // Block Filters
-            let filter_store = FlatFiltersStore::new((data_dir.clone() + "/cfilters").into());
-            let cfilters = Arc::new(NetworkFilters::new(filter_store));
-
-            let height = cfilters
-                .get_height()
-                .map_err(FlorestadError::CouldNotLoadCompactFiltersStore)?;
-
-            info!("Loaded compact filters store at height {height}");
-            Some(cfilters)
-        } else {
-            None
-        };
-
-        #[cfg(not(feature = "compact-filters"))]
-        let cfilters = None;
-
         // For now, we only have compatible bridges on signet
         let pow_fraud_proofs = match self.config.network {
             Network::Bitcoin => false,
@@ -415,6 +392,28 @@ impl Florestad {
             .as_ref()
             .map(|addr| Self::resolve_hostname(addr, 9050))
             .transpose()?;
+
+        #[cfg(feature = "compact-filters")]
+        let cfilters = self
+            .config
+            .cfilters
+            .then(|| {
+                use floresta_compact_filters::FilterHeadersStore;
+                use floresta_compact_filters::FlatFilterStore;
+
+                use crate::error;
+
+                let data_dir = format!("{data_dir}/cfilters");
+                let path = PathBuf::from(data_dir);
+
+                // Things I hate in Rust, case #1000000:
+                Ok::<_, error::FlorestadError>(Box::new(FlatFilterStore::new(&path)?)
+                    as Box<dyn FilterHeadersStore + Send + Sync + 'static>)
+            })
+            .transpose()?;
+
+        #[cfg(not(feature = "compact-filters"))]
+        let cfilters = None;
 
         let config = UtreexoNodeConfig {
             disable_dns_seeds: self.config.disable_dns_seeds,
@@ -441,7 +440,7 @@ impl Florestad {
             Arc::new(tokio::sync::Mutex::new(Mempool::new(
                 DEFAULT_MEMPOOL_MAX_SIZE_BYTES,
             ))),
-            cfilters.clone(),
+            cfilters,
             kill_signal.clone(),
             AddressMan::default(),
         )
@@ -476,7 +475,6 @@ impl Florestad {
                 chain_provider.get_handle(),
                 self.stop_signal.clone(),
                 self.config.network,
-                cfilters.clone(),
                 self.config
                     .json_rpc_address
                     .as_ref()
@@ -493,14 +491,10 @@ impl Florestad {
         // Electrum Server configuration.
 
         // Instantiate the Electrum Server.
-        let electrum_server = ElectrumServer::new(
-            wallet,
-            blockchain_state,
-            cfilters,
-            chain_provider.get_handle(),
-        )
-        .await
-        .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
+        let electrum_server =
+            ElectrumServer::new(wallet, blockchain_state, chain_provider.get_handle())
+                .await
+                .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
         // Default Electrum Server port.
         let default_electrum_port: u16 =

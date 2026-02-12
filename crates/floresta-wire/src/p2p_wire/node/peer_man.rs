@@ -586,6 +586,9 @@ where
                 self.inflight
                     .insert(InflightRequests::GetFilters, (peer, Instant::now()));
             }
+            InflightRequests::GetFilterHeaders => {
+                todo!()
+            }
             InflightRequests::Connect(_) => {
                 // We don't need to do anything here
             }

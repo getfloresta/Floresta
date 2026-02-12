@@ -28,8 +28,6 @@ use bitcoin::TxOut;
 use bitcoin::Txid;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::parse_descriptors;
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
@@ -72,7 +70,6 @@ pub trait RpcChain: ThreadSafeChain + Clone {}
 impl<T> RpcChain for T where T: ThreadSafeChain + Clone {}
 
 pub struct RpcImpl<Blockchain: RpcChain> {
-    pub(super) block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
     pub(super) network: Network,
     pub(super) chain: Blockchain,
     pub(super) wallet: Arc<AddressCache<KvDatabase>>,
@@ -119,25 +116,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .collect::<Vec<_>>();
 
         debug!("Rescanning with block filters for addresses: {addresses:?}");
-
-        let addresses = self.wallet.get_cached_addresses();
-        let wallet = self.wallet.clone();
-        if self.block_filter_storage.is_none() {
-            return Err(JsonRpcError::InInitialBlockDownload);
-        };
-
-        let cfilters = self.block_filter_storage.as_ref().unwrap().clone();
-        let node = self.node.clone();
-        let chain = self.chain.clone();
-
-        tokio::task::spawn(Self::rescan_with_block_filters(
-            addresses, chain, wallet, cfilters, node, None, None,
-        ));
-
-        self.wallet.push_descriptor(&descriptor)?;
-        debug!("Descriptor pushed: {descriptor}");
-
-        Ok(true)
+        todo!()
     }
 
     fn rescan_blockchain(
@@ -166,28 +145,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::NoAddressesToRescan);
         }
 
-        let wallet = self.wallet.clone();
-
-        if self.block_filter_storage.is_none() {
-            return Err(JsonRpcError::NoBlockFilters);
-        };
-
-        let cfilters = self.block_filter_storage.as_ref().unwrap().clone();
-
-        let node = self.node.clone();
-
-        let chain = self.chain.clone();
-
-        tokio::task::spawn(Self::rescan_with_block_filters(
-            addresses,
-            chain,
-            wallet,
-            cfilters,
-            node,
-            (start_height != 0).then_some(start_height), // Its ugly but to maintain the API here its necessary to recast to a Option.
-            (stop_height != 0).then_some(stop_height),
-        ));
-        Ok(true)
+        todo!()
     }
 
     async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
@@ -321,7 +279,7 @@ async fn handle_json_rpc_request(
             let height = get_numeric(&params, 3, "height")?;
 
             let state = state.clone();
-            state.find_tx_out(txid, vout, script, height).await
+            state.find_tx_out(txid, vout, script, height)
         }
 
         // control
@@ -579,38 +537,16 @@ async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<serde_js
 }
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    async fn rescan_with_block_filters(
-        addresses: Vec<ScriptBuf>,
-        chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
-        cfilters: Arc<NetworkFilters<FlatFiltersStore>>,
-        node: NodeInterface,
-        start_height: Option<u32>,
-        stop_height: Option<u32>,
+    #[allow(unused)]
+    fn rescan_with_block_filters(
+        _addresses: Vec<ScriptBuf>,
+        _chain: Blockchain,
+        _wallet: Arc<AddressCache<KvDatabase>>,
+        _node: NodeInterface,
+        _start_height: Option<u32>,
+        _stop_height: Option<u32>,
     ) -> Result<()> {
-        let blocks = cfilters
-            .match_any(
-                addresses.iter().map(|a| a.as_bytes()).collect(),
-                start_height,
-                stop_height,
-                chain.clone(),
-            )
-            .unwrap();
-
-        info!("rescan filter hits: {blocks:?}");
-
-        for block in blocks {
-            if let Ok(Some(block)) = node.get_block(block).await {
-                let height = chain
-                    .get_block_height(&block.block_hash())
-                    .unwrap()
-                    .unwrap();
-
-                wallet.block_process(&block, height);
-            }
-        }
-
-        Ok(())
+        todo!()
     }
 
     fn make_vin(&self, input: TxIn) -> TxInJson {
@@ -739,7 +675,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         node: NodeInterface,
         kill_signal: Arc<RwLock<bool>>,
         network: Network,
-        block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
     ) {
@@ -778,7 +713,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 node,
                 kill_signal,
                 network,
-                block_filter_storage,
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
