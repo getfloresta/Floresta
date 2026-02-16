@@ -221,9 +221,12 @@ impl Consensus {
     /// weaker amount check than that of traditional AssumeValid.
     pub fn verify_block_transactions_swiftsync(
         transactions: &[Transaction],
+        txids: Vec<Txid>,
         unspent_indexes: HashSet<u64>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
+        assert_eq!(transactions.len(), txids.len());
+
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
             return Err(BlockValidationErrors::EmptyBlock)?;
@@ -234,7 +237,7 @@ impl Consensus {
         let mut unspent_amount = Amount::ZERO;
         let mut agg = SwiftSyncAgg::zero();
 
-        for (n, transaction) in transactions.iter().enumerate() {
+        for (n, (transaction, txid)) in transactions.iter().zip(txids).enumerate() {
             if n == 0 {
                 if !transaction.is_coinbase() {
                     return Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
@@ -269,7 +272,7 @@ impl Consensus {
                 output_index += 1;
             }
             // Only add spent outputs to the aggregator
-            Self::add_outputs_to_agg(salt, &mut agg, transaction, spent_vouts);
+            Self::add_outputs_to_agg(salt, &mut agg, txid, spent_vouts);
         }
 
         Ok((agg, unspent_amount))
@@ -279,23 +282,21 @@ impl Consensus {
     fn add_outputs_to_agg(
         salt: &SipHashKeys,
         agg: &mut SwiftSyncAgg,
-        transaction: &Transaction,
+        txid: Txid,
         spent_vouts: Vec<u32>,
     ) {
-        let txid = || transaction.compute_txid();
-
         match spent_vouts.len() {
             // Nothing needs to be added to the aggregator
             0 => {}
 
             // Only one `OutPoint` to add
-            1 => agg.add(salt, &OutPoint::new(txid(), spent_vouts[0])),
+            1 => agg.add(salt, &OutPoint::new(txid, spent_vouts[0])),
 
             // All `OutPoints` to hash here will share the same txid, only differing in the vout.
             // Thus, we can compute the midstate once, amortizing this cost for all `OutPoints`,
             // which is around 57% less work given enough spent outputs.
             _ => {
-                let midstate = TxidHashMidstate::new(salt, txid().as_byte_array());
+                let midstate = TxidHashMidstate::new(salt, txid.as_byte_array());
                 for vout in spent_vouts {
                     agg.add_with_vout(midstate.clone(), vout);
                 }
@@ -458,17 +459,18 @@ impl Consensus {
         Ok(out_value)
     }
 
-    /// Runs inexpensive, consensus-critical block checks that don't require script execution.
+    /// Runs inexpensive, consensus-critical block checks that don't require script execution. If
+    /// successful, returns the list of [`Txid`]s computed for the merkle root check.
     ///
     /// This verifies:
     /// - the header merkle root matches the block's txids
     /// - BIP34 coinbase-encoded height once activated (at `bip34_height`)
     /// - if there are SegWit transactions, the witness commitment is present and correct
     /// - total block weight is within the 4,000,000 WU limit
-    pub fn check_block(&self, block: &Block, height: u32) -> Result<(), BlockchainError> {
-        if !block.check_merkle_root() {
+    pub fn check_block(&self, block: &Block, height: u32) -> Result<Vec<Txid>, BlockchainError> {
+        let Some(txids) = Self::check_merkle_root(block) else {
             return Err(BlockValidationErrors::BadMerkleRoot)?;
-        }
+        };
 
         let bip34_height = self.parameters.params.bip34_height;
         // If bip34 is active, check that the encoded block height is correct
@@ -484,7 +486,7 @@ impl Consensus {
             return Err(BlockValidationErrors::BlockTooBig)?;
         }
 
-        Ok(())
+        Ok(txids)
     }
 
     /// Performs AssumeValid SwiftSync validation and returns the resulting [`SwiftSyncAgg`]
@@ -498,9 +500,28 @@ impl Consensus {
         unspent_indexes: HashSet<u64>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
-        self.check_block(block, height)?;
+        let txids = self.check_block(block, height)?;
 
-        Consensus::verify_block_transactions_swiftsync(&block.txdata, unspent_indexes, salt)
+        Consensus::verify_block_transactions_swiftsync(&block.txdata, txids, unspent_indexes, salt)
+    }
+
+    /// Checks if the merkle root of the header matches the merkle root of the transaction list.
+    ///
+    /// Unlike [`Block::check_merkle_root`], this function returns the list of computed [`Txid`]s
+    /// if the merkle roots matched, or `None` otherwise.
+    ///
+    /// The merkle root is computed in the same way as [`Block::compute_merkle_root`].
+    pub fn check_merkle_root(block: &Block) -> Option<Vec<Txid>> {
+        let txids: Vec<_> = block.txdata.iter().map(|obj| obj.compute_txid()).collect();
+
+        // Copy the hashes into an iterator, as `calculate_root` requires ownership
+        let hashes_iter = txids.iter().copied().map(|txid| txid.to_raw_hash());
+
+        let calculated = bitcoin::merkle_tree::calculate_root(hashes_iter).map(|h| h.into());
+        match calculated {
+            Some(merkle_root) if block.header.merkle_root == merkle_root => Some(txids),
+            _ => None,
+        }
     }
 
     /// Returns the TxOut being spent by the given input.
