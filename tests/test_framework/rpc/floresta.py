@@ -32,3 +32,9 @@ class FlorestaRPC(BaseRPC):
             raise ValueError(f"Invalid getmemoryinfo mode: '{mode}'")
 
         return self.perform_request("getmemoryinfo", params=[mode])
+
+    def get_transaction(self, txid: str, verbosity: bool) -> dict:
+        """
+        Get in-wallet transaction information
+        """
+        return self.perform_request("gettransaction", params=[txid, verbosity])
