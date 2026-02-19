@@ -611,7 +611,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::NoBlockFilters);
         };
 
-        self.wallet.cache_address(script.clone());
+        self.wallet.cache_address(script.clone())?;
         let filter_key = script.to_bytes();
         let candidates = cfilters
             .match_any(
@@ -640,7 +640,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 return Err(JsonRpcError::BlockNotFound);
             };
 
-            self.wallet.block_process(&candidate, height);
+            self.wallet.block_process(&candidate, height)?;
         }
 
         let val = match self.get_tx_out(txid, vout, false)? {

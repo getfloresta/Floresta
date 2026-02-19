@@ -262,4 +262,4 @@ impl_from_error!(
     WatchOnlyError<SqliteDatabaseError>
 );
 
-impl std::error::Error for FlorestadError {}
+impl error::Error for FlorestadError {}
