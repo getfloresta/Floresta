@@ -13,7 +13,6 @@ use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode;
 use bitcoin::hashes::Hash as HashTrait;
 use bitcoin::OutPoint;
-use bitcoin::ScriptBuf;
 use bitcoin::Txid;
 use floresta_common::impl_error_from;
 use floresta_common::prelude;
