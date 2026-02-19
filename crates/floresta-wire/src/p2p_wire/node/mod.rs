@@ -40,6 +40,7 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::mempool::MempoolBase;
 pub use peer_man::AddedPeerInfo;
 use running_ctx::RunningNode;
+use rustreexo::node_hash::BitcoinNodeHash;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -67,7 +68,7 @@ use crate::node_context::PeerId;
 /// As per BIP 155, limit the number of addresses to 1,000
 pub const MAX_ADDRV2_ADDRESSES: usize = 1_000;
 
-type WorkerResult = Result<(SwiftSyncAgg, Amount), BlockchainError>;
+type WorkerResult = Result<(SwiftSyncAgg, Amount, Vec<BitcoinNodeHash>), BlockchainError>;
 
 #[derive(Debug)]
 pub enum NodeNotification {
