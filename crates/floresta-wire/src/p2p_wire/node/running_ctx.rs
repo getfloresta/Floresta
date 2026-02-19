@@ -129,37 +129,37 @@ where
         };
 
         let swift_sync = swift_sync.run(|_| {}).await;
+        let swift_sync_failed = swift_sync.was_aborted();
 
-        // If SwiftSync couldn't complete, we need to run a full utreexo sync
-        let common = if swift_sync.was_aborted() {
-            let mut sync = UtreexoNode {
-                common: swift_sync.common,
-                context: SyncNode::default(),
-            };
+        // Finish IBD with regular utreexo sync
+        let mut sync = UtreexoNode {
+            common: swift_sync.common,
+            context: SyncNode::default(),
+        };
 
-            // Clear the inflight requests and in-memory blocks, we'll start from genesis
+        // If SwiftSync couldn't complete, we need to validate all blocks from scratch
+        if swift_sync_failed {
+            // Clear the inflight requests and in-memory blocks to start from genesis
             sync.inflight.clear();
             sync.blocks.clear();
             assert_eq!(sync.unprocessed_blocks(), 0);
+        }
 
-            let sync = sync.run(|_| {}).await;
-            sync.common
-        } else {
-            swift_sync.common
-        };
-
-        let synced = UtreexoNode { common, context: self.context };
+        let sync = sync.run(|_| {}).await;
 
         // Once we are synced, peer diversity is the priority, as we must be able to discover
         // newly mined blocks. However, the peer list that we have built during IBD is biased
         // towards low-latency peers (often geographically close to our node).
         //
         // Here we try disconnecting half of our connected peers to open space for new peers.
-        let peers_to_disconnect = synced.connected_peers() / 2;
+        let peers_to_disconnect = sync.connected_peers() / 2;
         let protected_services = &[service_flags::UTREEXO.into()];
-        synced.disconnect_random_peers(peers_to_disconnect, protected_services);
+        sync.disconnect_random_peers(peers_to_disconnect, protected_services);
 
-        Ok(synced)
+        Ok(UtreexoNode {
+            common: sync.common,
+            context: self.context,
+        })
     }
 
     /// This function is called periodically to check if we have:
