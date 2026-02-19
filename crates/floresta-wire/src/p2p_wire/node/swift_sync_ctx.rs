@@ -3,6 +3,7 @@
 //! A node that downloads and validates the blockchain, but skips utreexo proofs as they aren't
 //! needed to validate the UTXO set with the SwiftSync method.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs::File;
 use std::path::Path;
@@ -24,6 +25,8 @@ use floresta_chain::swift_sync_agg::SwiftSyncAgg;
 use floresta_common::service_flags;
 use hintsfile::Hintsfile;
 use rand::RngCore;
+use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
 use tokio::time;
 use tokio::time::MissedTickBehavior;
@@ -55,6 +58,12 @@ use crate::p2p_wire::peer::PeerMessages;
 ///     - `UtreexoNode<SwiftSync, Chain>`
 #[derive(Default)]
 pub struct SwiftSync {
+    /// The utreexo accumulator for the last height we have constructed.
+    acc: (Stump, u32),
+
+    /// A mapping of block heights to their utreexo leaves.
+    utreexo_leaves: BTreeMap<u32, Vec<BitcoinNodeHash>>,
+
     /// The `TxOut` aggregator.
     agg: SwiftSyncAgg,
 
@@ -261,14 +270,24 @@ where
     ///   - Handles timeouts for inflight requests.
     ///   - If we are low on inflights, requests new blocks to validate.
     pub async fn run(mut self, done_cb: impl FnOnce(&Chain)) -> Self {
-        info!("Starting SwiftSync node...");
-        self.last_block_request = self.chain.get_validation_index().unwrap();
-        assert_eq!(self.last_block_request, 0);
+        let Some(mut hints) = Self::parse_hints_file(&self.datadir, self.network) else {
+            return self;
+        };
 
-        // Parse the hints file and randomly fill the SwiftSync salt for this session
-        let mut hints = Self::parse_hints_file(&self.datadir, self.network);
+        let validation_idx = self.chain.get_validation_index().unwrap();
+        if validation_idx >= hints.stop_height() {
+            return self;
+        }
 
         self.context.stop_height = hints.stop_height();
+
+        assert_eq!(
+            validation_idx, 0,
+            "Validation index should be 0 at the start of SwiftSync"
+        );
+        self.last_block_request = 0;
+
+        // Generate the random salt and kick off SwiftSync!
         self.context.salt = Self::generate_salt();
 
         info!("Performing SwiftSync up to height {}", hints.stop_height());
@@ -328,11 +347,9 @@ where
             return LoopControl::Break;
         }
 
-        // If we have reached the SwiftSync stop height, we aren't waiting for inflight requested
-        // blocks, and there's no in-memory block being processed, we have finished.
-        let finished_requesting = self.last_block_request == self.context.stop_height;
-
-        if finished_requesting && self.unprocessed_blocks() == 0 {
+        // If we have reached the SwiftSync stop height, and we have added all the utreexo leaves
+        // to the accumulator, we have finished.
+        if self.swift_sync_finished() {
             self.handle_stop_height_reached();
             return LoopControl::Break;
         }
@@ -363,10 +380,23 @@ where
             return LoopControl::Continue;
         }
 
+        self.try_building_utreexo_acc();
+
         try_and_log!(self.pump_swiftsync(hints));
 
         self.get_blocks_to_download();
         LoopControl::Continue
+    }
+
+    /// Returns true if we have requested all blocks up to the stop height, we have received and
+    /// processed all of them, and we have added all utreexo leaves to the accumulator.
+    fn swift_sync_finished(&self) -> bool {
+        let stop_height = self.context.stop_height;
+
+        self.last_block_request == stop_height
+            && self.context.acc.1 == stop_height
+            && self.unprocessed_blocks() == 0
+            && self.context.utreexo_leaves.is_empty()
     }
 
     /// Called when we process the last SwiftSync block. Verifies that the produced aggregator is
@@ -377,6 +407,7 @@ where
         let stop_height = self.context.stop_height;
         let final_agg = self.context.agg;
         let final_supply = self.context.supply;
+        let final_acc = self.context.acc.0.clone();
 
         if !final_agg.is_zero() {
             error!("SwiftSync failed with the provided hints file; end aggregator is not zero");
@@ -396,8 +427,10 @@ where
         info!("SwiftSync is finished, switching to normal operation mode");
         let tip_hash = self.chain.get_block_hash(stop_height).unwrap();
 
+        info!("SwiftSync produced the following accumulator for {tip_hash}: \n{final_acc:?}");
+
         self.chain
-            .mark_chain_as_assumed(Stump::new(), tip_hash)
+            .mark_chain_as_assumed(final_acc, tip_hash)
             .unwrap();
         self.chain.toggle_ibd(false);
     }
@@ -504,9 +537,13 @@ where
         self.pump_swiftsync(hints)?;
 
         match result {
-            Ok((agg_re, unspent_amount)) => {
+            Ok((agg_re, unspent_amount, utreexo_adds)) => {
                 self.context.agg += agg_re;
                 self.context.supply += unspent_amount;
+
+                self.context.utreexo_leaves.insert(height, utreexo_adds);
+                self.try_building_utreexo_acc();
+
                 self.handle_valid_worker_block(block_hash, height, block);
             }
             Err(e) => {
@@ -515,6 +552,33 @@ where
             }
         };
         Ok(())
+    }
+
+    fn try_building_utreexo_acc(&mut self) {
+        loop {
+            let (tip_acc, tip_height) = &self.context.acc;
+            let next_height = tip_height + 1;
+
+            let Some(entry) = self.context.utreexo_leaves.first_entry() else {
+                // Map is empty: we may be waiting for blocks (or finishing SwiftSync).
+                break;
+            };
+
+            if *entry.key() != next_height {
+                // We don't have the utreexo leaves for the next height yet.
+                break;
+            }
+
+            let utreexo_adds = entry.remove();
+
+            let start = Instant::now();
+            let next_acc = tip_acc
+                .modify(&utreexo_adds, &[], &Proof::default())
+                .expect("utreexo shouldn't fail on addition-only");
+            info!("Built ACC in {:?}", start.elapsed());
+
+            self.context.acc = (next_acc, next_height);
+        }
     }
 
     fn handle_invalid_block(

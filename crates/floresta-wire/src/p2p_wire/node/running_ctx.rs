@@ -129,28 +129,26 @@ where
         };
 
         let swift_sync = swift_sync.run(|_| {}).await;
+        let swift_sync_failed = swift_sync.was_aborted();
 
-        // If SwiftSync couldn't complete, we need to run a full utreexo sync
-        if swift_sync.was_aborted() {
-            let mut sync = UtreexoNode {
-                common: swift_sync.common,
-                context: SyncNode::default(),
-            };
+        // Finish IBD with regular utreexo sync
+        let mut sync = UtreexoNode {
+            common: swift_sync.common,
+            context: SyncNode::default(),
+        };
 
-            // Clear the inflight requests and in-memory blocks, we'll start from genesis
+        // If SwiftSync couldn't complete, we need to validate all blocks from scratch
+        if swift_sync_failed {
+            // Clear the inflight requests and in-memory blocks to start from genesis
             sync.inflight.clear();
             sync.blocks.clear();
             assert_eq!(sync.unprocessed_blocks(), 0);
-
-            let sync = sync.run(|_| {}).await;
-            return Ok(UtreexoNode {
-                common: sync.common,
-                context: self.context,
-            });
         }
 
+        let sync = sync.run(|_| {}).await;
+
         Ok(UtreexoNode {
-            common: swift_sync.common,
+            common: sync.common,
             context: self.context,
         })
     }
