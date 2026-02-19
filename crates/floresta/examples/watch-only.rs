@@ -18,7 +18,7 @@ fn main() {
     let wallet_data = SqliteDatabase::new("./wallet_db").unwrap();
 
     // Then, we create the wallet itself.
-    let wallet = AddressCache::new(wallet_data);
+    let wallet = AddressCache::new(wallet_data).unwrap();
     // Now, we need to add the addresses we want to watch. We can add them one by one, or
     // we can add a descriptor that will generate the addresses for us. Here, we use a
     // descriptor that generates P2WPKH addresses. The descriptor is parsed using the
@@ -53,7 +53,9 @@ fn main() {
     // regtest network. Each coinbase some of the addresses derived above.
     for block in BLOCKS.iter() {
         let block = Vec::from_hex(block).unwrap();
-        let _ = wallet.block_process(&deserialize(&block).unwrap(), 1);
+        wallet
+            .block_process(&deserialize(&block).unwrap(), 1)
+            .unwrap();
     }
     // We can now query the wallet for information about the addresses we added. For example,
     // we can get the history of the second address, the balance, and the UTXOs. To fetch the
