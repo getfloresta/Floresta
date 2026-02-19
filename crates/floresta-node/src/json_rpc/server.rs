@@ -107,18 +107,18 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         // It's ok to unwrap because we know there is at least one element in the vector
         let addresses = parsed.pop().unwrap();
-        let addresses = (0..100)
+        let derived_addresses = (0..100)
             .map(|index| {
                 let address = addresses
                     .at_derivation_index(index)
                     .unwrap()
                     .script_pubkey();
-                self.wallet.cache_address(address.clone());
-                address
+                self.wallet.cache_address(address.clone())?;
+                Ok(address)
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
-        debug!("Rescanning with block filters for addresses: {addresses:?}");
+        debug!("Rescanning with block filters for addresses: {derived_addresses:?}");
 
         let addresses = self.wallet.get_cached_addresses();
         let wallet = self.wallet.clone();
@@ -606,7 +606,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .unwrap()
                     .unwrap();
 
-                wallet.block_process(&block, height);
+                if let Err(e) = wallet.block_process(&block, height) {
+                    error!("Error processing block at height {height}: {e}");
+                }
             }
         }
 

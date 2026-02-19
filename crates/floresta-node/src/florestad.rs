@@ -724,7 +724,7 @@ impl Florestad {
     fn load_wallet(data_dir: &str) -> Result<AddressCache<SqliteDatabase>, FlorestadError> {
         let database =
             SqliteDatabase::new(data_dir).map_err(FlorestadError::CouldNotOpenSqliteDatabase)?;
-        Ok(AddressCache::new(database))
+        Ok(AddressCache::new(database)?)
     }
 
     fn setup_wallet(
@@ -752,7 +752,7 @@ impl Florestad {
             }
         }
         for addresses in setup.addresses {
-            wallet.cache_address(addresses.script_pubkey());
+            wallet.cache_address(addresses.script_pubkey())?;
         }
 
         info!("Wallet setup completed!");
