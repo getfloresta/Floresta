@@ -20,7 +20,6 @@ use super::try_and_log;
 use super::InflightRequests;
 use super::NodeRequest;
 use super::UtreexoNode;
-use crate::address_man::AddressState;
 use crate::block_proof::Bitmap;
 use crate::block_proof::UtreexoProof;
 use crate::node_context::NodeContext;
@@ -282,62 +281,23 @@ where
 
         if let Err(chain_err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
             error!(
-                "Invalid block {:?} received by peer {} reason: {:?}",
+                "Validation failed for block with {:?}, received by peer {}\nReason: {:?}",
                 block.header, peer, chain_err,
             );
 
-            if let Some(e) = Self::block_validation_err(chain_err) {
-                // Because the proof isn't committed to the block, we can't invalidate
-                // it if the proof is invalid. Any other error should cause the block
-                // to be invalidated.
-                match e {
-                    BlockValidationErrors::InvalidCoinbase(_)
-                    | BlockValidationErrors::UtxoNotFound(_)
-                    | BlockValidationErrors::ScriptValidationError(_)
-                    | BlockValidationErrors::NullPrevOut
-                    | BlockValidationErrors::EmptyInputs
-                    | BlockValidationErrors::EmptyOutputs
-                    | BlockValidationErrors::ScriptError
-                    | BlockValidationErrors::BlockTooBig
-                    | BlockValidationErrors::NotEnoughPow
-                    | BlockValidationErrors::TooManyCoins
-                    | BlockValidationErrors::BadMerkleRoot
-                    | BlockValidationErrors::BadWitnessCommitment
-                    | BlockValidationErrors::NotEnoughMoney
-                    | BlockValidationErrors::FirstTxIsNotCoinbase
-                    | BlockValidationErrors::BadCoinbaseOutValue
-                    | BlockValidationErrors::EmptyBlock
-                    | BlockValidationErrors::BadBip34
-                    | BlockValidationErrors::BIP94TimeWarp
-                    | BlockValidationErrors::UnspendableUTXO
-                    | BlockValidationErrors::CoinbaseNotMatured => {
-                        try_and_log!(self.chain.invalidate_block(block.block_hash()));
-                    }
-                    BlockValidationErrors::InvalidProof => {}
-                    BlockValidationErrors::BlockExtendsAnOrphanChain
-                    | BlockValidationErrors::BlockDoesntExtendTip => {
-                        // for some reason, we've tried to connect a block that doesn't extend the
-                        // tip
-                        self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
-                        // this is our mistake, don't punish the peer
-                        return Ok(());
-                    }
+            // Return early if the error is not from block validation (e.g., a database error)
+            let Some(e) = Self::block_validation_err(chain_err) else {
+                return Ok(());
+            };
+
+            return match self.handle_validation_errors(e, block, peer, utreexo_peer) {
+                Some(blamed_peer) => {
+                    // Disconnect the responsible peer and ban it.
+                    self.disconnect_and_ban(blamed_peer)?;
+                    Err(WireError::PeerMisbehaving)
                 }
-            }
-
-            warn!(
-                "Block {} from peer {peer} is invalid, banning peer",
-                block.block_hash()
-            );
-
-            // Disconnect the peer and ban it.
-            if let Some(peer) = self.peers.get(&peer).cloned() {
-                self.address_man
-                    .update_set_state(peer.address_id as usize, AddressState::Banned(T::BAN_TIME));
-            }
-
-            self.send_to_peer(peer, NodeRequest::Shutdown)?;
-            return Err(WireError::PeerMisbehaving);
+                None => Ok(()),
+            };
         }
 
         self.last_tip_update = Instant::now();
@@ -354,6 +314,73 @@ where
                 Some(BlockValidationErrors::InvalidProof)
             }
             _ => None,
+        }
+    }
+
+    /// Handles the different block validation errors that can happen when connecting a block.
+    ///
+    /// Returns the peer id that caused this error, since it could be block or utreexo-related.
+    fn handle_validation_errors(
+        &mut self,
+        e: BlockValidationErrors,
+        block: Block,
+        block_peer: PeerId,
+        utreexo_peer: PeerId,
+    ) -> Option<PeerId> {
+        let hash = block.block_hash();
+        match e {
+            // The utreexo peer sent us an invalid utreexo proof. Block is not yet processed.
+            BlockValidationErrors::InvalidProof => {
+                self.blocks
+                    .insert(hash, InflightBlock::new(block, block_peer));
+
+                warn!("Proof for block {hash} is invalid, banning peer {utreexo_peer}");
+                Some(utreexo_peer)
+            }
+
+            // The utreexo peer sent us incomplete leaf data. Block is not yet processed.
+            BlockValidationErrors::UtxoNotFound(_) => {
+                self.blocks
+                    .insert(hash, InflightBlock::new(block, block_peer));
+
+                warn!("Leaf data for block {hash} is invalid, banning peer {utreexo_peer}");
+                Some(utreexo_peer)
+            }
+
+            // The block is invalid, so we have to invalidate it in our chain.
+            BlockValidationErrors::InvalidCoinbase(_)
+            | BlockValidationErrors::ScriptValidationError(_)
+            | BlockValidationErrors::NullPrevOut
+            | BlockValidationErrors::EmptyInputs
+            | BlockValidationErrors::EmptyOutputs
+            | BlockValidationErrors::ScriptError
+            | BlockValidationErrors::BlockTooBig
+            | BlockValidationErrors::NotEnoughPow
+            | BlockValidationErrors::TooManyCoins
+            | BlockValidationErrors::BadMerkleRoot
+            | BlockValidationErrors::BadWitnessCommitment
+            | BlockValidationErrors::NotEnoughMoney
+            | BlockValidationErrors::FirstTxIsNotCoinbase
+            | BlockValidationErrors::BadCoinbaseOutValue
+            | BlockValidationErrors::EmptyBlock
+            | BlockValidationErrors::BadBip34
+            | BlockValidationErrors::BIP94TimeWarp
+            | BlockValidationErrors::UnspendableUTXO
+            | BlockValidationErrors::CoinbaseNotMatured => {
+                try_and_log!(self.chain.invalidate_block(hash));
+
+                warn!("Block {hash} is invalid, banning peer {block_peer}");
+                Some(block_peer)
+            }
+
+            // We've tried to connect a block that doesn't extend the tip.
+            BlockValidationErrors::BlockExtendsAnOrphanChain
+            | BlockValidationErrors::BlockDoesntExtendTip => {
+                self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
+
+                // This is our mistake, don't punish any peer
+                None
+            }
         }
     }
 }
