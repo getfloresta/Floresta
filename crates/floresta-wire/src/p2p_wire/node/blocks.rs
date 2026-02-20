@@ -27,6 +27,9 @@ use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::p2p_wire::error::WireError;
 
+/// The leaf data, utreexo proof and the peer that sent them.
+type UtreexoData = (Vec<CompactLeafData>, Proof, PeerId);
+
 #[derive(Debug)]
 /// A block that is currently being downloaded or pending processing
 ///
@@ -36,17 +39,30 @@ use crate::p2p_wire::error::WireError;
 /// out of order, so while we wait for the previous blocks to finish download,
 /// we keep the blocks that are already downloaded as an [`InflightBlock`].
 pub(crate) struct InflightBlock {
-    /// The peer that sent the block
+    /// The peer that sent the block.
     pub peer: PeerId,
 
-    /// The block itself
+    /// The block itself.
     pub block: Block,
 
-    /// The udata associated with the block, if any
-    pub leaf_data: Option<Vec<CompactLeafData>>,
+    /// Auxiliary data needed for validating this block.
+    pub aux_data: Option<UtreexoData>,
+}
 
-    /// The proof associated with the block, if any
-    pub proof: Option<Proof>,
+impl InflightBlock {
+    /// Creates a new `InflightBlock` from a block and the associated peer id.
+    fn new(block: Block, peer: PeerId) -> Self {
+        Self {
+            peer,
+            block,
+            aux_data: None,
+        }
+    }
+
+    /// Attaches the auxiliary utreexo data to this `InflightBlock`.
+    fn add_utreexo_data(&mut self, leaf_data: Vec<CompactLeafData>, proof: Proof, peer: PeerId) {
+        self.aux_data = Some((leaf_data, proof, peer));
+    }
 }
 
 impl<T, Chain> UtreexoNode<Chain, T>
@@ -96,29 +112,16 @@ where
         };
 
         if block.txdata.len() == 1 {
-            // This is an empty block, so there's no proof for it
-            let inflight_block = InflightBlock {
-                leaf_data: Some(Vec::new()),
-                proof: Some(Proof::default()),
-                block,
-                peer,
-            };
+            let mut inflight_block = InflightBlock::new(block, peer);
+
+            // This is an empty block, so there's no proof nor leaf data for it
+            inflight_block.add_utreexo_data(Vec::new(), Proof::default(), peer);
 
             self.blocks.insert(block_hash, inflight_block);
             return Ok(());
         }
 
-        let inflight_block = InflightBlock {
-            leaf_data: None,
-            proof: None,
-            block,
-            peer,
-        };
-
-        debug!(
-            "Received block {} from peer {}",
-            block_hash, inflight_block.peer
-        );
+        debug!("Received block {block_hash} from peer {peer}");
 
         self.send_to_fast_peer(
             NodeRequest::GetBlockProof((block_hash, Bitmap::new(), Bitmap::new())),
@@ -130,7 +133,8 @@ where
             (peer, Instant::now()),
         );
 
-        self.blocks.insert(block_hash, inflight_block);
+        self.blocks
+            .insert(block_hash, InflightBlock::new(block, peer));
 
         Ok(())
     }
@@ -159,8 +163,8 @@ where
             targets: uproof.targets,
         };
 
-        block.proof = Some(proof);
-        block.leaf_data = Some(uproof.leaf_data);
+        // Add the proof and leaf data, together with the peer id that sent them
+        block.add_utreexo_data(uproof.leaf_data, proof, peer);
 
         Ok(())
     }
@@ -178,7 +182,7 @@ where
             .blocks
             .iter()
             .filter_map(|(hash, block)| {
-                if block.proof.is_some() && block.leaf_data.is_some() {
+                if block.aux_data.is_some() {
                     return None;
                 }
 
@@ -229,7 +233,7 @@ where
                 return Ok(());
             };
 
-            if block.proof.is_none() {
+            if block.aux_data.is_none() {
                 // If the block doesn't have a proof, we can't process it
                 return Ok(());
             }
@@ -261,18 +265,15 @@ where
     {
         debug!("processing block {block_hash}");
 
-        let inflight_block = self
+        let inflight = self
             .blocks
             .remove(&block_hash)
             .ok_or(WireError::BlockNotFound)?;
 
-        let leaf_data = inflight_block
-            .leaf_data
-            .ok_or(WireError::LeafDataNotFound)?;
-
-        let proof = inflight_block.proof.ok_or(WireError::BlockProofNotFound)?;
-        let block = inflight_block.block;
-        let peer = inflight_block.peer;
+        let block = inflight.block;
+        let peer = inflight.peer;
+        let (leaf_data, proof, utreexo_peer) =
+            inflight.aux_data.ok_or(WireError::BlockProofNotFound)?;
 
         let (del_hashes, inputs) =
             proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {

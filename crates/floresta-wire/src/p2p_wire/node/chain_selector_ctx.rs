@@ -402,10 +402,9 @@ where
             res => res?,
         };
 
-        let proof = inflight_block.proof.expect("Block proof should be present");
-        let leaf_data = inflight_block
-            .leaf_data
-            .expect("Leaf data should be present");
+        let (leaf_data, proof, _) = inflight_block
+            .aux_data
+            .expect("Block proof and leaf data should be present");
 
         let acc1 = self.update_acc(agreed, &inflight_block.block, proof, &leaf_data, fork + 1)?;
 
@@ -495,10 +494,9 @@ where
                     };
 
                     return Ok(InflightBlock {
-                        block,
-                        proof: Some(proof),
-                        leaf_data: Some(uproof.leaf_data),
                         peer,
+                        block,
+                        aux_data: Some((uproof.leaf_data, proof, peer)),
                     });
                 }
                 _ => {}
@@ -664,8 +662,10 @@ where
             .ok_or(WireError::NoPeersAvailable)?;
 
         let block = self.get_block_and_proof(rand_peer, fork).await?;
-        let leaf_data = block.leaf_data.expect("Leaf data should be present");
-        let proof = block.proof.expect("Block proof should be present");
+        let (leaf_data, proof, _) = block
+            .aux_data
+            .expect("Block proof and leaf data should be present");
+
         let (del_hashes, inputs) =
             proof_util::process_proof(&leaf_data, &block.block.txdata, fork_height, |h| {
                 self.chain.get_block_hash(h)
