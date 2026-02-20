@@ -280,13 +280,13 @@ where
                 self.chain.get_block_hash(h)
             })?;
 
-        if let Err(e) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
+        if let Err(chain_err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
             error!(
                 "Invalid block {:?} received by peer {} reason: {:?}",
-                block.header, peer, e
+                block.header, peer, chain_err,
             );
 
-            if let BlockchainError::BlockValidation(e) = e {
+            if let Some(e) = Self::block_validation_err(chain_err) {
                 // Because the proof isn't committed to the block, we can't invalidate
                 // it if the proof is invalid. Any other error should cause the block
                 // to be invalidated.
@@ -342,5 +342,18 @@ where
 
         self.last_tip_update = Instant::now();
         Ok(())
+    }
+
+    /// Returns the inner `BlockValidationErrors`, if any.
+    fn block_validation_err(e: BlockchainError) -> Option<BlockValidationErrors> {
+        match e {
+            BlockchainError::TransactionError(tx_err) => Some(tx_err.error),
+            BlockchainError::BlockValidation(block_err) => Some(block_err),
+            // TODO: we need clearer error definitions for utreexo failures
+            BlockchainError::UtreexoError(_) | BlockchainError::InvalidProof => {
+                Some(BlockValidationErrors::InvalidProof)
+            }
+            _ => None,
+        }
     }
 }
