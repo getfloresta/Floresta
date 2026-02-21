@@ -25,7 +25,7 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_mempool::Mempool;
-use floresta_watch_only::kv_database::KvDatabase;
+use floresta_watch_only::sqlite_database::SqliteDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::node::running_ctx::RunningNode;
@@ -721,16 +721,16 @@ impl Florestad {
         })
     }
 
-    fn load_wallet(data_dir: &String) -> Result<AddressCache<KvDatabase>, FlorestadError> {
+    fn load_wallet(data_dir: &str) -> Result<AddressCache<SqliteDatabase>, FlorestadError> {
         let database =
-            KvDatabase::new(data_dir.to_owned()).map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-        Ok(AddressCache::new(database))
+            SqliteDatabase::new(data_dir).map_err(FlorestadError::CouldNotOpenSqliteDatabase)?;
+        Ok(AddressCache::new(database)?)
     }
 
     fn setup_wallet(
         &self,
         data_dir: &str,
-        wallet: &mut AddressCache<KvDatabase>,
+        wallet: &mut AddressCache<SqliteDatabase>,
     ) -> Result<(), FlorestadError> {
         // The config file inside our data directory or inside the specified directory
         let config_file = match self.config.config_file {
@@ -752,7 +752,7 @@ impl Florestad {
             }
         }
         for addresses in setup.addresses {
-            wallet.cache_address(addresses.script_pubkey());
+            wallet.cache_address(addresses.script_pubkey())?;
         }
 
         info!("Wallet setup completed!");

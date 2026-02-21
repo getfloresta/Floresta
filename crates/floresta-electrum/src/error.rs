@@ -1,3 +1,6 @@
+use floresta_common::impl_error_from;
+use floresta_watch_only::sqlite_database::SqliteDatabaseError;
+use floresta_watch_only::WatchOnlyError;
 use thiserror::Error;
 use tokio::sync::oneshot;
 
@@ -20,4 +23,9 @@ pub enum Error {
 
     #[error("Node isn't working")]
     NodeInterface(#[from] oneshot::error::RecvError),
+
+    #[error("Wallet error: {0}")]
+    Wallet(WatchOnlyError<SqliteDatabaseError>),
 }
+
+impl_error_from!(Error, WatchOnlyError<SqliteDatabaseError>, Wallet);
