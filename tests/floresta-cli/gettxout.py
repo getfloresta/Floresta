@@ -9,12 +9,13 @@ import time
 import os
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.constants import WALLET_ADDRESS
 
 # TODO Use many addresses types as possible to test the gettxout command
 WALLET_CONFIG = "\n".join(
     [
         "[wallet]",
-        'addresses = [ "bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y" ]',
+        f'addresses = [ "{WALLET_ADDRESS}" ]',
     ]
 )
 
@@ -46,7 +47,7 @@ class GetTxoutTest(FlorestaTestFramework):
         self.utreexod = self.add_node_extra_args(
             variant=NodeType.UTREEXOD,
             extra_args=[
-                "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
+                f"--miningaddr={WALLET_ADDRESS}",
                 "--prune=0",
             ],
         )

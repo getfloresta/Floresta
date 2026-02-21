@@ -4,12 +4,15 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(feature = "json-rpc")]
 use std::sync::OnceLock;
 
+use bitcoin::Address;
 pub use bitcoin::Network;
+use bitcoin::ScriptBuf;
 #[cfg(feature = "zmq-server")]
 use floresta_chain::pruned_utreexo::BlockchainInterface;
 pub use floresta_chain::AssumeUtreexoValue;
@@ -27,6 +30,7 @@ use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_mempool::Mempool;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
+use floresta_watch_only::WatchOnlyError;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::node::running_ctx::RunningNode;
 use floresta_wire::node::UtreexoNode;
@@ -57,7 +61,6 @@ use crate::error::FlorestadError;
 use crate::florestad::fs::OpenOptions;
 #[cfg(feature = "json-rpc")]
 use crate::json_rpc;
-use crate::wallet_input::InitialWalletSetup;
 #[cfg(feature = "zmq-server")]
 use crate::zmq::ZMQServer;
 
@@ -364,7 +367,7 @@ impl Florestad {
             .map_err(FlorestadError::CouldNotInitializeWallet)?;
 
         // Try to add more wallets to watch if needed
-        self.setup_wallet(data_dir, &mut wallet)?;
+        self.setup_wallet(&mut wallet)?;
 
         info!("Loading blockchain database");
         let blockchain_state = Arc::new(Self::load_chain_state(
@@ -664,9 +667,15 @@ impl Florestad {
         Ok(())
     }
 
-    /// Loads a config file from disk, returns default if it cannot load it
-    fn get_config_file(path: &str) -> ConfigFile {
-        let data = ConfigFile::from_file(path);
+    /// Load config from disk; prefer explicit `config_file`, otherwise use `{data_dir}/config.toml`.
+    /// Returns default if it cannot load it
+    fn get_config_file(&self) -> ConfigFile {
+        let path = match &self.config.config_file {
+            Some(path) => path.clone(),
+            None => format!("{}/config.toml", self.config.data_dir),
+        };
+
+        let data = ConfigFile::from_file(&path);
 
         if let Ok(data) = data {
             data
@@ -727,58 +736,78 @@ impl Florestad {
         Ok(AddressCache::new(database))
     }
 
-    fn setup_wallet(
-        &self,
-        data_dir: &str,
-        wallet: &mut AddressCache<KvDatabase>,
-    ) -> Result<(), FlorestadError> {
-        // The config file inside our data directory or inside the specified directory
-        let config_file = match self.config.config_file {
-            Some(ref path) => Self::get_config_file(path),
-            None => {
-                let default_path = format!("{data_dir}/config.toml");
-                Self::get_config_file(&default_path)
-            }
-        };
-        let setup = self.prepare_wallet_setup(config_file)?;
-
+    fn setup_wallet(&self, wallet: &mut AddressCache<KvDatabase>) -> Result<(), FlorestadError> {
         // Add the configured descriptors and addresses to the wallet
-        for descriptor in setup.descriptors {
-            let descriptor = descriptor.to_string();
-            let is_cached = wallet.is_cached(&descriptor)?;
-
-            if !is_cached {
-                wallet.push_descriptor(&descriptor)?;
+        for descriptor in self.get_descriptors() {
+            match wallet.push_descriptor(&descriptor) {
+                Ok(_) => info!("Added descriptor to wallet: {descriptor}"),
+                Err(WatchOnlyError::DuplicateDescriptor(_)) => {
+                    warn!("Descriptor already exists in wallet, skipping: {descriptor}");
+                }
+                Err(e) => {
+                    return Err(FlorestadError::from(e));
+                }
             }
         }
-        for addresses in setup.addresses {
-            wallet.cache_address(addresses.script_pubkey());
+
+        for xpub in self.get_xpubs() {
+            match wallet.push_xpub(&xpub, self.config.network) {
+                Ok(_) =>  info!("Added xpubs to wallet: {xpub}"),
+                Err(WatchOnlyError::DuplicateDescriptor(_)) =>
+                    warn!("Descriptor for the provided XPUB already exists in the wallet. Skipping: {xpub}"),
+                Err(e) => return Err(FlorestadError::from(e))
+            }
+        }
+
+        for address in self.get_addresses()? {
+            wallet.cache_address(address);
         }
 
         info!("Wallet setup completed!");
         Ok(())
     }
 
-    /// Parses the configured list of xpubs, output descriptors and addresses to watch for, and
-    /// returns the constructed `InitialWalletSetup`.
-    fn prepare_wallet_setup(
-        &self,
-        config_file: ConfigFile,
-    ) -> Result<InitialWalletSetup, FlorestadError> {
-        let config = &self.config;
-
-        let mut xpubs = Vec::new();
-        xpubs.extend(config.wallet_xpub.clone().unwrap_or_default());
-        xpubs.extend(config_file.wallet.xpubs.unwrap_or_default());
-        xpubs.extend(Self::get_key_from_env());
+    /// Get the wallet descriptors from the config file and the environment.
+    fn get_descriptors(&self) -> Vec<String> {
+        let config_file = self.get_config_file();
 
         let mut descriptors = Vec::new();
-        descriptors.extend(config.wallet_descriptor.clone().unwrap_or_default());
-        descriptors.extend(config_file.wallet.descriptors.unwrap_or_default());
+        descriptors.extend(self.config.wallet_descriptor.clone().unwrap_or_default());
+        descriptors.extend(config_file.wallet.descriptors.clone().unwrap_or_default());
 
-        let addresses = config_file.wallet.addresses.unwrap_or_default();
+        descriptors
+    }
 
-        InitialWalletSetup::build(&xpubs, &descriptors, &addresses, config.network, 100)
+    /// Get the wallet xpubs from the config file and the environment
+    fn get_xpubs(&self) -> Vec<String> {
+        let config_file = self.get_config_file();
+
+        let mut xpubs = Vec::new();
+        xpubs.extend(self.config.wallet_xpub.clone().unwrap_or_default());
+        xpubs.extend(config_file.wallet.xpubs.clone().unwrap_or_default());
+        xpubs.extend(Self::get_key_from_env());
+
+        xpubs
+    }
+
+    /// Get the wallet addresses from the config file
+    fn get_addresses(&self) -> Result<Vec<ScriptBuf>, FlorestadError> {
+        let config_file = self.get_config_file();
+
+        let addresses_string = config_file.wallet.addresses.clone().unwrap_or_default();
+
+        let addresses = addresses_string
+            .iter()
+            .map(|address| match Address::from_str(address) {
+                Ok(address) => Ok(address.assume_checked().script_pubkey()),
+                Err(e) => {
+                    error!("Invalid address provided: {address} \nReason: {e:?}");
+                    Err(e)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(addresses)
     }
 
     /// Get the default Electrum port for the Network and TLS combination.

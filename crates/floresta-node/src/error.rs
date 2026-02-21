@@ -6,11 +6,11 @@ use floresta_chain::BlockchainError;
 use floresta_chain::FlatChainstoreError;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::IterableFilterStoreError;
+use floresta_watch_only::descriptor::DescriptorError;
 use floresta_watch_only::kv_database::KvDatabaseError;
 use floresta_watch_only::WatchOnlyError;
 use tokio_rustls::rustls::pki_types;
 
-use crate::slip132;
 #[derive(Debug)]
 pub enum FlorestadError {
     /// Encoding/decoding error.
@@ -41,7 +41,7 @@ pub enum FlorestadError {
     TomlParsing(toml::de::Error),
 
     /// Parsing registered HD version bytes from slip132.
-    WalletInput(slip132::Error),
+    WalletInput(DescriptorError),
 
     /// Parsing a bitcoin address.
     AddressParsing(bitcoin::address::ParseError),
@@ -97,9 +97,6 @@ pub enum FlorestadError {
 
     /// Failed to create the TLS data directory.
     CouldNotCreateTLSDataDir(String, std::io::Error),
-
-    /// Failed to provide a valid xpub.
-    InvalidProvidedXpub(String, slip132::Error),
 
     /// Failed to obtain the wallet cache.
     CouldNotObtainWalletCache(WatchOnlyError<KvDatabaseError>),
@@ -198,9 +195,6 @@ impl std::fmt::Display for FlorestadError {
             FlorestadError::CouldNotCreateTLSDataDir(path, err) => {
                 write!(f, "Could not create TLS data directory {path}: {err}")
             }
-            FlorestadError::InvalidProvidedXpub(xpub, err) => {
-                write!(f, "Invalid provided xpub {xpub}: {err:?}")
-            }
             FlorestadError::CouldNotObtainWalletCache(err) => {
                 write!(f, "Could not obtain wallet cache: {err}")
             }
@@ -248,7 +242,7 @@ impl_from_error!(Io, std::io::Error);
 impl_from_error!(ScriptValidation, bitcoin::blockdata::script::Error);
 impl_from_error!(Blockchain, BlockchainError);
 impl_from_error!(SerdeJson, serde_json::Error);
-impl_from_error!(WalletInput, slip132::Error);
+impl_from_error!(WalletInput, DescriptorError);
 impl_from_error!(TomlParsing, toml::de::Error);
 impl_from_error!(BlockValidation, BlockValidationErrors);
 impl_from_error!(AddressParsing, bitcoin::address::ParseError);

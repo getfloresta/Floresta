@@ -12,12 +12,13 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 
 use bitcoin::hashes::sha256;
+use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use floresta_chain::BlockConsumer;
 use floresta_chain::UtxoData;
 use floresta_common::get_spk_hash;
-use floresta_common::parse_descriptors;
 
+pub mod descriptor;
 pub mod kv_database;
 #[cfg(any(test, feature = "memory-database"))]
 pub mod memory_database;
@@ -40,11 +41,18 @@ use serde::Serialize;
 use sync::RwLock;
 use tracing::error;
 
+use crate::descriptor::derive_addresses_from_descriptor;
+use crate::descriptor::derive_addresses_from_list_descriptors;
+use crate::descriptor::parse_xpub;
+use crate::descriptor::DescriptorError;
+
 #[derive(Debug)]
 pub enum WatchOnlyError<DatabaseError: fmt::Debug> {
     WalletNotInitialized,
     TransactionNotFound,
     DatabaseError(DatabaseError),
+    DuplicateDescriptor(String),
+    InvalidDescriptor(DescriptorError),
 }
 
 impl<DatabaseError: fmt::Debug> Display for WatchOnlyError<DatabaseError> {
@@ -58,6 +66,12 @@ impl<DatabaseError: fmt::Debug> Display for WatchOnlyError<DatabaseError> {
             }
             WatchOnlyError::DatabaseError(e) => {
                 write!(f, "Database error: {e:?}")
+            }
+            WatchOnlyError::DuplicateDescriptor(desc) => {
+                write!(f, "Descriptor is already cached: {desc}")
+            }
+            WatchOnlyError::InvalidDescriptor(e) => {
+                write!(f, "Invalid descriptor: {e:?}")
             }
         }
     }
@@ -346,17 +360,15 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
     fn derive_addresses(&mut self) -> Result<(), WatchOnlyError<D::Error>> {
         let mut stats = self.database.get_stats()?;
         let descriptors = self.database.descs_get()?;
-        let descriptors = parse_descriptors(&descriptors).expect("We validate those descriptors");
-        for desc in descriptors {
-            let index = stats.derivation_index;
-            for idx in index..(index + 100) {
-                let script = desc
-                    .at_derivation_index(idx)
-                    .expect("We validate those descriptors before saving")
-                    .script_pubkey();
-                self.cache_address(script);
-            }
-        }
+
+        let addresses =
+            derive_addresses_from_list_descriptors(&descriptors, stats.derivation_index, 100)
+                .map_err(WatchOnlyError::InvalidDescriptor)?;
+
+        addresses.iter().for_each(|address| {
+            self.cache_address(address.clone());
+        });
+
         stats.derivation_index += 100;
         Ok(self.database.save_stats(&stats)?)
     }
@@ -626,10 +638,10 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
     }
 
     /// Tells whether or not a descriptor is already cached
-    pub fn is_cached(&self, desc: &String) -> Result<bool, WatchOnlyError<D::Error>> {
+    pub fn is_cached(&self, desc: &str) -> Result<bool, WatchOnlyError<D::Error>> {
         let inner = self.inner.read().expect("poisoned lock");
         let known_descs = inner.database.descs_get()?;
-        Ok(known_descs.contains(desc))
+        Ok(known_descs.iter().any(|s| s == desc))
     }
 
     /// Tells whether an address is already cached
@@ -638,9 +650,38 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         inner.address_map.contains_key(script_hash)
     }
 
-    pub fn push_descriptor(&self, descriptor: &str) -> Result<(), WatchOnlyError<D::Error>> {
+    /// Push a descriptor into the wallet checking whether it is already cached, returning an error if so
+    pub fn push_descriptor(
+        &self,
+        descriptor: &str,
+    ) -> Result<Vec<ScriptBuf>, WatchOnlyError<D::Error>> {
+        if self.is_cached(descriptor)? {
+            return Err(WatchOnlyError::DuplicateDescriptor(descriptor.to_string()));
+        }
+
+        let address_descriptors = derive_addresses_from_descriptor(descriptor, 0, 100)
+            .map_err(WatchOnlyError::InvalidDescriptor)?;
+
+        for address in address_descriptors.clone() {
+            self.cache_address(address);
+        }
+
         let inner = self.inner.write().expect("poisoned lock");
-        Ok(inner.database.desc_save(descriptor)?)
+        inner.database.desc_save(descriptor)?;
+
+        Ok(address_descriptors)
+    }
+
+    /// Adds an XPUB to the wallet, derives descriptors from it, saves these descriptors persistently,
+    /// derives addresses, and caches them if they're not cached already.
+    pub fn push_xpub(&self, xpub: &str, network: Network) -> Result<(), WatchOnlyError<D::Error>> {
+        let descriptors = parse_xpub(xpub, network).map_err(WatchOnlyError::InvalidDescriptor)?;
+
+        for descriptor in descriptors {
+            self.push_descriptor(&descriptor)?;
+        }
+
+        Ok(())
     }
 
     pub fn get_position(&self, txid: &Txid) -> Option<u32> {
@@ -975,7 +1016,7 @@ mod test {
         // [is_cached], [push_descriptor]
         let desc = "wsh(sortedmulti(1,[54ff5a12/48h/1h/0h/2h]tpubDDw6pwZA3hYxcSN32q7a5ynsKmWr4BbkBNHydHPKkM4BZwUfiK7tQ26h7USm8kA1E2FvCy7f7Er7QXKF8RNptATywydARtzgrxuPDwyYv4x/<0;1>/*,[bcf969c0/48h/1h/0h/2h]tpubDEFdgZdCPgQBTNtGj4h6AehK79Jm4LH54JrYBJjAtHMLEAth7LuY87awx9ZMiCURFzFWhxToRJK6xp39aqeJWrG5nuW3eBnXeMJcvDeDxfp/<0;1>/*))#fuw35j0q";
         cache.push_descriptor(desc).unwrap();
-        assert!(cache.is_cached(&desc.to_string()).unwrap());
+        assert!(cache.is_cached(desc).unwrap());
 
         // [derive_addresses]
         cache.derive_addresses().unwrap();

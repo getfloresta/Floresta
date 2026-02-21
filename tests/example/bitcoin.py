@@ -7,6 +7,11 @@ see `tests/test_framework/test_framework.py` for more info.
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.constants import (
+    GENESIS_BLOCK_HASH,
+    GENESIS_BLOCK_DIFFICULTY_FLOAT,
+    TEST_CHAIN,
+)
 
 
 class BitcoindTest(FlorestaTestFramework):
@@ -16,14 +21,6 @@ class BitcoindTest(FlorestaTestFramework):
     In each test class definition, `set_test_params` and `run_test`, say what
     the test do and the expected result in the docstrings
     """
-
-    expected_chain = "regtest"
-    expected_height = 0
-    expected_headers = 0
-    expected_blockhash = (
-        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-    )
-    expected_difficulty = 1
 
     def set_test_params(self):
         """
@@ -54,9 +51,9 @@ class BitcoindTest(FlorestaTestFramework):
         # to perform some kind of action
         response = self.bitcoind.rpc.get_blockchain_info()
 
-        self.assertEqual(response["chain"], BitcoindTest.expected_chain)
-        self.assertEqual(response["bestblockhash"], BitcoindTest.expected_blockhash)
-        self.assertTrue(response["difficulty"] > 0)
+        self.assertEqual(response["chain"], TEST_CHAIN)
+        self.assertEqual(response["bestblockhash"], GENESIS_BLOCK_HASH)
+        self.assertEqual(response["difficulty"], GENESIS_BLOCK_DIFFICULTY_FLOAT)
 
         self.stop()
 

@@ -27,6 +27,8 @@ jobs:
 
       - name: Spell check
         uses: crate-ci/typos@v1
+        with:
+          config: ./_typos.toml
 
       - name: Run cargo fmt
         run: cargo +nightly fmt --all --check
@@ -140,8 +142,6 @@ jobs:
         include:
           - crate: floresta-common
             feature_args: ""
-          - crate: floresta-common
-            feature_args: "--features descriptors-no-std"
 
     steps:
       - uses: actions/checkout@v4
