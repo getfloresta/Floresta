@@ -42,7 +42,7 @@ impl NodeContext for SyncNode {
     }
 
     const TRY_NEW_CONNECTION: u64 = 30; // 30 seconds
-    const REQUEST_TIMEOUT: u64 = 10 * 60; // 10 minutes
+    const REQUEST_TIMEOUT: u64 = 60; // 1 minute
     const MAX_INFLIGHT_REQUESTS: usize = 100; // double the default
 
     // A more conservative value than the default of 1 second, since we'll have many peer messages
