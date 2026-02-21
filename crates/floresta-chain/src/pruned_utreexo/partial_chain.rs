@@ -171,19 +171,7 @@ impl PartialChainStateInner {
         height: u32,
         inputs: HashMap<bitcoin::OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
-        if !block.check_merkle_root() {
-            return Err(BlockValidationErrors::BadMerkleRoot)?;
-        }
-
-        if height >= self.chain_params().params.bip34_height
-            && block.bip34_block_height() != Ok(height as u64)
-        {
-            return Err(BlockValidationErrors::BadBip34)?;
-        }
-
-        if !block.check_witness_commitment() {
-            return Err(BlockValidationErrors::BadWitnessCommitment)?;
-        }
+        self.consensus.check_block(block, height)?;
 
         let prev_block = self.get_ancestor(height)?;
         if block.header.prev_blockhash != prev_block.block_hash() {

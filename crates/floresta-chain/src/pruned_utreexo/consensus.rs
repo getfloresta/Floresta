@@ -10,6 +10,7 @@ use bitcoin::block::Header as BlockHeader;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::sha256;
+use bitcoin::merkle_tree;
 use bitcoin::script;
 use bitcoin::Amount;
 use bitcoin::Block;
@@ -32,6 +33,10 @@ use super::error::BlockchainError;
 use super::udata;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::TransactionError;
+
+/// The maximum allowed weight for a block, see BIP 141 (network rule), and the [Bitcoin Core
+/// counterpart](https://github.com/bitcoin/bitcoin/blob/v30.2/src/consensus/consensus.h#L15).
+pub const MAX_BLOCK_WEIGHT: u64 = 4_000_000;
 
 /// The version tag to be prepended to the leafhash. It's just the sha512 hash of the string
 /// `UtreexoV1` represented as a vector of [u8] ([85 116 114 101 101 120 111 86 49]).
@@ -64,6 +69,7 @@ pub const UNSPENDABLE_BIP30_UTXO_91812: [u8; 32] = [
     0xbc, 0x6b, 0x4b, 0xf7, 0xce, 0xbb, 0xd3, 0x3a, 0x18, 0xd6, 0xb0, 0xfe, 0x1f, 0x8e, 0xcc, 0x7a,
     0xa5, 0x40, 0x30, 0x83, 0xc3, 0x9e, 0xe3, 0x43, 0xb9, 0x85, 0xd5, 0x1f, 0xd0, 0x29, 0x5a, 0xd8,
 ];
+
 /// This struct contains all the information and methods needed to validate a block,
 /// it is used by the [ChainState](crate::ChainState) to validate blocks and transactions.
 #[derive(Debug, Clone)]
@@ -298,6 +304,55 @@ impl Consensus {
         Ok(out_value)
     }
 
+    /// Runs inexpensive, consensus-critical block checks that don't require script execution. If
+    /// successful, returns the list of [`Txid`]s computed for the merkle root check.
+    ///
+    /// This verifies:
+    /// - the header merkle root matches the block's txids
+    /// - BIP34 coinbase-encoded height once activated (at `bip34_height`)
+    /// - if there are SegWit transactions, the witness commitment is present and correct
+    /// - total block weight is within the 4,000,000 WU limit
+    pub fn check_block(&self, block: &Block, height: u32) -> Result<Vec<Txid>, BlockchainError> {
+        let Some(txids) = Self::check_merkle_root(block) else {
+            return Err(BlockValidationErrors::BadMerkleRoot)?;
+        };
+
+        let bip34_height = self.parameters.params.bip34_height;
+        // If bip34 is active, check that the encoded block height is correct
+        if height >= bip34_height && Self::get_bip34_height(block) != Some(height) {
+            return Err(BlockValidationErrors::BadBip34)?;
+        }
+
+        if !block.check_witness_commitment() {
+            return Err(BlockValidationErrors::BadWitnessCommitment)?;
+        }
+
+        if block.weight().to_wu() > MAX_BLOCK_WEIGHT {
+            return Err(BlockValidationErrors::BlockTooBig)?;
+        }
+
+        Ok(txids)
+    }
+
+    /// Checks if the merkle root of the header matches the merkle root of the transaction list.
+    ///
+    /// Unlike [`Block::check_merkle_root`], this function returns the list of computed [`Txid`]s
+    /// if the merkle roots matched, or `None` otherwise.
+    ///
+    /// The merkle root is computed in the same way as [`Block::compute_merkle_root`].
+    pub fn check_merkle_root(block: &Block) -> Option<Vec<Txid>> {
+        let txids: Vec<_> = block.txdata.iter().map(|obj| obj.compute_txid()).collect();
+
+        // Copy the hashes into an iterator, as `calculate_root` requires ownership
+        let hashes_iter = txids.iter().copied().map(|txid| txid.to_raw_hash());
+
+        let calculated = merkle_tree::calculate_root(hashes_iter).map(|h| h.into());
+        match calculated {
+            Some(merkle_root) if block.header.merkle_root == merkle_root => Some(txids),
+            _ => None,
+        }
+    }
+
     /// Returns the TxOut being spent by the given input.
     ///
     /// Fails if the UTXO is not present in the given hashmap.
@@ -465,13 +520,18 @@ impl Consensus {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use bitcoin::absolute::LockTime;
+    use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use bitcoin::opcodes::all::OP_NOP;
     use bitcoin::opcodes::OP_TRUE;
     use bitcoin::transaction::Version;
     use bitcoin::Amount;
+    use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::ScriptBuf;
     use bitcoin::Sequence;
@@ -482,6 +542,8 @@ mod tests {
     use bitcoin::Witness;
     use floresta_common::assert_err;
     use floresta_common::assert_ok;
+    use rand::rngs::OsRng;
+    use rand::seq::SliceRandom;
 
     use super::*;
 
@@ -556,6 +618,56 @@ mod tests {
             lock_time: LockTime::from_height(150_007).unwrap(),
             input: vec![input],
             output: vec![output],
+        }
+    }
+
+    /// Modifies a block to have an invalid output script (txdata is tampered with)
+    fn make_block_invalid(block: &mut Block) {
+        let mut rng = OsRng;
+
+        let tx = block.txdata.choose_mut(&mut rng).unwrap();
+        let out = tx.output.choose_mut(&mut rng).unwrap();
+        let spk = out.script_pubkey.as_mut_bytes();
+        // Random byte from a random scriptPubKey
+        let byte = spk.choose_mut(&mut rng).unwrap();
+
+        *byte += 1;
+    }
+
+    #[test]
+    fn test_check_merkle_root() {
+        fn decode_block(file_path: &str) -> Block {
+            let block_file = File::open(file_path).unwrap();
+            let block_bytes = zstd::decode_all(block_file).unwrap();
+            deserialize(&block_bytes).unwrap()
+        }
+
+        let blocks = [
+            genesis_block(Network::Bitcoin),
+            genesis_block(Network::Testnet),
+            genesis_block(Network::Testnet4),
+            genesis_block(Network::Signet),
+            genesis_block(Network::Regtest),
+            decode_block("./testdata/block_866342/raw.zst"),
+            decode_block("./testdata/block_367891/raw.zst"),
+        ];
+
+        for mut block in blocks {
+            assert!(block.check_merkle_root());
+            let txids = Consensus::check_merkle_root(&block).expect("merkle roots match");
+
+            // Sanity check: the returned txids are the correct ones
+            for (txid, tx) in txids.into_iter().zip(&block.txdata) {
+                assert_eq!(txid, tx.compute_txid());
+            }
+
+            // Modifying the txdata should invalidate the block
+            make_block_invalid(&mut block);
+
+            assert!(!block.check_merkle_root());
+            if Consensus::check_merkle_root(&block).is_some() {
+                panic!("merkle roots shouldn't match");
+            }
         }
     }
 

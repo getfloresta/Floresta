@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
+use std::hint::black_box;
 use std::io::Cursor;
 
 use bitcoin::block::Header as BlockHeader;
@@ -13,6 +14,7 @@ use criterion::criterion_main;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::SamplingMode;
+use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_chain::pruned_utreexo::utxo_data::UtxoData;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::AssumeValidArg;
@@ -106,6 +108,24 @@ fn initialize_chainstore_benchmark(c: &mut Criterion) {
             |config| FlatChainStore::new(config).unwrap(),
             BatchSize::SmallInput,
         )
+    });
+}
+
+fn check_merkle_root_benchmark(c: &mut Criterion) {
+    let block_file = File::open("./testdata/block_866342/raw.zst").unwrap();
+    let block_bytes = zstd::decode_all(block_file).unwrap();
+    let block: Block = deserialize(&block_bytes).unwrap();
+
+    // Both are equivalent: sanity check both before the benchmark
+    assert!(block.check_merkle_root());
+    Consensus::check_merkle_root(&block).unwrap();
+
+    c.bench_function("Block::check_merkle_root", |b| {
+        b.iter(|| black_box(block.check_merkle_root()))
+    });
+
+    c.bench_function("Consensus::check_merkle_root", |b| {
+        b.iter(|| black_box(Consensus::check_merkle_root(&block)))
     });
 }
 
@@ -253,6 +273,7 @@ fn chainstore_checksum_benchmark(c: &mut Criterion) {
 criterion_group!(
     benches,
     initialize_chainstore_benchmark,
+    check_merkle_root_benchmark,
     accept_mainnet_headers_benchmark,
     accept_headers_benchmark,
     connect_blocks_benchmark,
