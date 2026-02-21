@@ -372,7 +372,7 @@ impl Florestad {
             .map_err(FlorestadError::CouldNotInitializeWallet)?;
 
         // Try to add more wallets to watch if needed
-        self.setup_wallet(data_dir, &mut wallet)?;
+        self.setup_wallet(&mut wallet)?;
 
         info!("Loading blockchain database");
         let blockchain_state = Arc::new(Self::load_chain_state(
@@ -662,9 +662,15 @@ impl Florestad {
         Ok(())
     }
 
-    /// Loads a config file from disk, returns default if it cannot load it
-    fn get_config_file(path: &str) -> ConfigFile {
-        let data = ConfigFile::from_file(path);
+    /// Load config from disk; prefer explicit `config_file`, otherwise use `{data_dir}/config.toml`.
+    /// Returns default if it cannot load it
+    fn get_config_file(&self) -> ConfigFile {
+        let path = match &self.config.config_file {
+            Some(path) => path.clone(),
+            None => format!("{}/config.toml", self.config.data_dir),
+        };
+
+        let data = ConfigFile::from_file(&path);
 
         if let Ok(data) = data {
             data
@@ -716,22 +722,9 @@ impl Florestad {
         Ok(AddressCache::new(database))
     }
 
-    fn setup_wallet(
-        &self,
-        data_dir: &str,
-        wallet: &mut AddressCache<KvDatabase>,
-    ) -> Result<(), FlorestadError> {
-        // The config file inside our data directory or inside the specified directory
-        let config_file = match self.config.config_file {
-            Some(ref path) => Self::get_config_file(path),
-            None => {
-                let default_path = format!("{data_dir}/config.toml");
-                Self::get_config_file(&default_path)
-            }
-        };
-
+    fn setup_wallet(&self, wallet: &mut AddressCache<KvDatabase>) -> Result<(), FlorestadError> {
         // Add the configured descriptors and addresses to the wallet
-        for descriptor in self.get_descriptors(&config_file) {
+        for descriptor in self.get_descriptors() {
             match wallet.push_descriptor(&descriptor) {
                 Ok(_) => info!("Added descriptor to wallet: {descriptor}"),
                 Err(WatchOnlyError::DuplicateDescriptor(_)) => {
@@ -743,7 +736,7 @@ impl Florestad {
             }
         }
 
-        for xpub in self.get_xpubs(&config_file) {
+        for xpub in self.get_xpubs() {
             match wallet.push_xpub(&xpub, self.config.network) {
                 Ok(()) => info!("Added xpubs to wallet: {xpub}"),
                 Err(WatchOnlyError::DuplicateDescriptor(_)) =>
@@ -752,7 +745,7 @@ impl Florestad {
             }
         }
 
-        for address in self.get_addresses(&config_file)? {
+        for address in self.get_addresses()? {
             wallet.cache_address(address);
         }
 
@@ -761,31 +754,31 @@ impl Florestad {
     }
 
     /// Get the wallet descriptors from the config file and the environment.
-    fn get_descriptors(&self, config_file: &ConfigFile) -> Vec<String> {
+    fn get_descriptors(&self) -> Vec<String> {
         self.config
             .wallet_descriptor
             .iter()
             .flatten()
-            .chain(config_file.wallet.descriptors.iter().flatten())
+            .chain(self.get_config_file().wallet.descriptors.iter().flatten())
             .cloned()
             .collect()
     }
 
     /// Get the wallet xpubs from the config file and the environment
-    fn get_xpubs(&self, config_file: &ConfigFile) -> Vec<String> {
+    fn get_xpubs(&self) -> Vec<String> {
         self.config
             .wallet_xpub
             .iter()
             .flatten()
-            .chain(config_file.wallet.xpubs.iter().flatten())
+            .chain(self.get_config_file().wallet.xpubs.iter().flatten())
             .chain(Self::get_key_from_env().iter())
             .cloned()
             .collect()
     }
 
     /// Get the wallet addresses from the config file
-    fn get_addresses(&self, config_file: &ConfigFile) -> Result<Vec<ScriptBuf>, FlorestadError> {
-        config_file
+    fn get_addresses(&self) -> Result<Vec<ScriptBuf>, FlorestadError> {
+        self.get_config_file()
             .wallet
             .addresses
             .as_deref()
