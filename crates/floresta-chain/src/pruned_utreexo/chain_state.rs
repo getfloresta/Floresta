@@ -930,23 +930,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
         inputs: HashMap<OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
-        if !block.check_merkle_root() {
-            return Err(BlockValidationErrors::BadMerkleRoot)?;
-        }
-
-        let bip34_height = self.chain_params().params.bip34_height;
-        // If bip34 is active, check that the encoded block height is correct
-        if height >= bip34_height && Consensus::get_bip34_height(block) != Some(height) {
-            return Err(BlockValidationErrors::BadBip34)?;
-        }
-
-        if !block.check_witness_commitment() {
-            return Err(BlockValidationErrors::BadWitnessCommitment)?;
-        }
-
-        if block.weight().to_wu() > 4_000_000 {
-            return Err(BlockValidationErrors::BlockTooBig)?;
-        }
+        read_lock!(self).consensus.check_block(block, height)?;
 
         // Validate block transactions
         let subsidy = read_lock!(self).consensus.get_subsidy(height);
@@ -1188,23 +1172,29 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         acc: Stump,
         assumed_hash: BlockHash,
     ) -> Result<bool, BlockchainError> {
-        let mut curr_header = self.get_disk_block_header(&assumed_hash)?;
+        let assumed_header = self.get_disk_block_header(&assumed_hash)?;
 
-        while let Ok(header) = self.get_disk_block_header(&curr_header.block_hash()) {
+        let mut header = assumed_header;
+        let mut hash = assumed_hash;
+        loop {
             if self.is_genesis(&header) {
                 break;
             }
 
             let height = header.try_height()?;
-            self.update_header(&DiskBlockHeader::FullyValid(*header, height))?;
-            curr_header = self.get_ancestor(&header)?;
+            self.update_header_and_index(
+                &DiskBlockHeader::FullyValid(*header, height),
+                hash,
+                height,
+            )?;
+
+            // Move to the previous block
+            header = self.get_ancestor(&header)?;
+            hash = header.block_hash();
         }
 
-        self.update_view(curr_header.try_height()?, &curr_header, acc.clone())?;
-
-        let mut guard = write_lock!(self);
-        guard.best_block.validation_index = assumed_hash;
-        guard.acc = acc;
+        // Update the tip and accumulator data with our assumed tip
+        self.update_view(assumed_header.try_height()?, &assumed_header, acc)?;
 
         Ok(true)
     }

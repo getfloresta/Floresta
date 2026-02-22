@@ -28,6 +28,7 @@ use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
 use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
+use crate::node::try_and_log;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_interface::NodeResponse;
@@ -451,7 +452,12 @@ where
 
         for req in inflight {
             self.inflight.remove(&req.0);
-            self.redo_inflight_request(req.0.clone())?;
+
+            if let Err(e) = self.redo_inflight_request(&req.0) {
+                // CRITICAL: never drop the request, so we retry it later
+                self.inflight.insert(req.0, req.1);
+                return Err(e);
+            }
         }
 
         #[cfg(feature = "metrics")]
@@ -517,7 +523,7 @@ where
             .collect::<Vec<_>>();
 
         for req in timed_out {
-            let Some((peer, _)) = self.inflight.remove(&req) else {
+            let Some((peer, time)) = self.inflight.remove(&req) else {
                 continue;
             };
 
@@ -529,46 +535,52 @@ where
             }
 
             debug!("Request timed out: {req:?}");
-            self.increase_banscore(peer, 1)?;
-            self.redo_inflight_request(req)?;
+            // Increase the banscore and try banning the peer if needed, then re-request
+            try_and_log!(self.increase_banscore(peer, 1));
+
+            if let Err(e) = self.redo_inflight_request(&req) {
+                // CRITICAL: never drop the request, so we retry it later
+                self.inflight.insert(req, (peer, time));
+                return Err(e);
+            }
         }
 
         Ok(())
     }
 
-    pub(crate) fn redo_inflight_request(&mut self, req: InflightRequests) -> Result<(), WireError> {
+    pub(crate) fn redo_inflight_request(
+        &mut self,
+        req: &InflightRequests,
+    ) -> Result<(), WireError> {
         match req {
             InflightRequests::UtreexoProof(block_hash) => {
                 if !self.has_utreexo_peers() {
                     return Ok(());
                 }
 
-                if !self.blocks.contains_key(&block_hash) {
+                if !self.blocks.contains_key(block_hash) {
                     // If we don't have the block anymore, we can't ask for the proof
                     return Ok(());
                 }
 
-                if self
-                    .inflight
-                    .contains_key(&InflightRequests::UtreexoProof(block_hash))
-                {
+                if self.inflight.contains_key(req) {
                     // If we already have an inflight request for this block, we don't need to redo it
                     return Ok(());
                 }
 
                 let peer = self.send_to_fast_peer(
-                    NodeRequest::GetBlockProof((block_hash, Bitmap::new(), Bitmap::new())),
+                    NodeRequest::GetBlockProof((*block_hash, Bitmap::new(), Bitmap::new())),
                     service_flags::UTREEXO.into(),
                 )?;
 
                 self.inflight.insert(
-                    InflightRequests::UtreexoProof(block_hash),
+                    InflightRequests::UtreexoProof(*block_hash),
                     (peer, Instant::now()),
                 );
             }
 
             InflightRequests::Blocks(block) => {
-                self.request_blocks(vec![block])?;
+                self.request_blocks(vec![*block])?;
             }
             InflightRequests::Headers => {
                 let locator = self.chain.get_block_locator()?;

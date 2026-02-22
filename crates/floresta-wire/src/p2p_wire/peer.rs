@@ -328,7 +328,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             NodeRequest::GetBlock(block_hashes) => {
                 let inv = block_hashes
                     .iter()
-                    .map(|block| Inventory::WitnessBlock(*block))
+                    .map(|block| Inventory::Block(*block))
                     .collect();
 
                 let _ = self.write(NetworkMessage::GetData(inv)).await;

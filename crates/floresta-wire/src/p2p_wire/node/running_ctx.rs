@@ -28,6 +28,7 @@ use tracing::warn;
 
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
+use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node::try_and_log;
 use crate::node::try_and_warn;
@@ -107,15 +108,34 @@ where
     /// proofs, this means the last 100 blocks, and for assumeutreexo, this means however many
     /// blocks from the hard-coded value in the config file.
     pub async fn catch_up(self) -> Result<Self, WireError> {
-        let sync = UtreexoNode {
+        let swift_sync = UtreexoNode {
             common: self.common,
-            context: SyncNode::default(),
+            context: SwiftSync::default(),
         };
 
-        let sync = sync.run(|_| {}).await;
+        let swift_sync = swift_sync.run(|_| {}).await;
+
+        // If SwiftSync couldn't complete, we need to run a full utreexo sync
+        if swift_sync.was_aborted() {
+            let mut sync = UtreexoNode {
+                common: swift_sync.common,
+                context: SyncNode::default(),
+            };
+
+            // Clear the inflight requests and in-memory blocks, we'll start from genesis
+            sync.inflight.clear();
+            sync.blocks.clear();
+            assert_eq!(sync.unprocessed_blocks(), 0);
+
+            let sync = sync.run(|_| {}).await;
+            return Ok(UtreexoNode {
+                common: sync.common,
+                context: self.context,
+            });
+        }
 
         Ok(UtreexoNode {
-            common: sync.common,
+            common: swift_sync.common,
             context: self.context,
         })
     }
@@ -775,6 +795,10 @@ where
 
                     _ => unreachable!("Error: `handle_peer_msg_common` should have handled remaining PeerMessages"),
                 }
+            }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
         Ok(())

@@ -13,12 +13,12 @@ use rand::thread_rng;
 use tokio::time;
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 
 use crate::node::periodic_job;
 use crate::node::try_and_log;
 use crate::node::ConnectionKind;
-use crate::node::InflightRequests;
 use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
@@ -71,44 +71,26 @@ where
     /// TODO: Be smarter when selecting peers to send, like taking in consideration
     /// already inflight blocks and latency.
     fn get_blocks_to_download(&mut self) {
-        let max_inflight_blocks = SyncNode::BLOCKS_PER_GETDATA * SyncNode::MAX_CONCURRENT_GETDATA;
-        let inflight_blocks = self
-            .inflight
-            .keys()
-            .filter(|inflight| matches!(inflight, InflightRequests::Blocks(_)))
-            .count();
-
-        let unprocessed_blocks = inflight_blocks + self.blocks.len();
-
-        // if we do a request, this will be the new inflight blocks count
-        let next_unprocessed_count = unprocessed_blocks + SyncNode::BLOCKS_PER_GETDATA;
-
-        // if this request would make our inflight queue too long, postpone it
-        if next_unprocessed_count > max_inflight_blocks {
+        // If this request would make our inflight queue too long, postpone it
+        if !self.can_request_more_blocks() {
             return;
         }
 
         let mut blocks = Vec::with_capacity(SyncNode::BLOCKS_PER_GETDATA);
         for _ in 0..SyncNode::BLOCKS_PER_GETDATA {
-            let next_block = self.last_block_request + 1;
+            let next_height = self.last_block_request + 1;
             let validation_index = self.chain.get_validation_index().unwrap();
-            if next_block <= validation_index {
+            if next_height <= validation_index {
                 self.last_block_request = validation_index;
             }
 
-            let next_block = self.chain.get_block_hash(next_block);
-            match next_block {
-                Ok(next_block) => {
-                    blocks.push(next_block);
-                    self.last_block_request += 1;
-                }
+            let Ok(next_block) = self.chain.get_block_hash(next_height) else {
+                // Likely end of chain (e.g., `BlockNotPresent`)
+                break;
+            };
 
-                Err(_) => {
-                    // this is likely because we've reached the end of the chain
-                    // and we've got a `BlockNotPresent` error.
-                    break;
-                }
-            }
+            blocks.push(next_block);
+            self.last_block_request += 1;
         }
 
         try_and_log!(self.request_blocks(blocks));
@@ -333,6 +315,10 @@ where
 
                     _ => {}
                 }
+            }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
 
