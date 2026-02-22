@@ -44,8 +44,7 @@ jobs:
           tests/prepare.sh --release
 
       - name: Run functional tests tasks
-        run: |
-          tests/run.sh
+        run: tests/run.sh --preserve-data-dir
 
       - name: Log tests on failure
         if: failure()
