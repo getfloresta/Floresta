@@ -58,10 +58,18 @@ const UTREEXO_PROOF_CMD_STRING: &str = "uproof";
 const GET_UTREEXO_PROOF_CMD: &str = "getuproof";
 
 #[derive(Debug, PartialEq)]
+/// Enum to classify the state of a peer
 enum State {
+    /// Handshake haven't stated yet
     None,
+
+    /// Peer sent version message at some time
     SentVersion(Instant),
+
+    /// Peer sent verack message
     SentVerack,
+
+    /// Peer made a handshake and is connected
     Connected,
 }
 
@@ -738,10 +746,10 @@ pub struct Version {
     pub transport_protocol: TransportProtocol,
 }
 
+#[derive(Debug)]
 /// Messages passed from different modules to the main node to process. They should minimal
 /// and only if it requires global states, everything else should be handled by the module
 /// itself.
-#[derive(Debug)]
 pub enum PeerMessages {
     /// A new block just arrived, we should ask for it and update our chain
     NewBlock(BlockHash),
