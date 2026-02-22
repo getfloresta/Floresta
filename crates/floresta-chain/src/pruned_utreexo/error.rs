@@ -10,7 +10,6 @@
 use core::fmt::Debug;
 extern crate alloc;
 
-use bitcoin::blockdata::script;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Txid;
@@ -37,7 +36,6 @@ pub enum BlockchainError {
     ConsensusDecode(bitcoin::consensus::encode::Error),
     ChainNotInitialized,
     InvalidTip(String),
-    ScriptValidationFailed(script::Error),
     Io(ioError),
     UnsupportedNetwork(Network),
     BadValidationIndex,
@@ -194,7 +192,6 @@ impl_error_from!(
 );
 impl_error_from!(BlockchainError, BlockValidationErrors, BlockValidation);
 impl_error_from!(BlockchainError, String, UtreexoError);
-impl_error_from!(BlockchainError, script::Error, ScriptValidationFailed);
 
 impl Display for BlockchainError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

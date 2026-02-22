@@ -490,6 +490,19 @@ where
         Ok(())
     }
 
+    /// Disconnects a peer and bans it for `T::BAN_TIME`.
+    pub(crate) fn disconnect_and_ban(&mut self, peer: PeerId) -> Result<(), WireError> {
+        if let Some(peer) = self.peers.get(&peer) {
+            let ban_state = AddressState::Banned(T::BAN_TIME);
+            let addr_id = peer.address_id as usize;
+
+            self.address_man.update_set_state(addr_id, ban_state);
+        }
+
+        self.send_to_peer(peer, NodeRequest::Shutdown)?;
+        Ok(())
+    }
+
     /// Checks whether some of our inflight requests have timed out.
     ///
     /// This function will check if any of our inflight requests have timed out, and if so,

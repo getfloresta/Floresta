@@ -20,12 +20,14 @@ use super::try_and_log;
 use super::InflightRequests;
 use super::NodeRequest;
 use super::UtreexoNode;
-use crate::address_man::AddressState;
 use crate::block_proof::Bitmap;
 use crate::block_proof::UtreexoProof;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::p2p_wire::error::WireError;
+
+/// The leaf data, utreexo proof and the peer that sent them.
+type UtreexoData = (Vec<CompactLeafData>, Proof, PeerId);
 
 #[derive(Debug)]
 /// A block that is currently being downloaded or pending processing
@@ -36,17 +38,30 @@ use crate::p2p_wire::error::WireError;
 /// out of order, so while we wait for the previous blocks to finish download,
 /// we keep the blocks that are already downloaded as an [`InflightBlock`].
 pub(crate) struct InflightBlock {
-    /// The peer that sent the block
+    /// The peer that sent the block.
     pub peer: PeerId,
 
-    /// The block itself
+    /// The block itself.
     pub block: Block,
 
-    /// The udata associated with the block, if any
-    pub leaf_data: Option<Vec<CompactLeafData>>,
+    /// Auxiliary data needed for validating this block.
+    pub aux_data: Option<UtreexoData>,
+}
 
-    /// The proof associated with the block, if any
-    pub proof: Option<Proof>,
+impl InflightBlock {
+    /// Creates a new `InflightBlock` from a block and the associated peer id.
+    fn new(block: Block, peer: PeerId) -> Self {
+        Self {
+            peer,
+            block,
+            aux_data: None,
+        }
+    }
+
+    /// Attaches the auxiliary utreexo data to this `InflightBlock`.
+    fn add_utreexo_data(&mut self, leaf_data: Vec<CompactLeafData>, proof: Proof, peer: PeerId) {
+        self.aux_data = Some((leaf_data, proof, peer));
+    }
 }
 
 impl<T, Chain> UtreexoNode<Chain, T>
@@ -96,29 +111,16 @@ where
         };
 
         if block.txdata.len() == 1 {
-            // This is an empty block, so there's no proof for it
-            let inflight_block = InflightBlock {
-                leaf_data: Some(Vec::new()),
-                proof: Some(Proof::default()),
-                block,
-                peer,
-            };
+            let mut inflight_block = InflightBlock::new(block, peer);
+
+            // This is an empty block, so there's no proof nor leaf data for it
+            inflight_block.add_utreexo_data(Vec::new(), Proof::default(), peer);
 
             self.blocks.insert(block_hash, inflight_block);
             return Ok(());
         }
 
-        let inflight_block = InflightBlock {
-            leaf_data: None,
-            proof: None,
-            block,
-            peer,
-        };
-
-        debug!(
-            "Received block {} from peer {}",
-            block_hash, inflight_block.peer
-        );
+        debug!("Received block {block_hash} from peer {peer}");
 
         self.send_to_fast_peer(
             NodeRequest::GetBlockProof((block_hash, Bitmap::new(), Bitmap::new())),
@@ -130,7 +132,8 @@ where
             (peer, Instant::now()),
         );
 
-        self.blocks.insert(block_hash, inflight_block);
+        self.blocks
+            .insert(block_hash, InflightBlock::new(block, peer));
 
         Ok(())
     }
@@ -159,8 +162,8 @@ where
             targets: uproof.targets,
         };
 
-        block.proof = Some(proof);
-        block.leaf_data = Some(uproof.leaf_data);
+        // Add the proof and leaf data, together with the peer id that sent them
+        block.add_utreexo_data(uproof.leaf_data, proof, peer);
 
         Ok(())
     }
@@ -178,7 +181,7 @@ where
             .blocks
             .iter()
             .filter_map(|(hash, block)| {
-                if block.proof.is_some() && block.leaf_data.is_some() {
+                if block.aux_data.is_some() {
                     return None;
                 }
 
@@ -229,7 +232,7 @@ where
                 return Ok(());
             };
 
-            if block.proof.is_none() {
+            if block.aux_data.is_none() {
                 // If the block doesn't have a proof, we can't process it
                 return Ok(());
             }
@@ -261,85 +264,123 @@ where
     {
         debug!("processing block {block_hash}");
 
-        let inflight_block = self
+        let inflight = self
             .blocks
             .remove(&block_hash)
             .ok_or(WireError::BlockNotFound)?;
 
-        let leaf_data = inflight_block
-            .leaf_data
-            .ok_or(WireError::LeafDataNotFound)?;
-
-        let proof = inflight_block.proof.ok_or(WireError::BlockProofNotFound)?;
-        let block = inflight_block.block;
-        let peer = inflight_block.peer;
+        let block = inflight.block;
+        let peer = inflight.peer;
+        let (leaf_data, proof, utreexo_peer) =
+            inflight.aux_data.ok_or(WireError::BlockProofNotFound)?;
 
         let (del_hashes, inputs) =
             proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {
                 self.chain.get_block_hash(h)
             })?;
 
-        if let Err(e) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
+        if let Err(chain_err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
             error!(
-                "Invalid block {:?} received by peer {} reason: {:?}",
-                block.header, peer, e
+                "Validation failed for block with {:?}, received by peer {}\nReason: {:?}",
+                block.header, peer, chain_err,
             );
 
-            if let BlockchainError::BlockValidation(e) = e {
-                // Because the proof isn't committed to the block, we can't invalidate
-                // it if the proof is invalid. Any other error should cause the block
-                // to be invalidated.
-                match e {
-                    BlockValidationErrors::InvalidCoinbase(_)
-                    | BlockValidationErrors::UtxoNotFound(_)
-                    | BlockValidationErrors::ScriptValidationError(_)
-                    | BlockValidationErrors::NullPrevOut
-                    | BlockValidationErrors::EmptyInputs
-                    | BlockValidationErrors::EmptyOutputs
-                    | BlockValidationErrors::ScriptError
-                    | BlockValidationErrors::BlockTooBig
-                    | BlockValidationErrors::NotEnoughPow
-                    | BlockValidationErrors::TooManyCoins
-                    | BlockValidationErrors::BadMerkleRoot
-                    | BlockValidationErrors::BadWitnessCommitment
-                    | BlockValidationErrors::NotEnoughMoney
-                    | BlockValidationErrors::FirstTxIsNotCoinbase
-                    | BlockValidationErrors::BadCoinbaseOutValue
-                    | BlockValidationErrors::EmptyBlock
-                    | BlockValidationErrors::BadBip34
-                    | BlockValidationErrors::BIP94TimeWarp
-                    | BlockValidationErrors::UnspendableUTXO
-                    | BlockValidationErrors::CoinbaseNotMatured => {
-                        try_and_log!(self.chain.invalidate_block(block.block_hash()));
-                    }
-                    BlockValidationErrors::InvalidProof => {}
-                    BlockValidationErrors::BlockExtendsAnOrphanChain
-                    | BlockValidationErrors::BlockDoesntExtendTip => {
-                        // for some reason, we've tried to connect a block that doesn't extend the
-                        // tip
-                        self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
-                        // this is our mistake, don't punish the peer
-                        return Ok(());
-                    }
+            // Return early if the error is not from block validation (e.g., a database error)
+            let Some(e) = Self::block_validation_err(chain_err) else {
+                return Ok(());
+            };
+
+            return match self.handle_validation_errors(e, block, peer, utreexo_peer) {
+                Some(blamed_peer) => {
+                    // Disconnect the responsible peer and ban it.
+                    self.disconnect_and_ban(blamed_peer)?;
+                    Err(WireError::PeerMisbehaving)
                 }
-            }
-
-            warn!(
-                "Block {} from peer {peer} is invalid, banning peer",
-                block.block_hash()
-            );
-
-            // Disconnect the peer and ban it.
-            if let Some(peer) = self.peers.get(&peer).cloned() {
-                self.address_man
-                    .update_set_state(peer.address_id as usize, AddressState::Banned(T::BAN_TIME));
-            }
-
-            self.send_to_peer(peer, NodeRequest::Shutdown)?;
-            return Err(WireError::PeerMisbehaving);
+                None => Ok(()),
+            };
         }
 
         self.last_tip_update = Instant::now();
         Ok(())
+    }
+
+    /// Returns the inner `BlockValidationErrors`, if any.
+    fn block_validation_err(e: BlockchainError) -> Option<BlockValidationErrors> {
+        match e {
+            BlockchainError::TransactionError(tx_err) => Some(tx_err.error),
+            BlockchainError::BlockValidation(block_err) => Some(block_err),
+            // TODO: we need clearer error definitions for utreexo failures
+            BlockchainError::UtreexoError(_) | BlockchainError::InvalidProof => {
+                Some(BlockValidationErrors::InvalidProof)
+            }
+            _ => None,
+        }
+    }
+
+    /// Handles the different block validation errors that can happen when connecting a block.
+    ///
+    /// Returns the peer id that caused this error, since it could be block or utreexo-related.
+    fn handle_validation_errors(
+        &mut self,
+        e: BlockValidationErrors,
+        block: Block,
+        block_peer: PeerId,
+        utreexo_peer: PeerId,
+    ) -> Option<PeerId> {
+        let hash = block.block_hash();
+        match e {
+            // The utreexo peer sent us an invalid utreexo proof. Block is not yet processed.
+            BlockValidationErrors::InvalidProof => {
+                self.blocks
+                    .insert(hash, InflightBlock::new(block, block_peer));
+
+                warn!("Proof for block {hash} is invalid, banning peer {utreexo_peer}");
+                Some(utreexo_peer)
+            }
+
+            // The utreexo peer sent us incomplete leaf data. Block is not yet processed.
+            BlockValidationErrors::UtxoNotFound(_) => {
+                self.blocks
+                    .insert(hash, InflightBlock::new(block, block_peer));
+
+                warn!("Leaf data for block {hash} is invalid, banning peer {utreexo_peer}");
+                Some(utreexo_peer)
+            }
+
+            // The block is invalid, so we have to invalidate it in our chain.
+            BlockValidationErrors::InvalidCoinbase(_)
+            | BlockValidationErrors::ScriptValidationError(_)
+            | BlockValidationErrors::NullPrevOut
+            | BlockValidationErrors::EmptyInputs
+            | BlockValidationErrors::EmptyOutputs
+            | BlockValidationErrors::ScriptError
+            | BlockValidationErrors::BlockTooBig
+            | BlockValidationErrors::NotEnoughPow
+            | BlockValidationErrors::TooManyCoins
+            | BlockValidationErrors::BadMerkleRoot
+            | BlockValidationErrors::BadWitnessCommitment
+            | BlockValidationErrors::NotEnoughMoney
+            | BlockValidationErrors::FirstTxIsNotCoinbase
+            | BlockValidationErrors::BadCoinbaseOutValue
+            | BlockValidationErrors::EmptyBlock
+            | BlockValidationErrors::BadBip34
+            | BlockValidationErrors::BIP94TimeWarp
+            | BlockValidationErrors::UnspendableUTXO
+            | BlockValidationErrors::CoinbaseNotMatured => {
+                try_and_log!(self.chain.invalidate_block(hash));
+
+                warn!("Block {hash} is invalid, banning peer {block_peer}");
+                Some(block_peer)
+            }
+
+            // We've tried to connect a block that doesn't extend the tip.
+            BlockValidationErrors::BlockExtendsAnOrphanChain
+            | BlockValidationErrors::BlockDoesntExtendTip => {
+                self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
+
+                // This is our mistake, don't punish any peer
+                None
+            }
+        }
     }
 }
