@@ -477,18 +477,24 @@ impl AddressMan {
     }
 
     fn push_if_has_service(&mut self, address: &LocalAddress, service: ServiceFlags) {
-        if address.services.has(service) {
+        if !address.services.has(service) {
+            return;
+        }
+
+        let addresses = self.peers_by_service.entry(service).or_default();
+        if !addresses.contains(&address.id) {
             self.peers_by_service
                 .entry(service)
                 .or_default()
                 .push(address.id);
+        }
 
-            if address.is_good_address() {
-                self.good_peers_by_service
-                    .entry(service)
-                    .or_default()
-                    .push(address.id);
-            }
+        let addresses = self.good_peers_by_service.entry(service).or_default();
+        if !addresses.contains(&address.id) && address.is_good_address() {
+            self.good_peers_by_service
+                .entry(service)
+                .or_default()
+                .push(address.id);
         }
     }
 
