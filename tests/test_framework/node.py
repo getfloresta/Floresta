@@ -6,9 +6,6 @@ for different types of nodes in the test framework. It encapsulates the behavior
 including their daemon processes, RPC interfaces, and configurations.
 """
 
-import os
-import signal
-import contextlib
 from enum import Enum
 from typing import List, Tuple, Optional
 
@@ -55,10 +52,11 @@ class Node:
         targetdir: str,
         data_dir: str,
         tls: bool,
+        log,
     ):
         match variant:
             case NodeType.FLORESTAD:
-                rpc = FlorestaRPC(config=rpc_config)
+                rpc = FlorestaRPC(config=rpc_config, log=log)
                 daemon = FlorestaDaemon(
                     name=variant.value,
                     rpc_config=rpc_config,
@@ -67,9 +65,10 @@ class Node:
                     electrum_config=electrum_config,
                     target=targetdir,
                     data_dir=data_dir,
+                    log=log,
                 )
             case NodeType.UTREEXOD:
-                rpc = UtreexoRPC(config=rpc_config)
+                rpc = UtreexoRPC(config=rpc_config, log=log)
                 daemon = UtreexoDaemon(
                     name=variant.value,
                     rpc_config=rpc_config,
@@ -78,9 +77,10 @@ class Node:
                     electrum_config=electrum_config,
                     target=targetdir,
                     data_dir=data_dir,
+                    log=log,
                 )
             case NodeType.BITCOIND:
-                rpc = BitcoinRPC(config=rpc_config)
+                rpc = BitcoinRPC(config=rpc_config, log=log)
                 daemon = BitcoinDaemon(
                     name=variant.value,
                     rpc_config=rpc_config,
@@ -89,6 +89,7 @@ class Node:
                     extra_args=extra_args,
                     target=targetdir,
                     data_dir=data_dir,
+                    log=log,
                 )
             case _:
                 raise ValueError(
@@ -98,7 +99,7 @@ class Node:
         if variant == NodeType.BITCOIND:
             electrum = None
         else:
-            electrum = ElectrumClient(electrum_config)
+            electrum = ElectrumClient(electrum_config, log=log)
 
         self.daemon = daemon
         self.rpc = rpc
@@ -106,6 +107,7 @@ class Node:
         self._tls = tls
         self._variant = variant
         self._static_values = True
+        self._log = log
 
     @classmethod
     def create_node_default_config(
@@ -115,6 +117,7 @@ class Node:
         data_dir: str,
         targetdir: str,
         tls: bool,
+        log,
     ) -> "Node":
         """
         Create a node with default arguments. this argument
@@ -135,6 +138,7 @@ class Node:
             data_dir=data_dir,
             targetdir=targetdir,
             tls=tls,
+            log=log,
         )
 
         node.static_values = False
@@ -364,9 +368,3 @@ class Node:
             )
             for peer_info in peers_info
         )
-
-    def send_kill_signal(self, sigcode="SIGTERM"):
-        """Send a signal to kill the daemon process."""
-        with contextlib.suppress(ProcessLookupError):
-            pid = self.daemon.process.pid
-            os.kill(pid, getattr(signal, sigcode, signal.SIGTERM))

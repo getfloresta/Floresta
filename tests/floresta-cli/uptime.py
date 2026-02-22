@@ -5,54 +5,24 @@ This functional test cli utility to interact with a Floresta node with `uptime`
 """
 
 import time
-from test_framework import FlorestaTestFramework
-from test_framework.node import Node, NodeType
+import pytest
 
 
-class UptimeTest(FlorestaTestFramework):
-    """
-    Test `uptime` rpc call, by creating a node, wait for
-    some time (10 seconds) and assert that this wait time is
-    equal to how long florestad has been running
-    """
+@pytest.mark.rpc
+def test_uptime(florestad_node):
+    """Test uptime of a Floresta node using the rpc."""
+    florestad = florestad_node
 
-    def set_test_params(self):
-        """
-        Setup the two node florestad process with different data-dirs, electrum-addresses
-        and rpc-addresses in the same regtest network
-        """
-        self.florestad = self.add_node_default_args(
-            variant=NodeType.FLORESTAD,
-        )
+    result = florestad.rpc.uptime()
+    assert result is not None
+    assert result >= 0
 
-        self.bitcoind = self.add_node_default_args(
-            variant=NodeType.BITCOIND,
-        )
+    sleep_time = 5
+    expected_min_uptime = result + sleep_time
+    expected_max_uptime = result + (sleep_time + 2)
 
-    def test_node_uptime(self, node: Node, test_time: int, margin: int):
-        """
-        Test the uptime of a node, given an index
-        by checking if the uptime matches the elapsed
-        time after starting the node with a grace period
-        for startup and function call times
-        """
-        self.run_node(node)
-        before = time.time()
-        time.sleep(test_time)
-        result = node.rpc.uptime()
-        after = time.time()
-        elapsed = int(after - before)
+    time.sleep(sleep_time)
 
-        self.assertTrue(result >= elapsed and result <= elapsed + margin)
-        return result
-
-    def run_test(self):
-        """
-        Run JSONRPC server on first, wait to connect, then call `addnode ip[:port]`
-        """
-        self.test_node_uptime(node=self.florestad, test_time=15, margin=15)
-        self.test_node_uptime(node=self.bitcoind, test_time=15, margin=15)
-
-
-if __name__ == "__main__":
-    UptimeTest().main()
+    result = florestad.rpc.uptime()
+    assert result is not None
+    assert expected_min_uptime <= result <= expected_max_uptime

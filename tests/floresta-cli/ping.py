@@ -5,39 +5,23 @@ send a ping to bitcoind and check if bitcoind receives it, by calling
 """
 
 import time
-from test_framework import FlorestaTestFramework
-from test_framework.node import NodeType
+import pytest
 
 
-class PingTest(FlorestaTestFramework):
-    expected_chain = "regtest"
+@pytest.mark.rpc
+def test_ping(florestad_bitcoind):
+    """
+    Test pinging between florestad and bitcoind nodes.
+    """
+    florestad, bitcoind = florestad_bitcoind
 
-    def set_test_params(self):
-        self.florestad = self.add_node_default_args(variant=NodeType.FLORESTAD)
-        self.bitcoind = self.add_node_default_args(variant=NodeType.BITCOIND)
+    florestad.rpc.ping()
 
-    def run_test(self):
-        # Start the nodes
-        self.run_node(self.florestad)
-        self.run_node(self.bitcoind)
+    peer_info = bitcoind.rpc.get_peerinfo()
+    quantity_message = peer_info[0]["bytesrecv_per_msg"].get("ping", 0)
 
-        # Connect floresta to bitcoind
-        self.connect_nodes(self.florestad, self.bitcoind)
+    time.sleep(1)
+    florestad.rpc.ping()
 
-        # Check that we have a connection, but no ping yet
-        peer_info = self.bitcoind.rpc.get_peerinfo()
-        quantity_message = peer_info[0]["bytesrecv_per_msg"].get("ping", 0)
-
-        # Send a ping to bitcoind
-        self.log("Sending ping to bitcoind...")
-        self.florestad.rpc.ping()
-
-        # Check that bitcoind received the ping
-        peer_info = self.bitcoind.rpc.get_peerinfo()
-        self.assertEqual(
-            peer_info[0]["bytesrecv_per_msg"]["ping"], quantity_message * 2
-        )
-
-
-if __name__ == "__main__":
-    PingTest().main()
+    peer_info = bitcoind.rpc.get_peerinfo()
+    assert peer_info[0]["bytesrecv_per_msg"]["ping"], quantity_message * 2

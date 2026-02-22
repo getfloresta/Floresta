@@ -28,7 +28,7 @@ jobs:
         run: uv run black --check --verbose ./tests
 
       - name: Run pylint linter
-        run: uv run pylint --verbose ./tests
+        run: uv run pylint --verbose $(find ./tests -name "*.py")
 
       # Required for compiling the project, as it depends on the bitcoinkernel
       - name: Install Boost

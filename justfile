@@ -61,7 +61,7 @@ test-functional-run arg="":
 test-functional-uv-fmt:
     @just check-command uv test-functional-uv-fmt "https://docs.astral.sh/uv/getting-started/installation/"
     uv run black --verbose ./tests
-    uv run pylint --verbose ./tests
+    uv run pylint --verbose $(find ./tests -name "*.py")
 
 # Run the functional tests
 test-functional:
