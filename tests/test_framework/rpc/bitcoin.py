@@ -4,6 +4,7 @@ tests.test_framework.rpc.bitcoin.py
 A test framework for testing JsonRPC calls to a bitocoin node.
 """
 
+from typing import Optional
 from test_framework.rpc.base import BaseRPC
 
 
@@ -44,3 +45,41 @@ class BitcoinRPC(BaseRPC):
         """
         address = "bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch"
         return self.generate_block_to_address(nblocks, address)
+
+    def get_raw_transaction(
+        self, txid: str, verbose: bool, blockhash: Optional[str] = None
+    ) -> dict:
+        """
+        Return the raw transaction data.
+        """
+        return self.perform_request(
+            "getrawtransaction", params=[txid, verbose, blockhash]
+        )
+
+    def get_transaction(
+        self, txid: str, include_watchonly: bool = True, verbose: bool = False
+    ) -> dict:
+        """
+        Get detailed information about in-wallet transaction
+        """
+        return self.perform_request(
+            "gettransaction",
+            params=[txid, include_watchonly, verbose],
+        )
+
+    def create_wallet(self, wallet_name: str, *args) -> dict:
+        """
+        Creates and loads a new wallet.
+        """
+        return self.perform_request(
+            "createwallet",
+            params=[wallet_name, *args],
+        )
+
+    def get_new_address(
+        self, label: Optional[str] = None, address_type: Optional[str] = None
+    ) -> dict:
+        """
+        Returns a new Bitcoin address for receiving payments.
+        """
+        return self.perform_request("getnewaddress", params=[label, address_type])
