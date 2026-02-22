@@ -36,6 +36,7 @@ use crate::node::InflightRequests;
 use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
+use crate::node::MAX_ADDRV2_ADDRESSES;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
@@ -91,6 +92,7 @@ where
                 port,
                 time: time as u32,
             })
+            .take(MAX_ADDRV2_ADDRESSES)
             .collect();
 
         self.send_to_random_peer(NodeRequest::SendAddresses(addresses), ServiceFlags::NONE)?;
