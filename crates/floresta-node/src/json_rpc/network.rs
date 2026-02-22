@@ -8,7 +8,7 @@ use floresta_wire::node_interface::PeerInfo;
 use serde_json::json;
 use serde_json::Value;
 
-use super::res::JsonRpcError;
+use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 

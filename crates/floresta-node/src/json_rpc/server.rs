@@ -8,8 +8,9 @@ use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::Method;
-use axum::http::Response;
+use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Json;
 use axum::Router;
@@ -42,20 +43,18 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::JsonRpcError;
+use super::res::jsonrpc_interface::JsonRpcError;
 use super::res::RawTxJson;
-use super::res::RpcError;
 use super::res::ScriptPubKeyJson;
 use super::res::ScriptSigJson;
 use super::res::TxInJson;
 use super::res::TxOutJson;
-use crate::json_rpc::request::arg_parser::get_bool;
-use crate::json_rpc::request::arg_parser::get_hash;
-use crate::json_rpc::request::arg_parser::get_hashes_array;
-use crate::json_rpc::request::arg_parser::get_numeric;
-use crate::json_rpc::request::arg_parser::get_optional_field;
-use crate::json_rpc::request::arg_parser::get_string;
+use crate::json_rpc::request::arg_parser::get_arr_at;
+use crate::json_rpc::request::arg_parser::get_at;
+use crate::json_rpc::request::arg_parser::get_with_default;
+use crate::json_rpc::request::arg_parser::optional;
 use crate::json_rpc::request::RpcRequest;
+use crate::json_rpc::res::jsonrpc_interface::Response;
 use crate::json_rpc::res::RescanConfidence;
 
 pub(super) struct InflightRpc {
@@ -86,8 +85,8 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_transaction(&self, tx_id: Txid, verbosity: Option<bool>) -> Result<Value> {
-        if verbosity == Some(true) {
+    fn get_transaction(&self, tx_id: Txid, verbosity: bool) -> Result<Value> {
+        if verbosity {
             let tx = self
                 .wallet
                 .get_transaction(&tx_id)
@@ -142,10 +141,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     fn rescan_blockchain(
         &self,
-        start: Option<u32>,
-        stop: Option<u32>,
+        start: u32,
+        stop: u32,
         use_timestamp: bool,
-        confidence: Option<RescanConfidence>,
+        confidence: RescanConfidence,
     ) -> Result<bool> {
         let (start_height, stop_height) =
             self.get_rescan_interval(use_timestamp, start, stop, confidence)?;
@@ -228,18 +227,60 @@ async fn handle_json_rpc_request(
         },
     );
 
+    // Methods that don't require params
     match method.as_str() {
-        // blockchain
         "getbestblockhash" => {
-            let hash = state.get_best_block_hash()?;
-            Ok(serde_json::to_value(hash).unwrap())
+            return state
+                .get_best_block_hash()
+                .map(|v| serde_json::to_value(v).unwrap())
         }
+        "getblockchaininfo" => {
+            return state
+                .get_blockchain_info()
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+        "getblockcount" => {
+            return state
+                .get_block_count()
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+        "getroots" => return state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
+        "getrpcinfo" => {
+            return state
+                .get_rpc_info()
+                .await
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+        "stop" => return state.stop().await.map(|v| serde_json::to_value(v).unwrap()),
+        "uptime" => return Ok(serde_json::to_value(state.uptime()).unwrap()),
+        "getpeerinfo" => {
+            return state
+                .get_peer_info()
+                .await
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+        "ping" => {
+            state.ping().await?;
+            return Ok(serde_json::json!(null));
+        }
+        "listdescriptors" => {
+            return state
+                .list_descriptors()
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+        _ => {}
+    }
 
+    // Methods that require params
+    //
+    // We default here because theres some cases we have only optionals for a call, so even if omitted, is
+    // nice for params to be Some(Value) even if this value is Null.
+    let params = params.unwrap_or_default();
+
+    match method.as_str() {
         "getblock" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
-            // Default value in case of missing parameter is 1
-            let verbosity: u8 =
-                get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1);
+            let hash = get_at(&params, 0, "block_hash")?;
+            let verbosity = get_with_default(&params, 1, "verbosity", 1)?;
 
             state
                 .get_block(hash, verbosity)
@@ -247,16 +288,8 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
         }
 
-        "getblockchaininfo" => state
-            .get_blockchain_info()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        "getblockcount" => state
-            .get_block_count()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
         "getblockfrompeer" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
+            let hash = get_at(&params, 0, "block_hash")?;
 
             state.get_block(hash, 0).await?;
 
@@ -264,24 +297,23 @@ async fn handle_json_rpc_request(
         }
 
         "getblockhash" => {
-            let height = get_numeric(&params, 0, "block_height")?;
+            let height = get_at(&params, 0, "block_height")?;
             state
                 .get_block_hash(height)
                 .map(|h| serde_json::to_value(h).unwrap())
         }
 
         "getblockheader" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
+            let hash = get_at(&params, 0, "block_hash")?;
             state
                 .get_block_header(hash)
                 .map(|h| serde_json::to_value(h).unwrap())
         }
 
         "gettxout" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let vout = get_numeric(&params, 1, "vout")?;
-            let include_mempool =
-                get_optional_field(&params, 2, "include_mempool", get_bool)?.unwrap_or(false);
+            let txid = get_at(&params, 0, "txid")?;
+            let vout = get_at(&params, 1, "vout")?;
+            let include_mempool = get_with_default(&params, 2, "include_mempool", false)?;
 
             state
                 .get_tx_out(txid, vout, include_mempool)
@@ -289,8 +321,8 @@ async fn handle_json_rpc_request(
         }
 
         "gettxoutproof" => {
-            let txids = get_hashes_array(&params, 0, "txids")?;
-            let block_hash = get_optional_field(&params, 1, "block_hash", get_hash)?;
+            let txids = get_arr_at(&params, 0, "txids")?;
+            let block_hash = optional(get_at(&params, 1, "block_hash"))?;
 
             Ok(serde_json::to_value(
                 state
@@ -303,62 +335,36 @@ async fn handle_json_rpc_request(
         }
 
         "getrawtransaction" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
+            let txid = get_at(&params, 0, "txid")?;
+            let verbosity = get_with_default(&params, 1, "verbosity", false)?;
 
             state
                 .get_transaction(txid, verbosity)
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
-        "getroots" => state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
-
         "findtxout" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let vout = get_numeric(&params, 1, "vout")?;
-            let script = get_string(&params, 2, "script")?;
+            let txid = get_at(&params, 0, "txid")?;
+            let vout = get_at(&params, 1, "vout")?;
+            let script: String = get_at(&params, 2, "script")?;
             let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_numeric(&params, 3, "height")?;
+            let height = get_at(&params, 3, "height")?;
 
-            let state = state.clone();
-            state.find_tx_out(txid, vout, script, height).await
+            state.clone().find_tx_out(txid, vout, script, height).await
         }
 
-        // control
         "getmemoryinfo" => {
-            let mode =
-                get_optional_field(&params, 0, "mode", get_string)?.unwrap_or("stats".into());
+            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
 
             state
                 .get_memory_info(&mode)
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
-        "getrpcinfo" => state
-            .get_rpc_info()
-            .await
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        // help
-        // logging
-        "stop" => state.stop().await.map(|v| serde_json::to_value(v).unwrap()),
-
-        "uptime" => {
-            let uptime = state.uptime();
-            Ok(serde_json::to_value(uptime).unwrap())
-        }
-
-        // network
-        "getpeerinfo" => state
-            .get_peer_info()
-            .await
-            .map(|v| serde_json::to_value(v).unwrap()),
-
         "addnode" => {
-            let node = get_string(&params, 0, "node")?;
-            let command = get_string(&params, 1, "command")?;
-            let v2transport =
-                get_optional_field(&params, 2, "V2transport", get_bool)?.unwrap_or(false);
+            let node = get_at(&params, 0, "node")?;
+            let command = get_at(&params, 1, "command")?;
+            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
 
             state
                 .add_node(node, command, v2transport)
@@ -367,8 +373,9 @@ async fn handle_json_rpc_request(
         }
 
         "disconnectnode" => {
-            let node_address = get_string(&params, 0, "node_address")?;
-            let node_id = get_optional_field(&params, 1, "node_id", get_numeric)?;
+            let node_address = get_at(&params, 0, "node_address")?;
+
+            let node_id = optional(get_at(&params, 1, "node_id"))?;
 
             state
                 .disconnect_node(node_address, node_id)
@@ -376,15 +383,8 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
-        "ping" => {
-            state.ping().await?;
-
-            Ok(serde_json::json!(null))
-        }
-
-        // wallet
         "loaddescriptor" => {
-            let descriptor = get_string(&params, 0, "descriptor")?;
+            let descriptor = get_at(&params, 0, "descriptor")?;
 
             state
                 .load_descriptor(descriptor)
@@ -392,184 +392,53 @@ async fn handle_json_rpc_request(
         }
 
         "rescanblockchain" => {
-            let start_height = get_optional_field(&params, 0, "start_height", get_numeric)?;
-            let stop_height = get_optional_field(&params, 1, "stop_height", get_numeric)?;
-            let use_timestamp =
-                get_optional_field(&params, 2, "use_timestamp", get_bool)?.unwrap_or(false);
-            let confidence_str = get_optional_field(&params, 3, "confidence", get_string)?
-                .unwrap_or("medium".into());
-
-            let confidence = match confidence_str.as_str() {
-                "low" => RescanConfidence::Low,
-                "medium" => RescanConfidence::Medium,
-                "high" => RescanConfidence::High,
-                "exact" => RescanConfidence::Exact,
-                _ => return Err(JsonRpcError::InvalidRescanVal),
-            };
+            let start_height = get_with_default(&params, 0, "start_height", 0)?;
+            let stop_height = get_with_default(&params, 1, "stop_height", 0)?;
+            let use_timestamp = get_with_default(&params, 2, "use_timestamp", false)?;
+            let confidence = get_with_default(&params, 3, "confidence", RescanConfidence::Medium)?;
 
             state
-                .rescan_blockchain(start_height, stop_height, use_timestamp, Some(confidence))
+                .rescan_blockchain(start_height, stop_height, use_timestamp, confidence)
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
         "sendrawtransaction" => {
-            let tx = get_string(&params, 0, "hex")?;
+            let tx = get_at(&params, 0, "hex")?;
             state
                 .send_raw_transaction(tx)
                 .await
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
-        "listdescriptors" => state
-            .list_descriptors()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        _ => {
-            let error = JsonRpcError::MethodNotFound;
-            Err(error)
-        }
-    }
-}
-
-fn get_http_error_code(err: &JsonRpcError) -> u16 {
-    match err {
-        // you messed up
-        JsonRpcError::InvalidHex
-        | JsonRpcError::InvalidAddress
-        | JsonRpcError::InvalidScript
-        | JsonRpcError::InvalidRequest
-        | JsonRpcError::InvalidDescriptor(_)
-        | JsonRpcError::InvalidVerbosityLevel
-        | JsonRpcError::Decode(_)
-        | JsonRpcError::NoBlockFilters
-        | JsonRpcError::InvalidMemInfoMode
-        | JsonRpcError::InvalidAddnodeCommand
-        | JsonRpcError::InvalidDisconnectNodeCommand
-        | JsonRpcError::PeerNotFound
-        | JsonRpcError::InvalidTimestamp
-        | JsonRpcError::InvalidRescanVal
-        | JsonRpcError::NoAddressesToRescan
-        | JsonRpcError::InvalidParameterType(_)
-        | JsonRpcError::MissingParameter(_)
-        | JsonRpcError::ChainWorkOverflow
-        | JsonRpcError::MempoolAccept(_)
-        | JsonRpcError::Wallet(_) => 400,
-
-        // idunnolol
-        JsonRpcError::MethodNotFound | JsonRpcError::BlockNotFound | JsonRpcError::TxNotFound => {
-            404
-        }
-
-        // we messed up, sowwy
-        JsonRpcError::InInitialBlockDownload
-        | JsonRpcError::Node(_)
-        | JsonRpcError::Chain
-        | JsonRpcError::Filters(_) => 503,
-    }
-}
-
-fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
-    match err {
-        // Parse Error
-        JsonRpcError::Decode(_) | JsonRpcError::InvalidParameterType(_) => -32700,
-
-        // Invalid Request
-        JsonRpcError::InvalidHex
-        | JsonRpcError::MissingParameter(_)
-        | JsonRpcError::InvalidAddress
-        | JsonRpcError::InvalidScript
-        | JsonRpcError::MethodNotFound
-        | JsonRpcError::InvalidRequest
-        | JsonRpcError::InvalidDescriptor(_)
-        | JsonRpcError::InvalidVerbosityLevel
-        | JsonRpcError::TxNotFound
-        | JsonRpcError::BlockNotFound
-        | JsonRpcError::InvalidTimestamp
-        | JsonRpcError::InvalidMemInfoMode
-        | JsonRpcError::InvalidAddnodeCommand
-        | JsonRpcError::InvalidDisconnectNodeCommand
-        | JsonRpcError::PeerNotFound
-        | JsonRpcError::InvalidRescanVal
-        | JsonRpcError::NoAddressesToRescan
-        | JsonRpcError::ChainWorkOverflow
-        | JsonRpcError::Wallet(_)
-        | JsonRpcError::MempoolAccept(_) => -32600,
-
-        // server error
-        JsonRpcError::InInitialBlockDownload
-        | JsonRpcError::Node(_)
-        | JsonRpcError::Chain
-        | JsonRpcError::NoBlockFilters
-        | JsonRpcError::Filters(_) => -32603,
+        _ => Err(JsonRpcError::MethodNotFound),
     }
 }
 
 async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
     body: Bytes,
-) -> Response<Body> {
-    let req: RpcRequest = match serde_json::from_slice(&body) {
-        Ok(req) => req,
-        Err(e) => {
-            let error = RpcError {
-                code: -32700,
-                message: format!("Parse error: {e}"),
-                data: None,
-            };
-            let body = json!({
-                "error": error,
-                "id": Value::Null,
-            });
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap();
-        }
+) -> HttpResponse<Body> {
+    let Ok(req): std::result::Result<RpcRequest, _> = serde_json::from_slice(&body) else {
+        return JsonRpcError::InvalidRequest.into_response();
     };
 
     debug!("Received JSON-RPC request: {req:?}");
 
     let id = req.id.clone();
-    let res = handle_json_rpc_request(req, state.clone()).await;
+    let method_res = handle_json_rpc_request(req, state.clone()).await;
 
-    state.inflight.write().await.remove(&id);
+    let response = axum::http::Response::builder()
+        .status(match &method_res {
+            Err(e) => e.http_code(),
+            Ok(_) => StatusCode::OK.as_u16(),
+        })
+        .header("Content-Type", "application/json");
 
-    match res {
-        Ok(res) => {
-            let body = serde_json::json!({
-                "result": res,
-                "id": id,
-            });
+    let body = Response::from_result(method_res, id);
 
-            axum::http::Response::builder()
-                .status(axum::http::StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
-        }
-
-        Err(e) => {
-            let http_error_code = get_http_error_code(&e);
-            let json_rpc_error_code = get_json_rpc_error_code(&e);
-            let error = RpcError {
-                code: json_rpc_error_code,
-                message: e.to_string(),
-                data: None,
-            };
-
-            let body = serde_json::json!({
-                "error": error,
-                "id": id,
-            });
-
-            axum::http::Response::builder()
-                .status(axum::http::StatusCode::from_u16(http_error_code).unwrap())
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
-        }
-    }
+    response
+        .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
 }
 
 async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<serde_json::Value> {
