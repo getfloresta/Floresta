@@ -62,3 +62,9 @@ class UtreexoRPC(BaseRPC):
             return self.perform_request("addnode", params=[node, command, v2transport])
 
         return self.perform_request("addnode", params=[node, command])
+
+    def proveutxochaintipinclusion(self, txids: list, vouts: list) -> dict:
+        """
+        Generate a Utreexo proof for UTXOs at the current chain tip.
+        """
+        return self.perform_request("proveutxochaintipinclusion", [txids, vouts])

@@ -138,6 +138,31 @@ pub struct RpcError {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetTxOutProof(pub Vec<u8>);
 
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum VerifyChainTipProofRes {
+    /// Verbosity 0: true/false
+    Bool(bool),
+
+    /// Verbosity 1: detailed proof info
+    Verbose(VerifyChainTipProofVerbose),
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyChainTipProofVerbose {
+    pub valid: bool,
+
+    pub proved_at_hash: String,
+
+    pub targets: Vec<u64>,
+
+    pub num_proof_hashes: usize,
+
+    pub proof_hashes: Vec<String>,
+
+    pub hashes_proven: Vec<String>,
+}
+
 #[derive(Debug)]
 pub enum JsonRpcError {
     /// There was a rescan request but we do not have any addresses in the watch-only wallet.
@@ -220,6 +245,12 @@ pub enum JsonRpcError {
 
     /// Something went wrong when attempting to publish a transaction to mempool
     MempoolAccept(AcceptToMempoolError),
+
+    /// This error is returned when a proof is well-formed but invalid (stale or verification failed)
+    InvalidProof(String),
+
+    /// Serialization to JSON value failed
+    Serialization(String),
 }
 
 impl_error_from!(JsonRpcError, AcceptToMempoolError, MempoolAccept);
@@ -254,6 +285,8 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidDisconnectNodeCommand => write!(f, "Invalid disconnectnode command"),
             JsonRpcError::PeerNotFound => write!(f, "Peer not found in the peer list"),
             JsonRpcError::MempoolAccept(e) => write!(f, "Could not send transaction to mempool due to {e}"),
+            JsonRpcError::InvalidProof(e) => write!(f, "Invalid proof: {e}"),
+            JsonRpcError::Serialization(e) => write!(f, "Serialization error: {e}"),
         }
     }
 }

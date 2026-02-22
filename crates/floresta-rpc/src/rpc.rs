@@ -142,6 +142,12 @@ pub trait FlorestaRPC {
     fn list_descriptors(&self) -> Result<Vec<String>>;
     /// Sends a ping to all peers, checking if they are still alive
     fn ping(&self) -> Result<()>;
+    /// Verifies a Utreexo inclusion proof for the chain tip
+    fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: String,
+        verbosity: Option<u32>,
+    ) -> Result<Value>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -333,5 +339,19 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn ping(&self) -> Result<()> {
         self.call("ping", &[])
+    }
+
+    fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: String,
+        verbosity: Option<u32>,
+    ) -> Result<Value> {
+        match verbosity {
+            Some(v) => self.call(
+                "verifyutxochaintipinclusionproof",
+                &[Value::String(proof), Value::Number(Number::from(v))],
+            ),
+            None => self.call("verifyutxochaintipinclusionproof", &[Value::String(proof)]),
+        }
     }
 }
