@@ -13,25 +13,13 @@ The difference is that `florestad` will run under a `cargo run` subprocess, whic
 import os
 import re
 import sys
-import copy
-import random
-import socket
-import shutil
-import signal
-import contextlib
-import subprocess
 import time
+import math
 from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Dict, List, Pattern, Tuple, Optional
-
-from test_framework.crypto.pkcs8 import (
-    create_pkcs8_private_key,
-    create_pkcs8_self_signed_certificate,
-)
+from typing import Any, List, Pattern
 from test_framework.daemon import ConfigP2P
 from test_framework.rpc import ConfigRPC
-from test_framework.electrum import ConfigElectrum, ConfigTls
+from test_framework.electrum import ConfigElectrum
 from test_framework.node import Node, NodeType
 from test_framework.util import Utility
 
@@ -611,4 +599,14 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.stop()
             raise AssertionError(
                 f"Actual: any({values}) !~ {pattern}\n Expected: any({values}) ~ {pattern}"
+            )
+
+    def assertAlmostEqual(self, actual: int | float, expected: int | float):
+        """
+        Assert if two numeric values are nearly equal
+        """
+        if not math.isclose(actual, expected):
+            self.stop()
+            raise AssertionError(
+                f"Actual: {actual} ~ {expected}\n Expected: {actual} ~ {expected}"
             )
