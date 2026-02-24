@@ -6,19 +6,19 @@ Define a base class for making RPC calls to a
 """
 
 import json
+import re
 import socket
 import time
-import re
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
-from abc import ABC, abstractmethod
 
 from requests import post
 from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
-from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
+from test_framework.rpc.exceptions import JSONRPCError
 
 
 # pylint: disable=too-many-public-methods
@@ -165,6 +165,53 @@ class BaseRPC(ABC):
 
         self.log(result["result"])
         return result["result"]
+
+    def noraise_raw_request(self, payload: dict) -> dict:
+        """
+        Send a raw JSON-RPC request (as a dict) to the node.
+        Does NOT raise on non-200 so callers can inspect both HTTP status and JSON body.
+        """
+        request = {
+            "url": f"{self.address}/",
+            "headers": {"content-type": "application/json"},
+            "data": json.dumps(payload),
+            "timeout": self.TIMEOUT,
+        }
+        if self._config.user is not None and self._config.password is not None:
+            request["auth"] = HTTPBasicAuth(self._config.user, self._config.password)
+
+        resp = post(**request)
+        return {"status_code": resp.status_code, "body": resp.json()}
+
+    def noraise_raw_request_text(self, text: str) -> dict:
+        """Send raw text (possibly invalid JSON) to the node."""
+        url = f"{self.address}/"
+        kwargs = {
+            "url": url,
+            "headers": {"content-type": "application/json"},
+            "data": text,
+            "timeout": self.TIMEOUT,
+        }
+        if self._config.user is not None and self._config.password is not None:
+            kwargs["auth"] = HTTPBasicAuth(self._config.user, self._config.password)
+
+        resp = post(**kwargs)
+        try:
+            body = resp.json()
+        except ValueError:
+            body = resp.text
+        return {"status_code": resp.status_code, "body": body}
+
+    def noraise_request(self, method: str, params=None) -> dict:
+        """Send a standard JSON-RPC request and return the parsed response (no raise)."""
+        payload = {
+            "jsonrpc": self._jsonrpc_version,
+            "id": "test",
+            "method": method,
+        }
+        if params is not None:
+            payload["params"] = params
+        return self.noraise_raw_request(payload)
 
     def is_socket_listening(self) -> bool:
         """Check if the socket is listening for connections on the specified port."""
