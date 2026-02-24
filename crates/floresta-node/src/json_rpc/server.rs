@@ -293,8 +293,6 @@ async fn handle_json_rpc_request(
 
     // Methods that does require parameters.
     //
-    // We default here because theres some cases we have only optionals for a call, so even if omitted, is
-    // nice for params to be Some(Value) even if this value is Null.
     // Here we use `unwrap_or_default()` because theres methods with only optionals so,
     // even if the request is parsed and the `params` field was omitted its nice to
     // turn it to be Some(Value) so the job of gathering inputs for calling the inner
