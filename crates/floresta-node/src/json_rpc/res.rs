@@ -1,9 +1,25 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+//! Response types for floresta's JSON-RPC server.
+//!
+//! This module is split into two main sections:
+//!
+//! - [`jsonrpc_interface`] — Protocol-level types that implement the
+//!   [`JSON-RPC 2.0 specification`]: the [`Response`] /
+//!   [`RpcError`] envelope, standard error code constants, and the [`JsonRpcError`] enum that
+//!   maps every floresta-specific failure into the appropriate JSON-RPC error code and HTTP
+//!   status.
+//!
+//! - **Serialization structs** (outside the inner module) — Rust representations of the JSON
+//!   objects returned by individual RPC methods (`getblockchaininfo`, `getrawtransaction`,
+//!   `getblock`, etc.). These structs are `Serialize`/`Deserialize` and mirror the Bitcoin Core
+//!   JSON schema where applicable.
+//!
+//! [`JSON-RPC 2.0 specification`]: https://www.jsonrpc.org/specification
+//! [`Response`]: jsonrpc_interface::Response
+//! [`RpcError`]: jsonrpc_interface::RpcError
+//! [`JsonRpcError`]: jsonrpc_interface::JsonRpcError
 
-use core::fmt;
 use core::fmt::Debug;
-use core::fmt::Display;
-use core::fmt::Formatter;
 
 use corepc_types::v30::GetBlockVerboseOne;
 use serde::Deserialize;
@@ -25,6 +41,8 @@ pub mod jsonrpc_interface {
     use serde::Deserialize;
     use serde::Serialize;
     use serde_json::Value;
+
+    use crate::json_rpc::server::SERIALIZATION_EXPECT;
 
     pub type RpcResult = std::result::Result<Value, JsonRpcError>;
 

@@ -31,7 +31,6 @@ use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
-use crate::json_rpc::server::SERIALIZATION_EXPECT;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
@@ -63,15 +62,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub fn get_rescan_interval(
         &self,
         use_timestamp: bool,
-        start: Option<u32>,
-        stop: Option<u32>,
-        confidence: Option<RescanConfidence>,
+        start: u32,
+        stop: u32,
+        confidence: RescanConfidence,
     ) -> Result<(u32, u32), JsonRpcError> {
-        let start = start.unwrap_or(0u32);
-        let stop = stop.unwrap_or(0u32);
-
         if use_timestamp {
-            let confidence = confidence.unwrap_or(RescanConfidence::Medium);
             // `get_block_height_by_timestamp` already does the time validity checks.
 
             let start_height = self.get_block_height_by_timestamp(start, &confidence)?;
