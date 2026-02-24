@@ -3,7 +3,7 @@
 //! This module is split into two main sections:
 //!
 //! - [`jsonrpc_interface`] — Protocol-level types that implement the
-//!   [JSON-RPC 2.0 specification](https://www.jsonrpc.org/specification): the [`Response`] /
+//!   [`JSON-RPC 2.0 specification`]: the [`Response`] /
 //!   [`RpcError`] envelope, standard error code constants, and the [`JsonRpcError`] enum that
 //!   maps every floresta-specific failure into the appropriate JSON-RPC error code and HTTP
 //!   status.
@@ -13,6 +13,7 @@
 //!   `getblock`, etc.). These structs are `Serialize`/`Deserialize` and mirror the Bitcoin Core
 //!   JSON schema where applicable.
 //!
+//! [`JSON-RPC 2.0 specification`]: https://www.jsonrpc.org/specification
 //! [`Response`]: jsonrpc_interface::Response
 //! [`RpcError`]: jsonrpc_interface::RpcError
 //! [`JsonRpcError`]: jsonrpc_interface::JsonRpcError
@@ -39,6 +40,8 @@ pub mod jsonrpc_interface {
     use serde::Deserialize;
     use serde::Serialize;
     use serde_json::Value;
+
+    use crate::json_rpc::server::SERIALIZATION_EXPECT;
 
     pub type RpcResult = std::result::Result<Value, JsonRpcError>;
 
