@@ -18,7 +18,7 @@ class ElectrumClient(BaseClient):
 
     def block_header(self, block_hash: str):
         """
-        Return a block header, given its hash.
+        Return the hash of a block, given it's hash.
         """
         return self.request("blockchain.block.header", [block_hash])
 

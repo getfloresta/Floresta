@@ -126,10 +126,47 @@ pub(crate) enum InflightRequests {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+/// Different types of connections to a peer. This enum encapsulates the information we
+/// have available at the time of opening.
+///
+/// WARN: We do not support "inbound" kind.
 pub enum ConnectionKind {
+    /// These are the default connections that we use to connect with the network. There
+    /// are no restriction on what is relayed; by default we relay blocks, addresses &
+    /// transactions.
+    ///
+    /// We automatically attempt to open [NodeContext::MAX_FULL_RELAY_PEERS]
+    /// using addresses from our [AddressMan].
+    OutboundFullRelay(ServiceFlags),
+
+    /// We open manual connections to addresses that users explicitly requested via the
+    /// addnode RPC or the `--connect` configuration options.
+    ///
+    /// Even if a manual connection is misbehaving, we do not automatically disconnect
+    /// or add it to our discouragement filter.
+    Manual,
+
+    /// Feeler connections are short-lived connections made to check whether a node is alive.
+    ///
+    /// We make these connections approximately every [NodeContext::FEELER_INTERVAL].
     Feeler,
-    Regular(ServiceFlags),
+
+    /// These connections are used to quickly learn about blocks with a higher degree of certainty.
+    ///
+    /// We automatically attempt to open [NodeContext::MAX_BLOCK_RELAY_ONLY_ANCHORS]. Then
+    /// addresses from our [AddressMan] if [NodeContext::MAX_BLOCK_RELAY_ONLY_ANCHORS] isn't
+    /// reached yet.
+    BlockRelayOnly(ServiceFlags),
+
+    /// Additional block-relay-only connection beyond the usual quotas used when the chain tip
+    /// has not been advanced for over [NodeContext::ASSUME_STALE] minutes.
     Extra,
+
+    /// AddrFetch connections are short lived connections used to solicit addresses from peers.
+    ///
+    /// These are initiated to addresses submitted via the seednode command line argument, or
+    /// under certain conditions when the [AddressMan] is empty.
+    AddrFetch,
 }
 
 impl Serialize for ConnectionKind {
@@ -138,9 +175,12 @@ impl Serialize for ConnectionKind {
         S: serde::Serializer,
     {
         match self {
+            ConnectionKind::OutboundFullRelay(_) => serializer.serialize_str("outbound-full-relay"),
+            ConnectionKind::BlockRelayOnly(_) => serializer.serialize_str("block-relay-only"),
+            ConnectionKind::Extra => serializer.serialize_str("block-relay-only"),
+            ConnectionKind::Manual => serializer.serialize_str("manual"),
+            ConnectionKind::AddrFetch => serializer.serialize_str("addr-fetch"),
             ConnectionKind::Feeler => serializer.serialize_str("feeler"),
-            ConnectionKind::Regular(_) => serializer.serialize_str("regular"),
-            ConnectionKind::Extra => serializer.serialize_str("extra"),
         }
     }
 }

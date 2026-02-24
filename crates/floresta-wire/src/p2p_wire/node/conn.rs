@@ -60,8 +60,12 @@ where
 
     pub(crate) fn create_connection(&mut self, kind: ConnectionKind) -> Result<(), WireError> {
         let required_services = match kind {
-            ConnectionKind::Regular(services) => services,
-            _ => ServiceFlags::NONE,
+            ConnectionKind::Feeler
+            | ConnectionKind::AddrFetch
+            | ConnectionKind::Extra
+            | ConnectionKind::Manual => ServiceFlags::NONE,
+            ConnectionKind::OutboundFullRelay(services)
+            | ConnectionKind::BlockRelayOnly(services) => services,
         };
 
         let address = self
@@ -110,7 +114,7 @@ where
         // or if we are connecting to a utreexo peer, since utreexod doesn't support V2 yet.
         let is_fixed = self.fixed_peer.is_some();
         let allow_v1 = self.config.allow_v1_fallback
-            || kind == ConnectionKind::Regular(UTREEXO.into())
+            || kind == ConnectionKind::OutboundFullRelay(UTREEXO.into())
             || is_fixed;
 
         self.open_connection(kind, peer_id, address, allow_v1)?;
@@ -129,9 +133,12 @@ where
 
     /// Creates a new outgoing connection with `address`.
     ///
-    /// `kind` may or may not be a [`ConnectionKind::Feeler`], a special connection type
-    /// that is used to learn about good peers, but are not kept after handshake
-    /// (others are [`ConnectionKind::Regular`] and [`ConnectionKind::Extra`]).
+    /// `kind` may or may not be a [ConnectionKind::Feeler] (special connection types that
+    /// is used to learn about good peers, but are not kept after handshake) or
+    /// [ConnectionKind::AddrFetch] (a type to learn about addresses in node
+    /// initialization), [ConnectionKind::OutboundFullRelay] (a type that accept all
+    /// kind of data), [ConnectionKind::BlockRelayOnly] (a type that accept only
+    /// blocks) and [ConnectionKind::Extra] (a type used when we have a stale tip).
     ///
     /// We will always try to open a V2 connection first. If the `allow_v1_fallback` is set,
     /// we may retry the connection with the old V1 protocol if the V2 connection fails.
@@ -210,7 +217,9 @@ where
 
         match kind {
             ConnectionKind::Feeler => self.last_feeler = Instant::now(),
-            ConnectionKind::Regular(_) => self.last_connection = Instant::now(),
+            ConnectionKind::OutboundFullRelay(_) | ConnectionKind::BlockRelayOnly(_) => {
+                self.last_connection = Instant::now()
+            }
             _ => {}
         }
 
@@ -545,7 +554,7 @@ where
 
         for address in anchors {
             self.open_connection(
-                ConnectionKind::Regular(UTREEXO.into()),
+                ConnectionKind::OutboundFullRelay(UTREEXO.into()),
                 address.id,
                 address,
                 // Using V1 transport fallback as utreexo nodes have limited support
@@ -558,6 +567,9 @@ where
 
     // === MAINTENANCE ===
 
+    /// Maybe open a new p2p connection given some required [ServiceFlags]. If the desired
+    /// connection do not exceed the amount of [NodeContext::MAX_OUTGOING_PEERS], we can add it as a
+    /// [ConnectionKind::OutboundFullRelay] one, otherwise, will be a [ConnectionKind::BlockRelayOnly].
     pub(crate) fn maybe_open_connection(
         &mut self,
         required_service: ServiceFlags,
@@ -577,8 +589,19 @@ where
         let needs_utreexo = required_service.has(service_flags::UTREEXO.into());
         self.maybe_use_hardcoded_addresses(needs_utreexo);
 
-        let connection_kind = ConnectionKind::Regular(required_service);
-        if self.peers.len() < T::MAX_OUTGOING_PEERS {
+        // Finally, create the connection with the peer
+        let full_relay_peers_count = self
+            .peers
+            .iter()
+            .filter(|(_, view)| matches!(view.kind, ConnectionKind::OutboundFullRelay(_)))
+            .count();
+
+        if full_relay_peers_count < T::MAX_OUTGOING_PEERS {
+            let connection_kind = if self.peers.len() < T::MAX_FULL_RELAY_PEERS {
+                ConnectionKind::OutboundFullRelay(required_service)
+            } else {
+                ConnectionKind::BlockRelayOnly(required_service)
+            };
             self.create_connection(connection_kind)?;
         }
 
@@ -589,7 +612,14 @@ where
         if self.added_peers.is_empty() {
             return Ok(());
         }
+
+        // Added peers has own quota
+        if self.added_peers.len() >= T::MAX_MANUAL_PEERS {
+            return Ok(());
+        }
+
         let peers_count = self.peer_id_count;
+
         for added_peer in self.added_peers.clone() {
             let matching_peer = self.peers.values().find(|peer| {
                 self.to_addr_v2(peer.address) == added_peer.address && peer.port == added_peer.port
@@ -611,12 +641,8 @@ where
                 );
 
                 // Finally, open the connection with the node
-                self.open_connection(
-                    ConnectionKind::Regular(ServiceFlags::NONE),
-                    peers_count as usize,
-                    address,
-                    added_peer.v1_fallback,
-                )?
+                let kind = ConnectionKind::Manual;
+                self.open_connection(kind, peers_count as usize, address, added_peer.v1_fallback)?;
             }
         }
         Ok(())

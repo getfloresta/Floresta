@@ -10,7 +10,7 @@ import os
 import signal
 import contextlib
 from enum import Enum
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Literal
 
 from test_framework.daemon import ConfigP2P
 from test_framework.daemon.bitcoin import BitcoinDaemon
@@ -300,7 +300,10 @@ class Node:
         return response
 
     def connect_node(
-        self, node: "Node", method: str = "add", v2transport: bool = False
+        self,
+        node: Literal[NodeType.FLORESTAD, NodeType.UTREEXOD, NodeType.BITCOIND],
+        method: str = "add",
+        v2transport: bool = False,
     ):
         """
         Connect to another node.

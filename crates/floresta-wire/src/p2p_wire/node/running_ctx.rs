@@ -564,15 +564,17 @@ where
     /// This function checks how many time has passed since our last tip update, if it's
     /// been more than 15 minutes, try to update it.
     fn check_for_stale_tip(&mut self) -> Result<(), WireError> {
-        warn!("Potential stale tip detected, trying extra peers");
+        warn!("Potential stale tip detected, will try using extra outbound peer");
 
         // this catches an edge-case where all our utreexo peers are gone, and the GetData
         // times-out. That yields an error, but doesn't ask the block again. Our last_block_request
         // will be pointing to a block that will never arrive, so we basically deadlock.
-        self.last_block_request = self.chain.get_validation_index().unwrap();
+        self.last_block_request = self.chain.get_validation_index()?;
+
         // update this or we'll get this warning every second after 15 minutes without a block,
         // until we get a new block.
         self.last_tip_update = Instant::now();
+
         self.create_connection(ConnectionKind::Extra)?;
         self.send_to_random_peer(
             NodeRequest::GetHeaders(self.chain.get_block_locator().unwrap()),
@@ -675,7 +677,11 @@ where
                         );
                         self.inflight.remove(&InflightRequests::Headers);
 
-                        let peer_info = self.peers.get(&peer).cloned().expect("Peer not found");
+                        let peer_info = match self.peers.get(&peer).cloned() {
+                            Some(peer) => peer,
+                            None => return Err(WireError::PeerNotFound),
+                        };
+
                         let is_extra = matches!(peer_info.kind, ConnectionKind::Extra);
 
                         if is_extra {
@@ -685,24 +691,47 @@ where
                                 return Ok(());
                             }
 
-                            // this peer got us a new block, we should disconnect one of our regular peers
-                            // and keep this one.
-                            let peer_to_disconnect = self
+                            // this peer got us a new block, we should disconnect one
+                            // of our OutboundFullRelay/BlockRelayOnly peers
+                            let full_relay_count = self
                                 .peers
                                 .iter()
-                                .filter(|(_, info)| matches!(info.kind, ConnectionKind::Regular(_)))
+                                .filter(|(_, info)| {
+                                    matches!(info.kind, ConnectionKind::OutboundFullRelay(_))
+                                })
+                                .count();
+
+                            // If we have space for OutboundFullRelay, use it
+                            let wants_full = full_relay_count < RunningNode::MAX_FULL_RELAY_PEERS;
+
+                            match self
+                                .peers
+                                .iter()
+                                .filter(|(_, info)| {
+                                    if wants_full {
+                                        matches!(info.kind, ConnectionKind::OutboundFullRelay(_))
+                                    } else {
+                                        matches!(info.kind, ConnectionKind::BlockRelayOnly(_))
+                                    }
+                                })
                                 .min_by_key(|(k, _)| self.get_peer_score(**k))
-                                .map(|(peer, _)| *peer);
+                                .map(|(peer, _)| *peer)
+                            {
+                                Some(extra_peer_id) => {
+                                    // disconnect the peer with the lowest score
+                                    self.send_to_peer(extra_peer_id, NodeRequest::Shutdown)?;
 
-                            // disconnect the peer with the lowest score
-                            if let Some(peer) = peer_to_disconnect {
-                                self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                                    // update the peer info
+                                    self.peers.entry(peer).and_modify(|info| {
+                                        info.kind = if wants_full {
+                                            ConnectionKind::OutboundFullRelay(peer_info.services)
+                                        } else {
+                                            ConnectionKind::BlockRelayOnly(peer_info.services)
+                                        }
+                                    });
+                                }
+                                None => return Err(WireError::PeerNotFound),
                             }
-
-                            // update the peer info
-                            self.peers.entry(peer).and_modify(|info| {
-                                info.kind = ConnectionKind::Regular(peer_info.services);
-                            });
                         }
 
                         for header in headers.iter() {
@@ -721,7 +750,7 @@ where
 
                         // update the peer info
                         self.peers.entry(peer).and_modify(|info| {
-                            info.kind = ConnectionKind::Regular(peer_info.services);
+                            info.kind = ConnectionKind::OutboundFullRelay(peer_info.services);
                         });
                     }
 
