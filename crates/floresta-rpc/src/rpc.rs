@@ -144,6 +144,12 @@ pub trait FlorestaRPC {
     fn list_descriptors(&self) -> Result<Vec<String>>;
     /// Sends a ping to all peers, checking if they are still alive
     fn ping(&self) -> Result<()>;
+
+    /// Returns information about all known chain tips in the block tree
+    ///
+    /// This includes the main chain tip and any orphaned branches. Each tip includes
+    /// its height, hash, branch length (distance to the main chain), and validation status.
+    fn get_chain_tips(&self) -> Result<Vec<ChainTip>>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -335,5 +341,9 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn ping(&self) -> Result<()> {
         self.call("ping", &[])
+    }
+
+    fn get_chain_tips(&self) -> Result<Vec<rpc_types::ChainTip>> {
+        self.call("getchaintips", &[])
     }
 }
