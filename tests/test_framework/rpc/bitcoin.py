@@ -46,3 +46,15 @@ class BitcoinRPC(BaseRPC):
         """
         address = "bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch"
         return self.generate_block_to_address(nblocks, address)
+
+    def get_chain_tips(self):
+        """Returns information about all known chain tips in the block tree"""
+        return self.perform_request("getchaintips")
+
+    def invalidate_block(self, blockhash: str):
+        """Marks a block as invalid"""
+        return self.perform_request("invalidateblock", params=[blockhash])
+
+    def submit_header(self, hexdata: str):
+        """Submits a raw block header as a candidate chain tip"""
+        return self.perform_request("submitheader", params=[hexdata])

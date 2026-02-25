@@ -313,7 +313,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getblockstats
     // getchainstates
 
-    // getchaintips
     pub(super) fn get_chain_tips(&self) -> Result<Vec<ChainTip>, JsonRpcError> {
         let tips = self
             .chain
@@ -337,6 +336,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 });
                 continue;
             }
+
             let tip_height = self
                 .chain
                 .get_block_height(&tip)
