@@ -351,8 +351,8 @@ impl Mempool {
     /// Get all transactions that were in the mempool for more than 1 hour, if any
     pub fn get_stale(&mut self) -> Vec<Txid> {
         self.transactions
-            .iter()
-            .filter_map(|(_, tx)| {
+            .values()
+            .filter_map(|tx| {
                 let txid = tx.transaction.compute_txid();
                 match tx.time.elapsed() > Duration::from_secs(3600) {
                     true => Some(txid),
