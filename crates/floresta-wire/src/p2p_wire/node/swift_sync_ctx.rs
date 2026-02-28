@@ -1,12 +1,8 @@
 //! A node that downloads and validates the blockchain, but skips utreexo proofs as they aren't
 //! needed to validate the UTXO set with the SwiftSync method.
 
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -23,6 +19,7 @@ use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::service_flags;
+use hintsfile::Hintsfile;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use rustreexo::accumulator::stump::Stump;
@@ -67,6 +64,9 @@ pub struct SwiftSync {
     /// equal than the theoretical supply limit at that height.
     supply: Amount,
 
+    /// The target height for the currently used SwiftSync hints.
+    stop_height: u32,
+
     /// Height at which SwiftSync was aborted, if any.
     ///
     /// We abort when either the hints are found to be invalid or the current chain is invalid (we
@@ -100,12 +100,12 @@ where
     Chain: ThreadSafeChain,
     WireError: From<Chain::Error>,
 {
-    /// Parses the SwiftSync hints file and returns the [`Hints`] struct.
-    fn parse_hints_file(datadir: &str, network: Network) -> Hints {
+    /// Parses the SwiftSync hints file and returns an in-memory [`Hintsfile`] representation.
+    fn parse_hints_file(datadir: &str, network: Network) -> Hintsfile {
         let path = format!("{datadir}/{network}.hints");
 
-        let hints_file = File::open(path).expect("invalid hints file path");
-        Hints::from_file(hints_file)
+        let mut file = File::open(path).expect("invalid hints file path");
+        Hintsfile::from_reader(&mut file).expect("couldn't read hints file")
     }
 
     /// Generates a random salt for this SwiftSync session.
@@ -127,7 +127,7 @@ where
 
     /// Computes the next blocks to request, and sends a GETDATA request, advancing
     /// `last_block_request` up to the SwiftSync hints `stop_height`.
-    fn get_blocks_to_download(&mut self, stop_height: u32) {
+    fn get_blocks_to_download(&mut self) {
         // If this request would make our inflight queue too long, postpone it
         if !self.can_request_more_blocks() || self.was_aborted() {
             return;
@@ -138,7 +138,8 @@ where
 
         for _ in 0..SwiftSync::BLOCKS_PER_GETDATA {
             let next_height = self.last_block_request + 1;
-            if next_height > stop_height {
+
+            if next_height > self.context.stop_height {
                 // We need to reach it but not exceed it
                 break;
             }
@@ -162,7 +163,7 @@ where
     }
 
     /// Starts SwiftSync processing for up to `MAX_PARALLEL_WORKERS` pending blocks.
-    fn pump_swiftsync(&mut self, hints: &mut Hints) -> Result<(), WireError> {
+    fn pump_swiftsync(&mut self, hints: &mut Hintsfile) -> Result<(), WireError> {
         let processing = self
             .blocks
             .values()
@@ -202,7 +203,7 @@ where
         &mut self,
         block_hash: BlockHash,
         block_height: u32,
-        hints: &mut Hints,
+        hints: &mut Hintsfile,
     ) -> Result<(), WireError> {
         debug!("processing block {block_hash}");
         let entry = self
@@ -213,7 +214,12 @@ where
         if entry.processing_since.is_some() {
             return Ok(()); // already being processed
         }
-        let unspent_indexes: HashSet<u64> = hints.get_indexes(block_height).into_iter().collect();
+
+        let Some(block_hints) = hints.take_indices(block_height) else {
+            error!("We tried processing block {block_height} but its hints are missing");
+            return Ok(());
+        };
+        let unspent_indexes: HashSet<u32> = block_hints.into_iter().collect();
 
         // Start the processing timer
         entry.processing_since = Some(Instant::now());
@@ -260,10 +266,10 @@ where
         // Parse the hints file and randomly fill the SwiftSync salt for this session
         let mut hints = Self::parse_hints_file(&self.datadir, self.network);
 
-        // Generate the random salt
+        self.context.stop_height = hints.stop_height();
         self.context.salt = Self::generate_salt();
 
-        info!("Performing SwiftSync up to height {}", hints.stop_height);
+        info!("Performing SwiftSync up to height {}", hints.stop_height());
 
         let mut ticker = time::interval(SwiftSync::MAINTENANCE_TICK);
         // If we fall behind, don't "catch up" by running maintenance repeatedly
@@ -308,7 +314,7 @@ where
     /// Returns `LoopControl::Break` if we need to break the main `SwiftSync` loop, which may
     /// happen if the kill signal was set, we successfully finished SwiftSync, or we need to abort
     /// operation due to a validation error.
-    async fn maintenance_tick(&mut self, hints: &mut Hints) -> LoopControl {
+    async fn maintenance_tick(&mut self, hints: &mut Hintsfile) -> LoopControl {
         if *self.kill_signal.read().await {
             return LoopControl::Break;
         }
@@ -322,8 +328,10 @@ where
 
         // If we have reached the SwiftSync stop height, we aren't waiting for inflight requested
         // blocks, and there's no in-memory block being processed, we have finished.
-        if self.last_block_request == hints.stop_height && self.unprocessed_blocks() == 0 {
-            self.handle_stop_height_reached(hints.stop_height);
+        let finished_requesting = self.last_block_request == self.context.stop_height;
+
+        if finished_requesting && self.unprocessed_blocks() == 0 {
+            self.handle_stop_height_reached();
             return LoopControl::Break;
         }
 
@@ -355,7 +363,7 @@ where
 
         try_and_log!(self.pump_swiftsync(hints));
 
-        self.get_blocks_to_download(hints.stop_height);
+        self.get_blocks_to_download();
         LoopControl::Continue
     }
 
@@ -363,7 +371,8 @@ where
     /// zero and supply is correct. On success marks the chain assumed and exits IBD.
     ///
     /// If one of the two invariants fails, it sets the `abort_height` field.
-    fn handle_stop_height_reached(&mut self, stop_height: u32) {
+    fn handle_stop_height_reached(&mut self) {
+        let stop_height = self.context.stop_height;
         let final_agg = self.context.agg;
         let final_supply = self.context.supply;
 
@@ -395,7 +404,7 @@ where
     async fn handle_message(
         &mut self,
         msg: NodeNotification,
-        hints: &mut Hints,
+        hints: &mut Hintsfile,
     ) -> Result<(), WireError> {
         match msg {
             NodeNotification::FromUser(request, responder) => {
@@ -446,7 +455,7 @@ where
                         self.blocks.insert(hash, inflight_block);
 
                         self.pump_swiftsync(hints)?;
-                        self.get_blocks_to_download(hints.stop_height);
+                        self.get_blocks_to_download();
                     }
 
                     PeerMessages::Ready(version) => {
@@ -479,7 +488,7 @@ where
         result: WorkerResult,
         block_hash: BlockHash,
         height: u32,
-        hints: &mut Hints,
+        hints: &mut Hintsfile,
     ) -> Result<(), WireError> {
         // This block has already been processed: open space for a new worker
         let block = self
@@ -600,93 +609,5 @@ where
             metrics.block_height.set(height.into());
             metrics.avg_block_processing_time.set(avg);
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct Hints {
-    pub(crate) map: BTreeMap<u32, u64>,
-    pub(crate) file: File,
-    pub(crate) stop_height: u32,
-}
-
-impl Hints {
-    // # Panics
-    //
-    // Panics when expected data is not present, or the hintfile overflows the maximum blockheight
-    pub fn from_file(mut file: File) -> Self {
-        let mut map = BTreeMap::new();
-        let mut magic = [0; 4];
-        file.read_exact(&mut magic).unwrap();
-        assert_eq!(magic, [0x55, 0x54, 0x58, 0x4f]);
-        let mut ver = [0; 1];
-        file.read_exact(&mut ver).unwrap();
-        if u8::from_le_bytes(ver) != 0x00 {
-            core::panic!("Unsupported file version.");
-        }
-        let mut stop_height = [0; 4];
-        file.read_exact(&mut stop_height).expect("empty file");
-        let stop_height = u32::from_le_bytes(stop_height);
-        for _ in 1..=stop_height {
-            let mut height = [0; 4];
-            file.read_exact(&mut height)
-                .expect("expected kv pair does not exist.");
-            let height = u32::from_le_bytes(height);
-            let mut file_pos = [0; 8];
-            file.read_exact(&mut file_pos)
-                .expect("expected kv pair does not exist.");
-            let file_pos = u64::from_le_bytes(file_pos);
-            map.insert(height, file_pos);
-        }
-        Self {
-            map,
-            file,
-            stop_height,
-        }
-    }
-
-    /// Get the stop height of the hint file.
-    pub fn stop_height(&self) -> u32 {
-        self.stop_height
-    }
-
-    /// # Panics
-    ///
-    /// If there are no offset present at that height, aka an overflow, or the entry has already
-    /// been fetched.
-    pub fn get_indexes(&mut self, height: u32) -> Vec<u64> {
-        let file_pos = self
-            .map
-            .get(&height)
-            .cloned()
-            .expect("block height overflow");
-
-        // Move the file cursor to the correct byte offset
-        self.file
-            .seek(SeekFrom::Start(file_pos))
-            .expect("missing file position.");
-
-        // Read the next 4 bytes (little-endian) which store how many bits follow
-        let mut bits_arr = [0; 4];
-        self.file.read_exact(&mut bits_arr).unwrap();
-        let num_bits = u32::from_le_bytes(bits_arr);
-
-        let mut unspents = Vec::new();
-
-        let mut curr_byte: u8 = 0;
-        for bit_pos in 0..num_bits {
-            let leftovers = bit_pos % 8;
-            if leftovers == 0 {
-                let mut single_byte_arr = [0; 1];
-                self.file.read_exact(&mut single_byte_arr).unwrap();
-                curr_byte = u8::from_le_bytes(single_byte_arr);
-            }
-
-            // Check current bit in curr_byte; if it's 1, push this txout index
-            if ((curr_byte >> leftovers) & 0x01) == 0x01 {
-                unspents.push(bit_pos as u64);
-            }
-        }
-        unspents
     }
 }

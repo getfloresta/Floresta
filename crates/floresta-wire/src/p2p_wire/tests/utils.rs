@@ -40,7 +40,6 @@ use zstd;
 
 use crate::address_man::AddressMan;
 use crate::node::running_ctx::RunningNode;
-use crate::node::swift_sync_ctx::Hints;
 use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node::ConnectionKind;
@@ -447,36 +446,57 @@ mod tests {
     use bitcoin::hashes::Hash;
     use bitcoin::BlockHash;
     use floresta_common::bhash;
+    use hintsfile::Hintsfile;
 
     use super::make_block_invalid;
     use super::signet_blocks;
     use super::signet_headers;
     use super::signet_roots;
-    use crate::p2p_wire::tests::utils::Hints;
 
-    fn load_test_hints() -> Hints {
-        let file = File::open("./src/p2p_wire/tests/test_data/bitcoin.hints").unwrap();
-        Hints::from_file(file)
+    /*
+    fn build_new_hints() {
+        use hintsfile::{EliasFano, HintsfileBuilder};
+        let mut file = File::create("./src/p2p_wire/tests/test_data/bitcoin.hints").unwrap();
+        let mut builder = HintsfileBuilder::new(&mut file)
+            .initialize(175)
+            .unwrap();
+
+        for height in 1..=175 {
+            let unspent_indices = match height {
+                9 => Vec::new(),      // The single UTXO in this block is spent later
+                170 => vec![0, 1, 2], // Contains the transaction spending the height-9 UTXO
+                _ => vec![0],         // Other blocks have just a coinbase output (here unspent)
+            };
+            let ef = EliasFano::compress(&unspent_indices);
+            builder.append(ef).unwrap();
+        }
+        builder.finish().unwrap();
+    }
+    */
+
+    fn load_test_hints() -> Hintsfile {
+        let mut file = File::open("./src/p2p_wire/tests/test_data/bitcoin.hints").unwrap();
+        Hintsfile::from_reader(&mut file).unwrap()
     }
 
     #[test]
     #[should_panic]
     fn test_hints_file_genesis() {
-        let mut hints = load_test_hints();
-        let _ = hints.get_indexes(0);
+        let hints = load_test_hints();
+        hints.indices_at_height(0).unwrap();
     }
 
     #[test]
     #[should_panic]
     fn test_hints_file_after_stop_height() {
-        let mut hints = load_test_hints();
-        let _ = hints.get_indexes(176);
+        let hints = load_test_hints();
+        hints.indices_at_height(176).unwrap();
     }
 
     #[test]
     fn test_hints_file_shape() {
-        let mut hints = load_test_hints();
-        assert_eq!(hints.stop_height, 175);
+        let hints = load_test_hints();
+        assert_eq!(hints.stop_height(), 175);
 
         for height in 1..=175 {
             let unspent_indices = match height {
@@ -485,7 +505,7 @@ mod tests {
                 _ => vec![0],         // Other blocks have just a coinbase output (here unspent)
             };
 
-            assert_eq!(hints.get_indexes(height), unspent_indices);
+            assert_eq!(hints.indices_at_height(height).unwrap(), unspent_indices);
         }
     }
 

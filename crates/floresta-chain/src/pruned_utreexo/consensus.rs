@@ -224,7 +224,7 @@ impl Consensus {
     pub fn verify_block_transactions_swiftsync(
         transactions: &[Transaction],
         txids: Vec<Txid>,
-        unspent_indexes: HashSet<u64>,
+        unspent_indexes: HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
         assert_eq!(transactions.len(), txids.len());
@@ -263,14 +263,20 @@ impl Consensus {
 
             let mut spent_vouts = Vec::new();
             for (vout, out) in transaction.output.iter().enumerate() {
+                // Special case: unspendable outputs do not count for the block `output_index`
+                if Self::is_unspendable(&out.script_pubkey) {
+                    unspent_amount += out.value;
+                    continue;
+                }
+
+                // According to the hints, is this output unspent? If not, add it to the aggregator
                 let hinted_unspent = unspent_indexes.contains(&output_index);
 
-                if Self::is_unspendable(&out.script_pubkey) || hinted_unspent {
+                if hinted_unspent {
                     unspent_amount += out.value;
                 } else {
                     spent_vouts.push(vout as u32);
                 }
-
                 output_index += 1;
             }
             // Only add spent outputs to the aggregator
@@ -518,7 +524,7 @@ impl Consensus {
         &self,
         block: &Block,
         height: u32,
-        unspent_indexes: HashSet<u64>,
+        unspent_indexes: HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
         let txids = self.check_block(block, height)?;

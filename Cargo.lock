@@ -1100,6 +1100,7 @@ dependencies = [
  "floresta-common",
  "floresta-compact-filters",
  "floresta-mempool",
+ "hintsfile",
  "metrics",
  "rand",
  "rustls",
@@ -1342,6 +1343,12 @@ name = "hex_lit"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3011d1213f159867b13cfd6ac92d2cd5f1345762c63be3554e84092d85a50bbd"
+
+[[package]]
+name = "hintsfile"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "906bf5ca3a86021616220a3722d59dd1dd2640a1a5b9d07a3845e772574b323a"
 
 [[package]]
 name = "http"
