@@ -241,12 +241,14 @@ where
         periodic_job!(
             self.last_connection => self.check_connections(),
             SyncNode::TRY_NEW_CONNECTION,
+            no_log,
         );
 
         // Open new feeler connection periodically
         periodic_job!(
             self.last_feeler => self.open_feeler_connection(),
             SyncNode::FEELER_INTERVAL,
+            no_log,
         );
 
         try_and_log!(self.check_for_timeout());

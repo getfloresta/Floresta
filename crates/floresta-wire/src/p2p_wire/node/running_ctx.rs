@@ -410,6 +410,7 @@ where
         periodic_job!(
             self.last_connection => self.check_connections(),
             RunningNode::TRY_NEW_CONNECTION,
+            no_log,
         );
 
         // Check if some of our peers have timed out a request
@@ -419,6 +420,7 @@ where
         periodic_job!(
             self.last_feeler => self.open_feeler_connection(),
             RunningNode::FEELER_INTERVAL,
+            no_log,
         );
 
         // The jobs below need a connected peer to work

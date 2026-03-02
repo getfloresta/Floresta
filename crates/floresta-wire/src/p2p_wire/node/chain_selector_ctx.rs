@@ -842,12 +842,14 @@ where
         periodic_job!(
             self.last_connection => self.maybe_open_connection(ServiceFlags::NONE),
             ChainSelector::TRY_NEW_CONNECTION,
+            no_log,
         );
 
         // Open new feeler connection periodically
         periodic_job!(
             self.last_feeler => self.open_feeler_connection(),
             ChainSelector::FEELER_INTERVAL,
+            no_log,
         );
 
         if let ChainSelectorState::LookingForForks(start) = self.context.state {
