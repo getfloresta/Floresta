@@ -70,8 +70,9 @@ pub trait NodeContext {
     /// How often we send our addresses to our peers
     const SEND_ADDRESSES_INTERVAL: u64 = 60 * 60; // 1 hour
 
-    /// How long should we wait for a peer to respond our connection request
-    const CONNECTION_TIMEOUT: u64 = 30; // 30 seconds
+    /// How long should we wait for a peer to respond our connection request. This shouldn't be
+    /// greater than `TRY_NEW_CONNECTION` in order to clear timed-out requests at the same pace.
+    const CONNECTION_TIMEOUT: u64 = 10; // 10 seconds
 
     /// How many blocks we can ask in the same request
     const BLOCKS_PER_GETDATA: usize = 5;
@@ -81,6 +82,9 @@ pub trait NodeContext {
 
     /// How often we perform the main loop maintenance tasks (checking for timeouts, peers, etc.)
     const MAINTENANCE_TICK: Duration = Duration::from_secs(1);
+
+    /// How many connections we try at once
+    const NEW_CONNECTIONS_BATCH_SIZE: usize = 4;
 
     fn get_required_services(&self) -> ServiceFlags {
         ServiceFlags::NETWORK

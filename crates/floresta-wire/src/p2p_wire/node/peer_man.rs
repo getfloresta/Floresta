@@ -247,6 +247,27 @@ where
             return Ok(());
         }
 
+        let good_peers_count = self.connected_peers();
+        if good_peers_count > T::MAX_OUTGOING_PEERS {
+            // Don't allow our node to have more than T::MAX_OUTGOING_PEERS, unless this is a
+            // manual peer, those can exceed our quota
+            if version.kind != ConnectionKind::Manual {
+                debug!(
+                    "Already have {} peers, disconnecting peer to avoid blowing up our max of {}",
+                    good_peers_count,
+                    T::MAX_OUTGOING_PEERS
+                );
+
+                self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                // this prevents logging "peer xx disconnected"
+                self.peers
+                    .entry(peer)
+                    .and_modify(|peer| peer.state = PeerStatus::Awaiting);
+
+                return Ok(());
+            }
+        }
+
         info!(
             "New peer id={} version={} blocks={} services={}",
             version.id, version.user_agent, version.blocks, version.services

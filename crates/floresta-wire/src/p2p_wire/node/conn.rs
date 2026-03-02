@@ -129,7 +129,11 @@ where
         if self.fixed_peer.is_some() {
             return Ok(());
         }
-        self.create_connection(ConnectionKind::Feeler)?;
+
+        for _ in 0..T::NEW_CONNECTIONS_BATCH_SIZE {
+            self.create_connection(ConnectionKind::Feeler)?;
+        }
+
         Ok(())
     }
 
@@ -581,6 +585,9 @@ where
     ) -> Result<(), WireError> {
         // try to connect with manually added peers
         self.maybe_open_connection_with_added_peers()?;
+        if self.connected_peers() >= T::MAX_OUTGOING_PEERS {
+            return Ok(());
+        }
 
         let connection_kind = ConnectionKind::Regular(required_service);
 
@@ -599,8 +606,9 @@ where
         let needs_utreexo = required_service.has(service_flags::UTREEXO.into());
         self.maybe_use_hardcoded_addresses(needs_utreexo);
 
-        if self.connected_peers() < T::MAX_OUTGOING_PEERS {
-            self.create_connection(connection_kind)?;
+        for _ in 0..T::NEW_CONNECTIONS_BATCH_SIZE {
+            // Ignore the error so we don't break out of the loop
+            let _ = self.create_connection(connection_kind);
         }
 
         Ok(())

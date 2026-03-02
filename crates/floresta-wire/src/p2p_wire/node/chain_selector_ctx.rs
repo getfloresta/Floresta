@@ -139,7 +139,10 @@ pub enum PeerCheck {
 
 impl NodeContext for ChainSelector {
     const REQUEST_TIMEOUT: u64 = 60; // Ban peers stalling our IBD
-    const TRY_NEW_CONNECTION: u64 = 1; // Try creating connections more aggressively
+
+    // Since we don't have any peers when this starts, we use a more aggressive batch
+    // size to make sure we get our MAX_OUTGOING_CONNECTIONS ASAP
+    const NEW_CONNECTIONS_BATCH_SIZE: usize = 12;
 
     fn get_required_services(&self) -> ServiceFlags {
         ServiceFlags::NETWORK | service_flags::UTREEXO.into() | service_flags::UTREEXO_FILTER.into()
