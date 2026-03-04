@@ -25,6 +25,7 @@ rustls = { version = "=0.23.40", default-features = false, features = ["ring", "
 rustreexo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha3 = { version = "0.10", default-features = false, features = ["asm"] }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 ureq = { version = "=3.3.0", features = ["socks-proxy", "json", "rustls-no-provider"], default-features = false }
