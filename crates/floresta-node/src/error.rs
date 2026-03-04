@@ -6,7 +6,7 @@ use floresta_chain::BlockchainError;
 use floresta_chain::FlatChainstoreError;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::IterableFilterStoreError;
-use floresta_watch_only::kv_database::KvDatabaseError;
+use floresta_watch_only::sqlite_database::SqliteDatabaseError;
 use floresta_watch_only::WatchOnlyError;
 use tokio_rustls::rustls::pki_types;
 
@@ -74,10 +74,10 @@ pub enum FlorestadError {
     InvalidDataDir(String),
 
     /// Obtaining a lock on the data directory.
-    CouldNotOpenKvDatabase(KvDatabaseError),
+    CouldNotOpenSqliteDatabase(SqliteDatabaseError),
 
     /// Initializing the watch-only wallet.
-    CouldNotInitializeWallet(WatchOnlyError<KvDatabaseError>),
+    CouldNotInitializeWallet(WatchOnlyError<SqliteDatabaseError>),
 
     /// Setting up the watch-only wallet.
     CouldNotSetupWallet(String),
@@ -102,7 +102,7 @@ pub enum FlorestadError {
     InvalidProvidedXpub(String, slip132::Error),
 
     /// Failed to obtain the wallet cache.
-    CouldNotObtainWalletCache(WatchOnlyError<KvDatabaseError>),
+    CouldNotObtainWalletCache(WatchOnlyError<SqliteDatabaseError>),
 
     /// Failed to push a descriptor to the wallet.
     CouldNotPushDescriptor(String),
@@ -171,8 +171,8 @@ impl std::fmt::Display for FlorestadError {
             FlorestadError::InvalidDataDir(path) => {
                 write!(f, "Data directory doesn't exist or is not writable: {path}")
             }
-            FlorestadError::CouldNotOpenKvDatabase(err) => {
-                write!(f, "Cannot open a key-value database: {err}")
+            FlorestadError::CouldNotOpenSqliteDatabase(err) => {
+                write!(f, "Could not open the sqlite database: {err}")
             }
             FlorestadError::CouldNotInitializeWallet(err) => {
                 write!(f, "Could not initialize wallet: {err}")
@@ -253,5 +253,8 @@ impl_from_error!(TomlParsing, toml::de::Error);
 impl_from_error!(BlockValidation, BlockValidationErrors);
 impl_from_error!(AddressParsing, bitcoin::address::ParseError);
 impl_from_error!(Miniscript, miniscript::Error);
-impl_from_error!(CouldNotObtainWalletCache, WatchOnlyError<KvDatabaseError>);
+impl_from_error!(
+    CouldNotObtainWalletCache,
+    WatchOnlyError<SqliteDatabaseError>
+);
 impl std::error::Error for FlorestadError {}
