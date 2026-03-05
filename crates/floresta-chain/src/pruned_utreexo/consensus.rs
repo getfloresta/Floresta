@@ -16,6 +16,7 @@ use bitcoin::script;
 use bitcoin::Amount;
 use bitcoin::Block;
 use bitcoin::CompactTarget;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::Target;
@@ -74,6 +75,14 @@ pub struct Consensus {
     /// The parameters of the chain we are validating, it is usually hardcoded
     /// constants. See [ChainParams] for more information.
     pub parameters: ChainParams,
+}
+
+impl From<Network> for Consensus {
+    fn from(network: Network) -> Self {
+        Consensus {
+            parameters: network.into(),
+        }
+    }
 }
 
 impl Consensus {
@@ -646,8 +655,8 @@ mod tests {
         }
     }
 
-    /// Modifies a block to have an invalid output script (txdata is tampered with)
-    fn make_block_invalid(block: &mut Block) {
+    /// Modifies a block to have a different output script (txdata is tampered with).
+    fn mutate_block(block: &mut Block) {
         let mut rng = OsRng;
 
         let tx = block.txdata.choose_mut(&mut rng).unwrap();
@@ -659,14 +668,43 @@ mod tests {
         *byte += 1;
     }
 
+    /// Test helper to update the witness commitment in a block, assuming txdata was modified.
+    /// This ensures `block` is not considered mutated, so we can exercise other error cases.
+    fn update_witness_commitment(block: &mut Block) -> Option<()> {
+        const MAGIC: [u8; 6] = [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+        let coinbase = &block.txdata[0];
+
+        // Commitment is in the last coinbase output that starts with magic bytes.
+        let pos = coinbase.output.iter().rposition(|out| {
+            let spk = out.script_pubkey.as_bytes();
+            spk.len() >= 38 && spk[0..6] == MAGIC
+        })?;
+
+        // Witness reserved value is in coinbase input witness.
+        let witness_rv: &[u8; 32] = {
+            let mut it = coinbase.input[0].witness.iter();
+            match (it.next(), it.next()) {
+                (Some(rv), None) => rv.try_into().ok()?,
+                _ => return None,
+            }
+        };
+
+        let root = block.witness_root()?;
+        let c = *Block::compute_witness_commitment(&root, witness_rv).as_byte_array();
+
+        block.txdata[0].output[pos].script_pubkey.as_mut_bytes()[6..38].copy_from_slice(&c);
+        Some(())
+    }
+
+    /// Decode and deserialize a zstd-compressed block in the given file path.
+    fn decode_block(file_path: &str) -> Block {
+        let block_file = File::open(file_path).unwrap();
+        let block_bytes = zstd::decode_all(block_file).unwrap();
+        deserialize(&block_bytes).unwrap()
+    }
+
     #[test]
     fn test_check_merkle_root() {
-        fn decode_block(file_path: &str) -> Block {
-            let block_file = File::open(file_path).unwrap();
-            let block_bytes = zstd::decode_all(block_file).unwrap();
-            deserialize(&block_bytes).unwrap()
-        }
-
         let blocks = [
             genesis_block(Network::Bitcoin),
             genesis_block(Network::Testnet),
@@ -687,12 +725,53 @@ mod tests {
             }
 
             // Modifying the txdata should invalidate the block
-            make_block_invalid(&mut block);
+            mutate_block(&mut block);
 
             assert!(!block.check_merkle_root());
             if Consensus::check_merkle_root(&block).is_some() {
                 panic!("merkle roots shouldn't match");
             }
+        }
+    }
+
+    #[test]
+    fn test_block_too_big() {
+        let height = 866_342;
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        // This block is close but below to the max weight
+        assert_eq!(block.weight().to_wu(), 3_993_209);
+
+        let consensus = Consensus::from(Network::Bitcoin);
+        consensus.check_block(&block, height).expect("valid block");
+
+        // Modify the block by adding one transaction that makes it exceed the weight limit
+        let mut script_out = ScriptBuf::default();
+        for _ in 0..1_636 {
+            script_out.push_opcode(OP_NOP);
+        }
+        let dummy_out = txout!(1, script_out);
+        let dummy_in = txin!(dummy_outpoint());
+        let dummy_tx = build_tx(vec![dummy_in], vec![dummy_out]);
+
+        block.txdata.insert(1, dummy_tx);
+
+        // Update the witness commitment, and then the merkle root, which depends on the former
+        update_witness_commitment(&mut block).expect("should be able to update");
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        // This block is now just over the weight limit, by one unit!
+        assert_eq!(block.weight().to_wu(), 4_000_001);
+        assert!(block.weight() > Weight::MAX_BLOCK);
+        assert_eq!(Weight::MAX_BLOCK.to_wu(), 4_000_000);
+
+        // The txdata commitments match
+        assert!(block.check_merkle_root());
+        assert!(block.check_witness_commitment());
+        Consensus::check_merkle_root(&block).expect("merkle root matches");
+
+        match consensus.check_block(&block, height) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::BlockTooBig)) => (),
+            other => panic!("We should have `BlockValidationErrors::BlockTooBig`, got {other:?}"),
         }
     }
 
