@@ -302,7 +302,7 @@ async fn handle_json_rpc_request(
             .expect("GetTxOutProof implements serde"))
         }
 
-        "getrawtransaction" => {
+        "gettransaction" => {
             let txid = get_hash(&params, 0, "txid")?;
             let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
 
