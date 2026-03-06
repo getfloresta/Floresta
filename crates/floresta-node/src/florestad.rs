@@ -149,10 +149,10 @@ pub struct Config {
     /// is the address that we'll listen for incoming connections.
     pub zmq_address: Option<String>,
 
-    /// A node to connect to
+    /// Nodes to connect to
     ///
-    /// If this option is provided, we'll connect **only** to this node.
-    pub connect: Option<String>,
+    /// If this option is provided, we'll connect **only** to these nodes.
+    pub connect: Option<Vec<String>>,
 
     #[cfg(feature = "json-rpc")]
     /// The address our json-rpc should listen to

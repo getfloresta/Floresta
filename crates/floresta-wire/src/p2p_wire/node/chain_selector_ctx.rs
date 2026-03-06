@@ -818,8 +818,8 @@ where
             return true;
         }
 
-        if self.fixed_peer.is_some() && connected_peers >= 1 {
-            return true;
+        if let Some(ref fixed_peers) = self.fixed_peer {
+            return connected_peers >= 1.min(fixed_peers.len());
         }
 
         connected_peers >= ChainSelector::MAX_OUTGOING_PEERS
