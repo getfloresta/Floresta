@@ -265,7 +265,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
 
     // 4. Networking Configuration
     pub(crate) socks5: Option<Socks5StreamBuilder>,
-    pub(crate) fixed_peer: Option<LocalAddress>,
+    pub(crate) fixed_peer: Option<Vec<LocalAddress>>,
 
     // 5. Time and Event Tracking
     pub(crate) inflight: HashMap<InflightRequests, (u32, Instant)>,
@@ -346,7 +346,14 @@ where
         let fixed_peer = config
             .fixed_peer
             .as_ref()
-            .map(|address| Self::resolve_connect_host(address, Self::get_port(config.network)))
+            .map(|addresses| {
+                addresses
+                    .iter()
+                    .map(|address| {
+                        Self::resolve_connect_host(address, Self::get_port(config.network))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
             .transpose()?;
 
         Ok(UtreexoNode {

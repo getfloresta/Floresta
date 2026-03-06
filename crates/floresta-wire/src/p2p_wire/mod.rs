@@ -26,9 +26,9 @@ pub struct UtreexoNodeConfig {
     pub compact_filters: bool,
     /// Fixed peers to connect to. Defaults to None.
     ///
-    /// If you want to connect to a specific peer, you can set this to a string with the
+    /// If you want to connect to specific peers, you can set this to a list of strings with the
     /// format `ip:port`. For example, `localhost:8333`.
-    pub fixed_peer: Option<String>,
+    pub fixed_peer: Option<Vec<String>>,
     /// Maximum ban score. Defaults to 100.
     ///
     /// If a peer misbehaves, we increase its ban score. If the ban score reaches this value,
