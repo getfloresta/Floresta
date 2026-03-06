@@ -22,17 +22,22 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
+use super::res::jsonrpc_interface::JsonRpcError;
 use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
-use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
+use crate::json_rpc::server::SERIALIZATION_EXPECT;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
-        let is_genesis = self.chain.get_block_hash(0).unwrap().eq(&hash);
+        let is_genesis = self
+            .chain
+            .get_block_hash(0)
+            .map_err(|_| JsonRpcError::Chain)?
+            .eq(&hash);
 
         if is_genesis {
             return Ok(genesis_block(self.network));
@@ -51,7 +56,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .wallet
             .get_height(txid)
             .ok_or(JsonRpcError::TxNotFound)?;
-        let blockhash = self.chain.get_block_hash(height).unwrap();
+        let blockhash = self
+            .chain
+            .get_block_hash(height)
+            .map_err(|_| JsonRpcError::BlockNotFound)?;
+
         self.chain
             .get_block(&blockhash)
             .map_err(|_| JsonRpcError::BlockNotFound)
@@ -60,17 +69,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub fn get_rescan_interval(
         &self,
         use_timestamp: bool,
-        start: Option<u32>,
-        stop: Option<u32>,
-        confidence: Option<RescanConfidence>,
+        start: u32,
+        stop: u32,
+        confidence: RescanConfidence,
     ) -> Result<(u32, u32), JsonRpcError> {
-        let start = start.unwrap_or(0u32);
-        let stop = stop.unwrap_or(0u32);
-
         if use_timestamp {
-            let confidence = confidence.unwrap_or(RescanConfidence::Medium);
-            // `get_block_height_by_timestamp` already does the time validity checks.
-
             let start_height = self.get_block_height_by_timestamp(start, &confidence)?;
 
             let stop_height = self.get_block_height_by_timestamp(stop, &RescanConfidence::Exact)?;
@@ -163,7 +166,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getbestblockhash
     pub(super) fn get_best_block_hash(&self) -> Result<BlockHash, JsonRpcError> {
-        Ok(self.chain.get_best_block().unwrap().1)
+        Ok(self
+            .chain
+            .get_best_block()
+            .map_err(|_| JsonRpcError::Chain)?
+            .1)
     }
 
     // getblock
@@ -242,10 +249,19 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getblockchaininfo
     pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes, JsonRpcError> {
-        let (height, hash) = self.chain.get_best_block().unwrap();
-        let validated = self.chain.get_validation_index().unwrap();
+        let (height, hash) = self
+            .chain
+            .get_best_block()
+            .map_err(|_| JsonRpcError::Chain)?;
+        let validated = self
+            .chain
+            .get_validation_index()
+            .map_err(|_| JsonRpcError::Chain)?;
         let ibd = self.chain.is_in_ibd();
-        let latest_header = self.chain.get_block_header(&hash).unwrap();
+        let latest_header = self
+            .chain
+            .get_block_header(&hash)
+            .map_err(|_| JsonRpcError::Chain)?;
         let latest_work = latest_header
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
@@ -260,7 +276,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .map(|r| r.to_string())
             .collect();
 
-        let validated_blocks = self.chain.get_validation_index().unwrap();
+        let validated_blocks = self
+            .chain
+            .get_validation_index()
+            .map_err(|_| JsonRpcError::Chain)?;
 
         let validated_percentage = if height != 0 {
             validated_blocks as f32 / height as f32
@@ -286,7 +305,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getblockcount
     pub(super) fn get_block_count(&self) -> Result<u32, JsonRpcError> {
-        Ok(self.chain.get_height().unwrap())
+        self.chain.get_height().map_err(|_| JsonRpcError::Chain)
     }
 
     // getblockfilter
@@ -598,7 +617,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         height: u32,
     ) -> Result<Value, JsonRpcError> {
         if let Some(txout) = self.wallet.get_utxo(&OutPoint { txid, vout }) {
-            return Ok(serde_json::to_value(txout).unwrap());
+            return Ok(serde_json::to_value(txout).expect(SERIALIZATION_EXPECT));
         }
 
         // if we are on IBD, we don't have any filters to find this txout.

@@ -22,8 +22,8 @@ import argparse
 import os
 import subprocess
 from collections import defaultdict
-from threading import Thread
 from queue import Queue
+from threading import Thread
 from time import time
 
 from test_framework.util import Utility
@@ -63,6 +63,7 @@ BASE_TEST_SUITE = [
     ("florestad", "tls"),
     ("example", "electrum"),
     ("floresta-cli", "getblock"),
+    ("florestad", "rpcserver_request_parsing"),
     ("example", "functional"),
     ("floresta-cli", "getmemoryinfo"),
     ("floresta-cli", "getpeerinfo"),
@@ -206,7 +207,6 @@ def run_test_worker(task_queue: Queue, results_queue: Queue, args: argparse.Name
         with open(
             test_log_name, "wt", encoding="utf-8", buffering=args.log_buffer
         ) as log_file:
-
             # Avoid using 'with' for `subprocess.Popen` here, as we need the
             # process to start and stream output immediately for port detection
             # to work correctly. Using 'with' might delay output flushing,
