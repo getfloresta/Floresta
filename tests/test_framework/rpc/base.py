@@ -9,7 +9,6 @@ import json
 import socket
 import time
 import re
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 from abc import ABC, abstractmethod
@@ -40,9 +39,15 @@ class BaseRPC(ABC):
 
     TIMEOUT: int = 15  # seconds
 
-    def __init__(self, config: ConfigRPC):
+    def __init__(self, config: ConfigRPC, log):
         self._config = config
         self._jsonrpc_version: str = self.get_jsonrpc_version()
+        self._log = log
+
+    @property
+    def log(self):
+        """Getter for `log` property"""
+        return self._log
 
     @property
     def config(self) -> ConfigRPC:
@@ -63,15 +68,9 @@ class BaseRPC(ABC):
         """Get the JSON-RPC version used by this RPC connection."""
 
     # pylint: disable=R0801
-    def log(self, message: str):
-        """Log a message to the console"""
-        now = (
-            datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .strftime("%Y-%m-%d %H:%M:%S")
-        )
-
-        print(f"[{self.__class__.__name__.upper()} {now}] {message}")
+    def log_msg(self, message: str):
+        """Format a log message for the console"""
+        return f"[{self.__class__.__name__.upper()}] {message}"
 
     @staticmethod
     def build_log_message(
@@ -144,7 +143,7 @@ class BaseRPC(ABC):
             request["url"], method, params, self._config.user, self._config.password
         )
 
-        self.log(logmsg)
+        self.log.debug(self.log_msg(logmsg))
         response = post(**request)
 
         # If response isnt 200, raise an HTTPError
@@ -163,7 +162,7 @@ class BaseRPC(ABC):
                 message=result["error"]["message"],
             )
 
-        self.log(result["result"])
+        self.log.debug(self.log_msg(result["result"]))
         return result["result"]
 
     def is_socket_listening(self) -> bool:
@@ -182,7 +181,9 @@ class BaseRPC(ABC):
         while time.time() - start < timeout:
             if self.is_socket_listening() == opened:
                 state = "open" if opened else "closed"
-                self.log(f"{self._config.host}:{self._config.port} {state}")
+                self.log.debug(
+                    self.log_msg(f"{self._config.host}:{self._config.port} {state}")
+                )
                 return True
             time.sleep(0.5)
 

@@ -10,8 +10,10 @@ dependencies = [
   "requests>=2.32.3",
   "black>=24.10.0",
   "pylint>=3.3.2",
-  "cryptography>=44.0.2",
-  "pyOpenSSL>=25.0.0"
+  "cryptography>=46.0.5",
+  "pyOpenSSL>=25.0.0",
+  "pytest>=9.0.0",
+  "pytest-xdist>=3.8.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -20,3 +22,36 @@ packages = ["tests/test_framework"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/"]
+python_files = ["*/*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+addopts = [
+    "-v",
+    "-n 4",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "--log-cli-level=DEBUG",
+    "-x"
+]
+
+markers = [
+    "example: marks tests that demonstrate how to use the Floresta test framework",
+    "florestad: marks tests specific to the Florestad daemon",
+    "rpc: marks tests focused on RPC calls",
+]
+
+timeout = 300
+timeout_method = "thread"
+
+
+minversion = "9.0"
+
+filterwarnings = [
+    "error::DeprecationWarning",
+    "error::pytest.PytestCollectionWarning"
+]

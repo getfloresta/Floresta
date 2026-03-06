@@ -15,6 +15,21 @@ check_installed uv
 
 set -e
 
+PRESERVE_DATA=false
+TEST_RUNNER_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+  --preserve-data-dir) PRESERVE_DATA=true ;;
+  --)
+    shift
+    TEST_RUNNER_ARGS+=("$@")
+    break
+    ;;
+  --*) TEST_RUNNER_ARGS+=("$arg") ;;
+  *) TEST_RUNNER_ARGS+=("$arg") ;;
+  esac
+done
+
 if [[ -z "$FLORESTA_TEMP_DIR" ]]; then
 
     # Since its deterministic how we make the setup, we already know where to search for the binaries to be testing.
@@ -25,18 +40,6 @@ fi
 # Clean existing data directories before running the tests
 rm -rf "$FLORESTA_TEMP_DIR/data"
 
-# Detect if --preserve-data-dir is among args
-# and forward args to uv
-PRESERVE_DATA=false
-UV_ARGS=()
-
-for arg in "$@"; do
-    if [[ "$arg" == "--preserve-data-dir" ]]; then
-        PRESERVE_DATA=true
-    else
-        UV_ARGS+=("$arg")
-    fi
-done
 
 # Clean up the logs dir if --preserve-data-dir was not passed
 if [ "$PRESERVE_DATA" = false ]; then
@@ -45,4 +48,4 @@ if [ "$PRESERVE_DATA" = false ]; then
 fi
 
 # Run the tests
-uv run ./tests/test_runner.py "${UV_ARGS[@]}"
+uv run pytest "${TEST_RUNNER_ARGS[@]}"

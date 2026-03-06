@@ -30,12 +30,9 @@ class Utility:
         return os.getenv("FLORESTA_TEMP_DIR")
 
     @staticmethod
-    def get_logs_dir():
+    def get_git_describe():
         """
-        Get the logs directory path for the project.
-
-        Note: This directory is based on the git describe value to
-        separate logs from different commits.
+        Get the output of 'git describe --tags --always' command.
         """
         try:
             git_describe = subprocess.check_output(
@@ -46,23 +43,7 @@ class Utility:
                 "Failed to run 'git describe'. Run this at the Floresta directory."
             ) from exc
 
-        base_dir = Utility.get_integration_test_dir()
-        logs_data_dir = os.path.join(base_dir, "logs", git_describe)
-
-        return logs_data_dir
-
-    @staticmethod
-    def create_data_dirs(data_dir: str, base_name: str, nodes: int) -> list[str]:
-        """
-        Create the data directories for any nodes to be used in the test.
-        """
-        paths = []
-        for i in range(nodes):
-            p = os.path.join(data_dir, "data", base_name, f"node-{i}")
-            os.makedirs(p, exist_ok=True)
-            paths.append(p)
-
-        return paths
+        return git_describe
 
     @staticmethod
     def get_available_random_port_by_range(start: int, end: int):

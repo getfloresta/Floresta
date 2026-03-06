@@ -5,7 +5,7 @@ This module generate proper PKCS#8 private keys and certificate
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple
 
 from cryptography import x509
@@ -56,7 +56,7 @@ def create_pkcs8_self_signed_certificate(
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
 
     # Certificate validity period
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     validity = timedelta(days=validity_days)
 
     # Build and sign certificate
