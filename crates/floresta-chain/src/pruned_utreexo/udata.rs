@@ -204,6 +204,7 @@ pub mod proof_util {
 
     use super::LeafData;
     use crate::prelude::*;
+    use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::consensus::UTREEXO_TAG_V1;
     use crate::pruned_utreexo::utxo_data::UtxoData;
     use crate::BlockchainError;
@@ -296,20 +297,6 @@ pub mod proof_util {
         })
     }
 
-    /// Checks if a script is unspendable either by its length or if it contains the `OP_RETURN` opcode.
-    /// It follows the implementation on Bitcoin Core.
-    fn is_unspendable(script: &ScriptBuf) -> bool {
-        if script.len() > 10_000 {
-            return true;
-        }
-
-        if !script.is_empty() && script.as_bytes()[0] == 0x6a {
-            return true;
-        }
-
-        false
-    }
-
     /// Computes the hash of a leaf node in the utreexo accumulator.
     #[inline]
     fn get_leaf_hashes(
@@ -370,7 +357,7 @@ pub mod proof_util {
             for (vout, output) in tx.output.iter().enumerate() {
                 let utxo_id = (txid, vout as u32);
 
-                if is_unspendable(&output.script_pubkey) || spent.contains(&utxo_id) {
+                if Consensus::is_unspendable(&output.script_pubkey) || spent.contains(&utxo_id) {
                     // Do not add unspendable nor already spent utxos
                     continue;
                 }
