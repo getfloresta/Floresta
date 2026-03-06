@@ -432,7 +432,7 @@ macro_rules! periodic_job {
 
     ($timer:expr => $what:expr, $interval_secs:path,no_log $(,)?) => {{
         if $timer.elapsed() > Duration::from_secs($interval_secs) {
-            $what;
+            let _ = $what;
             $timer = Instant::now();
         }
     }};

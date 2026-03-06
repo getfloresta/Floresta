@@ -139,7 +139,10 @@ pub enum PeerCheck {
 
 impl NodeContext for ChainSelector {
     const REQUEST_TIMEOUT: u64 = 60; // Ban peers stalling our IBD
-    const TRY_NEW_CONNECTION: u64 = 1; // Try creating connections more aggressively
+
+    // Since we don't have any peers when this starts, we use a more aggressive batch
+    // size to make sure we get our MAX_OUTGOING_CONNECTIONS ASAP
+    const NEW_CONNECTIONS_BATCH_SIZE: usize = 12;
 
     fn get_required_services(&self) -> ServiceFlags {
         ServiceFlags::NETWORK | service_flags::UTREEXO.into() | service_flags::UTREEXO_FILTER.into()
@@ -839,12 +842,14 @@ where
         periodic_job!(
             self.last_connection => self.maybe_open_connection(ServiceFlags::NONE),
             ChainSelector::TRY_NEW_CONNECTION,
+            no_log,
         );
 
         // Open new feeler connection periodically
         periodic_job!(
             self.last_feeler => self.open_feeler_connection(),
             ChainSelector::FEELER_INTERVAL,
+            no_log,
         );
 
         if let ChainSelectorState::LookingForForks(start) = self.context.state {
