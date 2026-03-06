@@ -47,8 +47,8 @@ use crate::TransportProtocol;
 /// such as hard-coded peers
 const HARDCODED_ADDRESSES_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
-/// The minimum amount of time between address fetching requests from DNS seeds (2 minutes).
-const DNS_SEED_REQUEST_INTERVAL: Duration = Duration::from_secs(2 * 60);
+/// The minimum amount of time between address fetching requests from DNS seeds (one hour).
+const DNS_SEED_REQUEST_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 impl<T, Chain> UtreexoNode<Chain, T>
 where
