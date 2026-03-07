@@ -1,4 +1,5 @@
 use bitcoin::block::Header;
+use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::consensus::Encodable;
 use bitcoin::constants::genesis_block;
@@ -22,13 +23,20 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
+use super::chain_tip_proof::ChainTipInclusionProof;
 use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
+use super::res::VerifyChainTipProofRes;
+use super::res::VerifyChainTipProofVerbose;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
+
+/// Max hex-encoded proof size (DoS protection).
+/// 4MB based on MAX_INPUTS_PER_BLOCK (24,386) with safety margin.
+const MAX_PROOF_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
@@ -662,5 +670,63 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    pub(super) fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: &str,
+        verbosity: u32,
+    ) -> Result<Value, JsonRpcError> {
+        if proof.len() > MAX_PROOF_SIZE_BYTES {
+            return Err(JsonRpcError::InvalidProof("Proof too large".into()));
+        }
+
+        let tip_proof: ChainTipInclusionProof =
+            deserialize_hex(proof).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+
+        let best = self.get_best_block_hash()?;
+        if tip_proof.proved_at_hash != best {
+            return Err(JsonRpcError::InvalidProof(format!(
+                "Possibly stale proof. Current chain tip is at block {} but proof was generated at block {}",
+                best, tip_proof.proved_at_hash
+            )));
+        }
+
+        let stump = self.chain.acc();
+        let valid = match stump.verify(&tip_proof.proof, &tip_proof.hashes_proven) {
+            Ok(valid) => valid,
+            Err(e) => {
+                return Err(JsonRpcError::InvalidProof(format!(
+                    "Proof verification failed: {}",
+                    e
+                )))
+            }
+        };
+
+        match verbosity {
+            0 => Ok(serde_json::to_value(VerifyChainTipProofRes::Bool(valid))
+                .map_err(|e| JsonRpcError::Serialization(e.to_string()))?),
+            1 => Ok(serde_json::to_value(VerifyChainTipProofRes::Verbose(
+                VerifyChainTipProofVerbose {
+                    valid,
+                    proved_at_hash: tip_proof.proved_at_hash.to_string(),
+                    targets: tip_proof.proof.targets,
+                    num_proof_hashes: tip_proof.proof.hashes.len(),
+                    proof_hashes: tip_proof
+                        .proof
+                        .hashes
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    hashes_proven: tip_proof
+                        .hashes_proven
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                },
+            ))
+            .map_err(|e| JsonRpcError::Serialization(e.to_string()))?),
+            _ => Err(JsonRpcError::InvalidVerbosityLevel),
+        }
     }
 }

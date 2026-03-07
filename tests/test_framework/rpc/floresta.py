@@ -32,3 +32,14 @@ class FlorestaRPC(BaseRPC):
             raise ValueError(f"Invalid getmemoryinfo mode: '{mode}'")
 
         return self.perform_request("getmemoryinfo", params=[mode])
+
+    def verifyutxochaintipinclusionproof(
+        self, proof: str, verbosity: int = None
+    ) -> bool:
+        """
+        Verify Utreexo accumulator proof.
+        """
+        params = [proof]
+        if verbosity is not None:
+            params.append(verbosity)
+        return self.perform_request("verifyutxochaintipinclusionproof", params)
