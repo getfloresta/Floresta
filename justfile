@@ -1,3 +1,4 @@
+
 _default:
     @just --list
 
@@ -30,7 +31,8 @@ build-release:
 # Clean project build directory
 clean:
     cargo clean
-
+    sh contrib/clean_data.sh
+    
 # Execute all tests
 test crate="":
     @just test-doc {{ crate }}
