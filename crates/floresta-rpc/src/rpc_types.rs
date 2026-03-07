@@ -302,6 +302,39 @@ pub enum GetMemInfoRes {
     MallocInfo(String),
 }
 
+/// The validation status of a chain tip
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChainTipStatus {
+    /// The current best chain tip
+    Active,
+
+    /// A fully validated fork that is not the active chain
+    ValidFork,
+
+    /// Headers received but blocks not yet fully validated
+    HeadersOnly,
+
+    /// The chain contains at least one invalid block
+    Invalid,
+}
+
+/// A chain tip returned by the `getchaintips` RPC
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ChainTip {
+    /// The height of this chain tip
+    pub height: u32,
+
+    /// The block hash of this chain tip
+    pub hash: String,
+
+    /// The length of the branch that connects this tip to the main chain (0 for the active tip)
+    pub branchlen: u32,
+
+    /// The validation status of this chain tip
+    pub status: ChainTipStatus,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ActiveCommand {
     pub method: String,

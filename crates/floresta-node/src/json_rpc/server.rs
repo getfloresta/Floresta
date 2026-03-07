@@ -277,6 +277,10 @@ async fn handle_json_rpc_request(
                 .map(|h| serde_json::to_value(h).unwrap())
         }
 
+        "getchaintips" => state
+            .get_chain_tips()
+            .map(|v| serde_json::to_value(v).unwrap()),
+
         "gettxout" => {
             let txid = get_hash(&params, 0, "txid")?;
             let vout = get_numeric(&params, 1, "vout")?;

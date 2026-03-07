@@ -138,6 +138,29 @@ pub struct RpcError {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetTxOutProof(pub Vec<u8>);
 
+/// The validation status of a chain tip
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChainTipStatus {
+    /// The current best chain tip
+    Active,
+    /// A fully validated fork that is not the active chain
+    ValidFork,
+    /// Headers received but blocks not yet fully validated
+    HeadersOnly,
+    /// The chain contains at least one invalid block
+    Invalid,
+}
+
+/// A chain tip returned by the `getchaintips` RPC
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ChainTip {
+    pub height: u32,
+    pub hash: String,
+    pub branchlen: u32,
+    pub status: ChainTipStatus,
+}
+
 #[derive(Debug)]
 pub enum JsonRpcError {
     /// There was a rescan request but we do not have any addresses in the watch-only wallet.
