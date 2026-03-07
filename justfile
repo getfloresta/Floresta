@@ -27,6 +27,13 @@ build:
 build-release:
     cargo build --release
 
+# Compile floresta-common without the std library
+#
+# You need to have the `thumbv7em-none-eabi` target installed (rustup target add thumbv7em-none-eabi)
+build-no-std:
+    cargo build -p floresta-common --target thumbv7em-none-eabi --no-default-features --locked
+    cargo build -p floresta-common --target thumbv7em-none-eabi --no-default-features --features descriptors-no-std --locked
+
 # Clean project build directory
 clean:
     cargo clean

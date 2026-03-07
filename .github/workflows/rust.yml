@@ -146,10 +146,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.81.0
-        with:
-          # Common bare-metal Cortex-M target (no_std: `core` + `alloc`).
-          targets: thumbv7em-none-eabi
+      - name: Install no-std target
+        # Common bare-metal Cortex-M target (no_std: `core` + `alloc`).
+        run: rustup target add thumbv7em-none-eabi
 
       - name: Install ARM GCC (for secp256k1-sys)
         run: |
