@@ -5,11 +5,19 @@ services:
       context: .
       args:
         BUILD_FEATURES: "metrics"
+    command: >-
+      florestad --data-dir /data/.floresta
+      -n ${NETWORK:-bitcoin}
+      --rpc-address 0.0.0.0:8332
+      --electrum-address 0.0.0.0:50001
     ports:
       - 50001:50001
       - 8332:8332
       - 3333:3333
+    tty: true
     restart: unless-stopped
+    volumes:
+      - ${FLORESTA_DATA:-floresta_data}:/data/.floresta
   prometheus:
     image: prom/prometheus
     container_name: prometheus
@@ -20,6 +28,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./metrics/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
   grafana:
     image: grafana/grafana
     container_name: grafana
@@ -31,3 +40,12 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=grafana
     volumes:
       - ./metrics/grafana:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  floresta_data:
+    name: floresta_data
+  prometheus_data:
+    name: prometheus_data
+  grafana_data:
+    name: grafana_data
