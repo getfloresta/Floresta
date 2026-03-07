@@ -7,6 +7,12 @@ see `tests/test_framework/test_framework.py` for more info.
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.constants import (
+    GENESIS_BLOCK_HEIGHT,
+    GENESIS_BLOCK_HASH,
+    GENESIS_BLOCK_DIFFICULTY_INT,
+    GENESIS_BLOCK_LEAF_COUNT,
+)
 
 
 class FunctionalTest(FlorestaTestFramework):
@@ -16,11 +22,6 @@ class FunctionalTest(FlorestaTestFramework):
     In each test class definition, `set_test_params` and `run_test`, say what
     the test do and the expected result in the docstrings
     """
-
-    expected_height = 0
-    expected_block = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-    expected_difficulty = 1
-    expected_leaf_count = 0
 
     def set_test_params(self):
         """
@@ -54,10 +55,10 @@ class FunctionalTest(FlorestaTestFramework):
         # Make assertions with our framework. Avoid usage of
         # native `assert` clauses. For more information, see
         # https://github.com/getfloresta/Floresta/issues/426
-        self.assertEqual(inf_response["height"], FunctionalTest.expected_height)
-        self.assertEqual(inf_response["best_block"], FunctionalTest.expected_block)
-        self.assertEqual(inf_response["difficulty"], FunctionalTest.expected_difficulty)
-        self.assertEqual(inf_response["leaf_count"], FunctionalTest.expected_leaf_count)
+        self.assertEqual(inf_response["height"], GENESIS_BLOCK_HEIGHT)
+        self.assertEqual(inf_response["best_block"], GENESIS_BLOCK_HASH)
+        self.assertEqual(inf_response["difficulty"], GENESIS_BLOCK_DIFFICULTY_INT)
+        self.assertEqual(inf_response["leaf_count"], GENESIS_BLOCK_LEAF_COUNT)
 
         # stop nodes
         self.stop()

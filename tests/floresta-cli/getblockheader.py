@@ -6,6 +6,7 @@ This functional test cli utility to interact with a Floresta node with `getblock
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.constants import GENESIS_BLOCK_HASH
 
 
 class GetBlockheaderHeightZeroTest(FlorestaTestFramework):
@@ -28,7 +29,6 @@ class GetBlockheaderHeightZeroTest(FlorestaTestFramework):
 
     nodes = [-1]
     version = 1
-    blockhash = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
     prev_blockhash = "0000000000000000000000000000000000000000000000000000000000000000"
     merkle_root = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     time = 1296688602
@@ -49,9 +49,7 @@ class GetBlockheaderHeightZeroTest(FlorestaTestFramework):
         self.run_node(self.florestad)
 
         # Test assertions
-        response = self.florestad.rpc.get_blockheader(
-            GetBlockheaderHeightZeroTest.blockhash
-        )
+        response = self.florestad.rpc.get_blockheader(GENESIS_BLOCK_HASH)
         self.assertEqual(response["version"], GetBlockheaderHeightZeroTest.version)
         self.assertEqual(
             response["prev_blockhash"], GetBlockheaderHeightZeroTest.prev_blockhash
