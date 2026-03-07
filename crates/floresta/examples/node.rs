@@ -5,7 +5,7 @@
 //! This will validate all blocks from genesis to the current tip, so it will take a while
 //! to sync.
 
-use std::str::FromStr;
+use core::str::FromStr;
 use std::sync::Arc;
 
 use bitcoin::BlockHash;

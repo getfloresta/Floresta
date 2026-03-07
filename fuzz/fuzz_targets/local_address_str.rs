@@ -1,7 +1,7 @@
 #![no_main]
 
 use core::str;
-use std::str::FromStr;
+use core::str::FromStr;
 
 use floresta_wire::address_man::LocalAddress;
 use libfuzzer_sys::fuzz_target;

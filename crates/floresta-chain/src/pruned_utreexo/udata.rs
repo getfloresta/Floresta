@@ -552,9 +552,7 @@ pub mod proof_util {
 
 #[cfg(test)]
 mod test {
-    extern crate std;
-
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     use bitcoin::blockdata::script;
     use bitcoin::consensus::encode::deserialize_hex;

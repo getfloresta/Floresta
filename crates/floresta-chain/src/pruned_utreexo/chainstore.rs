@@ -21,7 +21,7 @@ use crate::DatabaseError;
 /// likely on disk.
 ///
 /// This trait requires an associated error type that implements [DatabaseError]; a marker trait
-/// satisfied by any `T: core::error::Error + std::fmt::Display`. This is useful to abstract the
+/// satisfied by any `T: core::error::Error + core::fmt::Display`. This is useful to abstract the
 /// database implementation from the blockchain.
 pub trait ChainStore {
     type Error: DatabaseError;

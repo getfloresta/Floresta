@@ -26,13 +26,13 @@ pub mod rpc_types;
 
 #[cfg(all(test, feature = "with-jsonrpc", not(target_os = "windows")))]
 mod tests {
+    use core::str::FromStr;
     use std::fs;
     use std::net::TcpListener;
     use std::path::Path;
     use std::process::Child;
     use std::process::Command;
     use std::process::Stdio;
-    use std::str::FromStr;
     use std::thread::sleep;
     use std::time::Duration;
 

@@ -19,7 +19,7 @@
 #![allow(clippy::manual_is_multiple_of)]
 
 use core::fmt::Debug;
-use std::fmt::Display;
+use core::fmt::Display;
 use std::sync::PoisonError;
 use std::sync::RwLockWriteGuard;
 

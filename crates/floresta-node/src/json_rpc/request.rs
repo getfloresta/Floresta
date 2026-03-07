@@ -27,7 +27,7 @@ pub struct RpcRequest {
 /// methods already handle the case where the parameter is missing or has an
 /// unexpected type, returning an error if so.
 pub mod arg_parser {
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     use serde_json::Value;
 

@@ -1,6 +1,6 @@
 //! Handles different inputs, try to make sense out of it and store a sane descriptor at the end
 
-use std::str::FromStr;
+use core::str::FromStr;
 
 use bitcoin::Address;
 use bitcoin::Network;

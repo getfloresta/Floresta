@@ -1,4 +1,5 @@
-use std::fmt::Debug;
+use core::fmt::Debug;
+use core::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -165,7 +166,7 @@ pub enum PeerError {
     Transport(TransportError),
 }
 
-impl std::fmt::Display for PeerError {
+impl Display for PeerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PeerError::Send => write!(f, "Error while sending to peer"),

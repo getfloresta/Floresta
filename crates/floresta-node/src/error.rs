@@ -1,4 +1,5 @@
 use core::error;
+use core::fmt::Display;
 use std::net::AddrParseError;
 
 use bitcoin::consensus::encode;
@@ -127,7 +128,7 @@ pub enum FlorestadError {
     CouldNotLoadFlatChainStore(BlockchainError),
 }
 
-impl std::fmt::Display for FlorestadError {
+impl Display for FlorestadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FlorestadError::Encode(err) => write!(f, "Encode error: {err}"),

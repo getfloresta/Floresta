@@ -3,10 +3,10 @@
 //! Once our transaction is included in a block, we remove it from the mempool.
 
 use core::error::Error;
+use core::fmt::Display;
+use core::fmt::Formatter;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::fmt::Formatter;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -365,8 +365,8 @@ impl Mempool {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr;
     use std::collections::HashSet;
-    use std::str::FromStr;
 
     use bitcoin::absolute;
     use bitcoin::block;

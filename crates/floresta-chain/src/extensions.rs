@@ -269,6 +269,7 @@ impl WorkExt for Work {
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Display;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -294,7 +295,7 @@ mod tests {
         NotFound,
     }
 
-    impl std::fmt::Display for MockBlockchainError {
+    impl Display for MockBlockchainError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "MockBlockchainError")
         }

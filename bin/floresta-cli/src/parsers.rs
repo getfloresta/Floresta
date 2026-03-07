@@ -1,7 +1,7 @@
 use core::error::Error;
+use core::fmt::Display;
+use core::str::FromStr;
 use std::any::type_name;
-use std::fmt::Display;
-use std::str::FromStr;
 
 #[derive(Debug)]
 /// Collection of errors to deal with parsing.

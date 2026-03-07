@@ -1,6 +1,6 @@
-use std::fmt::Display;
-use std::fmt::Formatter;
-use std::fmt::{self};
+use core::fmt::Display;
+use core::fmt::Formatter;
+use core::fmt::Result;
 use std::io;
 use std::net::IpAddr;
 
@@ -173,7 +173,7 @@ pub enum AddrParseError {
 }
 
 impl Display for AddrParseError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             AddrParseError::InvalidIpv6 => write!(f, "Invalid ipv6"),
             AddrParseError::InvalidIpv4 => write!(f, "Invalid ipv4"),

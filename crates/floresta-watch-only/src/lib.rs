@@ -10,6 +10,7 @@
 
 use core::cmp::Ordering;
 use core::fmt::Debug;
+use core::fmt::Display;
 
 use bitcoin::hashes::sha256;
 use bitcoin::ScriptBuf;

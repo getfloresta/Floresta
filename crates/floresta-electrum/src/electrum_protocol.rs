@@ -933,8 +933,8 @@ macro_rules! get_arg {
 
 #[cfg(test)]
 mod test {
+    use core::str::FromStr;
     use std::io;
-    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
 

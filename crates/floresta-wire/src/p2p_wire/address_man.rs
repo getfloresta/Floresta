@@ -2,6 +2,7 @@
 //! metadata. This module is very important in keeping our node protected against targeted
 //! attacks, like eclipse attacks.
 
+use core::str::FromStr;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::read_to_string;
@@ -9,7 +10,6 @@ use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
