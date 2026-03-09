@@ -216,6 +216,32 @@ impl Encodable for DiskBlockHeader {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The validation status of a chain tip, as tracked by the chain backend
+pub enum ChainTipStatus {
+    /// The current best chain tip
+    Active,
+
+    /// A fully validated fork that is not the active chain
+    ValidFork,
+
+    /// Headers received but blocks not yet fully validated
+    HeadersOnly,
+
+    /// The chain contains at least one invalid block
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// A chain tip with its block hash and validation status
+pub struct ChainTipInfo {
+    /// The block hash of this chain tip
+    pub hash: BlockHash,
+
+    /// The validation status of this chain tip
+    pub status: ChainTipStatus,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Internal representation of the chain we are in
 pub struct BestChain {

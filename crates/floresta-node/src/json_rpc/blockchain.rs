@@ -19,6 +19,7 @@ use corepc_types::v30::GetBlockVerboseOne;
 use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
+use floresta_chain::ChainTipStatus as ChainLevelStatus;
 use miniscript::descriptor::checksum;
 use serde_json::json;
 use serde_json::Value;
@@ -319,52 +320,104 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_chain_tips()
             .map_err(|_| JsonRpcError::Chain)?;
 
-        let (best_height, best_hash) = self
+        let (best_height, _) = self
             .chain
             .get_best_block()
             .map_err(|_| JsonRpcError::Chain)?;
 
-        let mut result = Vec::with_capacity(tips.len());
+        tips.into_iter()
+            .map(|tip| {
+                let status = match tip.status {
+                    ChainLevelStatus::Active => ChainTipStatus::Active,
+                    ChainLevelStatus::ValidFork => ChainTipStatus::ValidFork,
+                    ChainLevelStatus::HeadersOnly => ChainTipStatus::HeadersOnly,
+                    ChainLevelStatus::Invalid => ChainTipStatus::Invalid,
+                };
 
-        for tip in tips {
-            if tip == best_hash {
-                result.push(ChainTip {
-                    height: best_height,
-                    hash: tip.to_string(),
-                    branchlen: 0,
-                    status: ChainTipStatus::Active,
-                });
-                continue;
-            }
+                if matches!(tip.status, ChainLevelStatus::Active) {
+                    return Ok(ChainTip {
+                        height: best_height,
+                        hash: tip.hash.to_string(),
+                        branchlen: 0,
+                        status,
+                    });
+                }
 
-            let tip_height = self
-                .chain
-                .get_block_height(&tip)
-                .map_err(|_| JsonRpcError::Chain)?
-                .ok_or(JsonRpcError::Chain)?;
+                // For tips with known height (ValidFork, HeadersOnly), we
+                // can look up height and fork point directly.  For Invalid
+                // tips the DiskBlockHeader doesn't store the height, so we
+                // walk back through ancestors until we find one whose height
+                // is known and derive the tip height from the distance.
+                let tip_height = match self
+                    .chain
+                    .get_block_height(&tip.hash)
+                    .map_err(|_| JsonRpcError::Chain)?
+                {
+                    Some(h) => h,
+                    None => {
+                        // Walk ancestors to compute height
+                        let mut hash = tip.hash;
+                        let mut depth = 0u32;
+                        loop {
+                            let header = self
+                                .chain
+                                .get_block_header(&hash)
+                                .map_err(|_| JsonRpcError::Chain)?;
+                            let parent = header.prev_blockhash;
+                            depth += 1;
+                            if let Some(parent_h) = self
+                                .chain
+                                .get_block_height(&parent)
+                                .map_err(|_| JsonRpcError::Chain)?
+                            {
+                                break parent_h + depth;
+                            }
+                            hash = parent;
+                        }
+                    }
+                };
 
-            let fork_point = self
-                .chain
-                .get_fork_point(tip)
-                .map_err(|_| JsonRpcError::Chain)?;
+                // Find the fork point: the most recent common ancestor with
+                // the active chain.  Walk back through ancestors and check
+                // whether each block is actually on the active chain by
+                // comparing get_block_hash(height) with the block's hash.
+                // This mirrors Bitcoin Core's FindFork behaviour.
+                let fork_height = {
+                    let mut hash = tip.hash;
+                    let mut h = tip_height;
+                    loop {
+                        // A block is on the active chain when its height is
+                        // within the active chain and the hash at that height
+                        // matches its own hash.
+                        if h <= best_height {
+                            if let Ok(active_hash) = self.chain.get_block_hash(h) {
+                                if active_hash == hash {
+                                    break h;
+                                }
+                            }
+                        }
+                        if h == 0 {
+                            break 0;
+                        }
+                        let header = match self.chain.get_block_header(&hash) {
+                            Ok(hdr) => hdr,
+                            Err(_) => break 0,
+                        };
+                        hash = header.prev_blockhash;
+                        h -= 1;
+                    }
+                };
 
-            let fork_height = self
-                .chain
-                .get_block_height(&fork_point)
-                .map_err(|_| JsonRpcError::Chain)?
-                .ok_or(JsonRpcError::Chain)?;
+                let branchlen = tip_height.saturating_sub(fork_height);
 
-            let branchlen = tip_height.saturating_sub(fork_height);
-
-            result.push(ChainTip {
-                height: tip_height,
-                hash: tip.to_string(),
-                branchlen,
-                status: ChainTipStatus::ValidFork,
-            });
-        }
-
-        Ok(result)
+                Ok(ChainTip {
+                    height: tip_height,
+                    hash: tip.hash.to_string(),
+                    branchlen,
+                    status,
+                })
+            })
+            .collect()
     }
 
     // getchaintxstats

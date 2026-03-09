@@ -34,6 +34,7 @@ use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
 
+use self::chainstore::ChainTipInfo;
 use self::partial_chain::PartialChainState;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
@@ -103,8 +104,14 @@ pub trait BlockchainInterface {
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error>;
 
-    /// Returns all known chain tips, including the best one and forks
-    fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error>;
+    /// Returns all known chain tips, including the active tip and any forks.
+    ///
+    /// Each returned [ChainTipInfo] contains the tip's block hash and its
+    /// [ChainTipStatus], which reflects the validation state of that branch
+    /// (e.g. active, valid fork, headers-only, or invalid).
+    ///
+    /// The first element is always the active chain tip.
+    fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error>;
 
     /// Validates a block according to Bitcoin's rules, without modifying our chain
     fn validate_block(
@@ -335,7 +342,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::update_acc(self, acc, block, height, proof, del_hashes)
     }
 
-    fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {
+    fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error> {
         T::get_chain_tips(self)
     }
 

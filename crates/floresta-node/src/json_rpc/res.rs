@@ -143,7 +143,12 @@ pub struct RpcError {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetTxOutProof(pub Vec<u8>);
 
-/// The validation status of a chain tip
+/// The validation status of a chain tip, serialized with kebab-case for
+/// the `getchaintips` RPC response.
+///
+/// Maps from [ChainTipStatus] in the chain layer.
+///
+/// [ChainTipStatus]: floresta_chain::ChainTipStatus
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChainTipStatus {
