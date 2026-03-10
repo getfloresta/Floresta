@@ -179,6 +179,10 @@ impl Encodable for ScriptPubKeyKind {
 /// to consume a block (delete transactions included in it from the mempool);
 /// or to validate a block.
 pub mod proof_util {
+    use core::fmt;
+    use core::fmt::Display;
+    use core::fmt::Formatter;
+
     use bitcoin::blockdata::script;
     use bitcoin::blockdata::script::Instruction;
     use bitcoin::consensus::Encodable;
@@ -221,6 +225,16 @@ pub mod proof_util {
 
         /// The last instruction in the scriptsig was not an `OP_PUSHBYTES`.
         NotPushBytes,
+    }
+
+    impl Display for LeafErrorKind {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            match self {
+                LeafErrorKind::EmptyStack => write!(f, "Empty stack"),
+                LeafErrorKind::InvalidInstruction(e) => write!(f, "Invalid instruction: {e}"),
+                LeafErrorKind::NotPushBytes => write!(f, "Not push bytes"),
+            }
+        }
     }
 
     /// Error while reconstructing a leaf's scriptPubKey, returned by `process_proof`.

@@ -8,6 +8,10 @@
 //! - Assumed valid blocks for validation optimization
 //! - UTREEXO accumulator state
 //! - Current chain tip and header
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
+
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::BlockHash;
 use bitcoin::Network;
@@ -37,6 +41,17 @@ pub enum BlockchainBuilderError {
 
     /// Error while trying to save initial data.
     Database(Box<dyn DatabaseError>),
+}
+
+impl Display for BlockchainBuilderError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            BlockchainBuilderError::MissingChainstore => write!(f, "Missing chainstore"),
+            BlockchainBuilderError::MissingChainParams => write!(f, "Missing chain parameters"),
+            BlockchainBuilderError::IncompleteTip => write!(f, "Incomplete tip"),
+            BlockchainBuilderError::Database(e) => write!(f, "Database error: {:?}", e),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
