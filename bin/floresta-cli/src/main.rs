@@ -128,6 +128,12 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         Methods::Uptime => serde_json::to_string_pretty(&client.uptime()?)?,
         Methods::ListDescriptors => serde_json::to_string_pretty(&client.list_descriptors()?)?,
         Methods::Ping => serde_json::to_string_pretty(&client.ping()?)?,
+        Methods::InvalidateBlock { blockhash } => {
+            serde_json::to_string_pretty(&client.invalidate_block(blockhash)?)?
+        }
+        Methods::SubmitHeader { hexdata } => {
+            serde_json::to_string_pretty(&client.submit_header(hexdata)?)?
+        }
     })
 }
 
@@ -373,4 +379,22 @@ pub enum Methods {
     /// Result: json null
     #[command(name = "ping")]
     Ping,
+
+    #[doc = include_str!("../../../doc/rpc/invalidateblock.md")]
+    #[command(
+        name = "invalidateblock",
+        about = "Permanently marks a block as invalid, as if it violated a consensus rule.",
+        long_about = Some(include_str!("../../../doc/rpc/invalidateblock.md")),
+        disable_help_subcommand = true
+    )]
+    InvalidateBlock { blockhash: BlockHash },
+
+    #[doc = include_str!("../../../doc/rpc/submitheader.md")]
+    #[command(
+        name = "submitheader",
+        about = "Decodes the given hex data as a block header and submits it as a candidate chain tip if valid.",
+        long_about = Some(include_str!("../../../doc/rpc/submitheader.md")),
+        disable_help_subcommand = true
+    )]
+    SubmitHeader { hexdata: String },
 }

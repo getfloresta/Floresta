@@ -315,6 +315,18 @@ async fn handle_json_rpc_request(
 
         "getroots" => state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
 
+        "invalidateblock" => {
+            let hash = get_hash(&params, 0, "blockhash")?;
+            state.invalidate_block(hash)?;
+            Ok(Value::Null)
+        }
+
+        "submitheader" => {
+            let hex = get_string(&params, 0, "hexdata")?;
+            state.submit_header(hex)?;
+            Ok(Value::Null)
+        }
+
         "findtxout" => {
             let txid = get_hash(&params, 0, "txid")?;
             let vout = get_numeric(&params, 1, "vout")?;
