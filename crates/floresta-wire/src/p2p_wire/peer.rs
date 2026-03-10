@@ -417,6 +417,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         time: Instant,
     ) -> Result<()> {
         self.last_message = time;
+        self.messages += 1;
 
         debug!("Received {} from peer {}", message.command(), self.id);
         match self.state {
