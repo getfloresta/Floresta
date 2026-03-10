@@ -1,3 +1,7 @@
+use core::fmt;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::io;
 
 use bip324::serde::deserialize as deserialize_v2;
@@ -17,9 +21,11 @@ use bitcoin::consensus::Decodable;
 use bitcoin::hashes::sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::HashEngine;
+use bitcoin::hex::DisplayHex;
 use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::message::NetworkMessage;
 use bitcoin::p2p::message::RawNetworkMessage;
+use bitcoin::p2p::message::MAX_MSG_SIZE;
 use bitcoin::p2p::Magic;
 use bitcoin::Network;
 use floresta_common::impl_error_from;
@@ -47,6 +53,46 @@ type TcpWriteTransport = WriteTransport<WriteHalf<TcpStream>>;
 type TransportResult =
     Result<(TcpReadTransport, TcpWriteTransport, TransportProtocol), TransportError>;
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+/// A wrapper type for a network checksum
+///
+/// This checksum accompanies every P2PV1 message to detect corruption.
+/// Computed as the first 4 bytes of `SHA-265d(<msg_payload>)`.
+pub struct P2PV1MessageChecksum([u8; 4]);
+
+impl Display for P2PV1MessageChecksum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_hex())
+    }
+}
+
+impl Debug for P2PV1MessageChecksum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl AsRef<[u8]> for P2PV1MessageChecksum {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl P2PV1MessageChecksum {
+    pub fn from_payload(payload: &[u8]) -> Self {
+        // Compute the `SHA-256d` digest of the message payload.
+        let mut hasher = sha256::Hash::engine();
+        hasher.input(payload);
+        let digest = sha256::Hash::from_engine(hasher);
+        let digest_double = digest.hash_again().to_byte_array();
+
+        // The checksum is the first 4 bytes of the digest.
+        let mut checksum = [0; 4];
+        checksum.copy_from_slice(&digest_double[0..4]);
+        P2PV1MessageChecksum(checksum)
+    }
+}
+
 #[derive(Debug)]
 /// Enum that deals with transport errors
 pub enum TransportError {
@@ -64,6 +110,21 @@ pub enum TransportError {
 
     /// Proxy error
     Proxy(Socks5Error),
+
+    /// Message is too big
+    OversizedMessage {
+        max_size: usize,
+        message_size: usize,
+    },
+
+    /// Peer sent us a corrupted message
+    BadChecksum {
+        expected: P2PV1MessageChecksum,
+        provided: P2PV1MessageChecksum,
+    },
+
+    /// Peer sent us a message with invalid magic bits
+    BadMagicBits { expected: Magic, provided: Magic },
 }
 
 impl std::fmt::Display for TransportError {
@@ -74,6 +135,11 @@ impl std::fmt::Display for TransportError {
             TransportError::SerdeV2(err) => write!(f, "V2 serde error: {err:?}"),
             TransportError::SerdeV1(err) => write!(f, "V1 serde error: {err:?}"),
             TransportError::Proxy(err) => write!(f, "Proxy error: {err:?}"),
+            TransportError::OversizedMessage { max_size, message_size } => write!(f, "Peer sent us an oversized message: size {message_size} is greater than the max of {max_size}"),
+            TransportError::BadChecksum { expected, provided } => write!(f, "Peer sent us a corrupted message: expected {expected}, got {provided}"),
+            TransportError::BadMagicBits { expected, provided } => {
+                write!(f, "Peer sent us a message with invalid magic bits: expected {expected}, got {provided}")
+            }
         }
     }
 }
@@ -86,7 +152,7 @@ impl_error_from!(TransportError, Socks5Error, Proxy);
 
 pub enum ReadTransport<R: AsyncRead + Unpin + Send> {
     V2(R, AsyncProtocolReader),
-    V1(R),
+    V1(R, Network),
 }
 
 pub enum WriteTransport<W: AsyncWrite + Unpin + Send + Sync> {
@@ -99,31 +165,48 @@ pub enum WriteTransport<W: AsyncWrite + Unpin + Send + Sync> {
 pub enum TransportProtocol {
     /// Encrypted V2 protocol defined in BIP-324.
     V2,
+
     /// Original unencrypted V1 protocol.
     V1,
 }
 
 struct V1MessageHeader {
-    _magic: Magic,
-    _command: [u8; 12],
-    length: u32,
-    _checksum: u32,
+    magic: Magic,
+    command: [u8; 12],
+    length: usize,
+    checksum: P2PV1MessageChecksum,
 }
 
 impl Decodable for V1MessageHeader {
     fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
         reader: &mut R,
     ) -> std::result::Result<Self, bitcoin::consensus::encode::Error> {
-        let _magic = Magic::consensus_decode(reader)?;
-        let _command = <[u8; 12]>::consensus_decode(reader)?;
-        let length = u32::consensus_decode(reader)?;
-        let _checksum = u32::consensus_decode(reader)?;
+        let magic = Magic::consensus_decode(reader)?;
+        let command = <[u8; 12]>::consensus_decode(reader)?;
+        let length = u32::consensus_decode(reader)? as usize;
+        let checksum = <[u8; 4]>::consensus_decode(reader)?;
+
         Ok(Self {
-            _checksum,
-            _command,
+            checksum: P2PV1MessageChecksum(checksum),
+            command,
             length,
-            _magic,
+            magic,
         })
+    }
+}
+
+impl Encodable for V1MessageHeader {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut size = 0;
+        size += self.magic.consensus_encode(writer)?;
+        size += self.command.consensus_encode(writer)?;
+        size += (self.length as u32).consensus_encode(writer)?;
+        size += self.checksum.0.consensus_encode(writer)?;
+
+        Ok(size)
     }
 }
 
@@ -185,7 +268,7 @@ async fn try_connection<A: ToSocketAddrs>(
         true => {
             debug!("Using V1 protocol for connection to {peer_addr}");
             Ok((
-                ReadTransport::V1(reader),
+                ReadTransport::V1(reader, network),
                 WriteTransport::V1(writer, network),
                 TransportProtocol::V1,
             ))
@@ -283,7 +366,7 @@ async fn try_proxy_connection<A: ToSocketAddrs>(
         true => {
             info!("Using V1 protocol for proxy connection to {target_addr:?}",);
             Ok((
-                ReadTransport::V1(reader),
+                ReadTransport::V1(reader, network),
                 WriteTransport::V1(writer, network),
                 TransportProtocol::V1,
             ))
@@ -335,13 +418,34 @@ where
 
                 Ok(msg)
             }
-            ReadTransport::V1(reader) => {
+            ReadTransport::V1(reader, network) => {
                 let mut data: Vec<u8> = vec![0; 24];
                 reader.read_exact(&mut data).await?;
 
                 let header: V1MessageHeader = deserialize_partial(&data)?.0;
+                if header.length > MAX_MSG_SIZE {
+                    return Err(TransportError::OversizedMessage {
+                        max_size: MAX_MSG_SIZE,
+                        message_size: header.length,
+                    });
+                }
+                if header.magic != network.magic() {
+                    return Err(TransportError::BadMagicBits {
+                        provided: header.magic,
+                        expected: network.magic(),
+                    });
+                }
+
                 data.resize(24 + header.length as usize, 0);
                 reader.read_exact(&mut data[24..]).await?;
+
+                let checksum = P2PV1MessageChecksum::from_payload(&data[24..]);
+                if header.checksum != checksum {
+                    return Err(TransportError::BadChecksum {
+                        expected: checksum,
+                        provided: header.checksum,
+                    });
+                }
 
                 let msg: RawNetworkMessage = deserialize(&data)?;
                 Ok(msg.into_payload())
