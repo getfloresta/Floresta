@@ -850,6 +850,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
     fn update_tip(&self, best_block: BlockHash, height: u32) {
         let mut inner = write_lock!(self);
+        inner.best_block.validation_index = best_block;
         inner.best_block.best_block = best_block;
         inner.best_block.depth = height;
     }
@@ -1201,23 +1202,23 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
     }
 
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError> {
-        let height = self.get_disk_block_header(&block)?.try_height()?;
+        let height_to_invalidate = self.get_disk_block_header(&block)?.try_height()?;
         let current_height = self.get_height()?;
 
         // Mark all blocks after this one as invalid
-        for h in height..=current_height {
+        for h in height_to_invalidate..=current_height {
             let hash = self.get_block_hash(h)?;
             let header = self.get_block_header(&hash)?;
             let new_header = DiskBlockHeader::InvalidChain(header);
             self.update_header(&new_header)?;
         }
-        // Row back to our previous state. Note that acc doesn't actually change in this case
+        // Roll back to our previous state. Note that acc doesn't actually change in this case
         // only the currently best known block.
-        self.update_tip(
-            self.get_ancestor(&self.get_block_header(&block)?)?
-                .block_hash(),
-            height - 1,
-        );
+        let new_tip = self
+            .get_ancestor(&self.get_block_header(&block)?)?
+            .block_hash();
+
+        self.update_tip(new_tip, height_to_invalidate - 1);
         Ok(())
     }
 
