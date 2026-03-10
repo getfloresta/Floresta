@@ -63,6 +63,11 @@ const GET_UTREEXO_PROOF_CMD: &str = "getuproof";
 /// 10 seconds.
 const ADDRV2_MESSAGE_INTERVAL_SECS: u64 = 10;
 
+/// How many messages/sec a peer is allowed to send.
+///
+/// If a peer sends more than this, we disconnect it.
+const MAX_MSGS_PER_SEC: u64 = 10_000;
+
 #[derive(Debug, PartialEq)]
 enum State {
     None,
@@ -312,7 +317,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 .checked_div(Instant::now().duration_since(self.start_time).as_secs())
                 .unwrap_or(0);
 
-            if msg_sec > 10 {
+            if msg_sec > MAX_MSGS_PER_SEC {
                 error!(
                     "Peer {} is sending us too many messages, disconnecting",
                     self.id
