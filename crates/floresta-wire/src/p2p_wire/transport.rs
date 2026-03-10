@@ -1,7 +1,7 @@
 use core::fmt;
-use std::fmt::Debug;
-use std::fmt::Display;
-use std::fmt::Formatter;
+use core::fmt::Debug;
+use core::fmt::Display;
+use core::fmt::Formatter;
 use std::io;
 
 use bip324::serde::deserialize as deserialize_v2;
@@ -18,6 +18,7 @@ use bitcoin::consensus::deserialize_partial;
 use bitcoin::consensus::encode;
 use bitcoin::consensus::serialize;
 use bitcoin::consensus::Decodable;
+use bitcoin::consensus::Encodable;
 use bitcoin::hashes::sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::HashEngine;
@@ -127,8 +128,8 @@ pub enum TransportError {
     BadMagicBits { expected: Magic, provided: Magic },
 }
 
-impl std::fmt::Display for TransportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for TransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TransportError::Io(err) => write!(f, "IO error: {err:?}"),
             TransportError::Protocol(err) => write!(f, "V2 protocol error: {err:?}"),
@@ -180,7 +181,7 @@ struct V1MessageHeader {
 impl Decodable for V1MessageHeader {
     fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
         reader: &mut R,
-    ) -> std::result::Result<Self, bitcoin::consensus::encode::Error> {
+    ) -> Result<Self, encode::Error> {
         let magic = Magic::consensus_decode(reader)?;
         let command = <[u8; 12]>::consensus_decode(reader)?;
         let length = u32::consensus_decode(reader)? as usize;
@@ -517,5 +518,192 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_transport {
+    use core::error;
+    use core::fmt;
+    use core::fmt::Display;
+    use core::fmt::Formatter;
+    use std::io;
+    use std::io::ErrorKind;
+    use std::pin::Pin;
+    use std::task::Context;
+    use std::task::Poll;
+
+    use bip324::Network;
+    use tokio::io::AsyncRead;
+    use tokio::io::AsyncWrite;
+    use tokio::io::ReadBuf;
+
+    use super::ReadTransport;
+
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct UnexpectedEofError;
+
+    impl Display for UnexpectedEofError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "unexpected eof")
+        }
+    }
+
+    impl error::Error for UnexpectedEofError {}
+
+    #[derive(Debug, Default)]
+    pub struct Reader {
+        data: Vec<u8>,
+    }
+
+    impl AsyncRead for Reader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let size = buf.capacity();
+            if size > self.data.len() {
+                return Poll::Ready(Err(io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    UnexpectedEofError,
+                )));
+            }
+
+            buf.put_slice(&self.data.drain(0..size).collect::<Vec<_>>());
+
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    pub fn create_reader_v1(data: Vec<u8>) -> ReadTransport<Reader> {
+        ReadTransport::V1(Reader { data }, Network::Regtest)
+    }
+
+    pub struct Writer;
+
+    impl AsyncWrite for Writer {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            // No-op writer
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_write_vectored(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bufs: &[io::IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            let len = bufs.iter().map(|buf| buf.len()).sum();
+            // No-op writer
+            Poll::Ready(Ok(len))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bip324::Network;
+    use bitcoin::consensus::serialize;
+    use bitcoin::p2p::message::NetworkMessage;
+    use bitcoin::p2p::message::RawNetworkMessage;
+
+    use super::test_transport::*;
+    use crate::p2p_wire::transport::P2PV1MessageChecksum;
+    use crate::p2p_wire::transport::TransportError;
+    use crate::p2p_wire::transport::V1MessageHeader;
+
+    #[tokio::test]
+    async fn test_oversized_message() {
+        let oversized_message_header = V1MessageHeader {
+            magic: Network::Regtest.magic(),
+            checksum: P2PV1MessageChecksum([0; 4]),
+            command: [0; 12],
+            length: u32::MAX as usize,
+        };
+
+        let data = serialize(&oversized_message_header);
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::OversizedMessage { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_bad_magic() {
+        let bad_magic_msg_header = V1MessageHeader {
+            magic: Network::Signet.magic(),
+            checksum: P2PV1MessageChecksum([0; 4]),
+            command: [0; 12],
+            length: 0,
+        };
+
+        let data = serialize(&bad_magic_msg_header);
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::BadMagicBits { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_bad_checksum() {
+        let payload = NetworkMessage::Ping(0);
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), payload);
+        let mut data = serialize(&message);
+        // mess with the checksum
+        data[23] ^= 1;
+
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::BadChecksum { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_wrong_length() {
+        let payload = NetworkMessage::Ping(0);
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), payload);
+        let mut data = serialize(&message);
+        // make the size look one byte bigger than the actual message is, this will cause an EOF
+        data[16] = 9;
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::Io(_)));
+    }
+
+    #[tokio::test]
+    async fn test_valid_message() {
+        let payload = NetworkMessage::Ping(0);
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), payload);
+        let data = serialize(&message);
+        // make the size look one byte bigger than the actual message is, this will cause an EOF
+        let mut transport_reader = create_reader_v1(data);
+
+        let res = transport_reader
+            .read_message()
+            .await
+            .expect("Message should be a valid ping");
+
+        assert_eq!(res, NetworkMessage::Ping(0));
     }
 }
