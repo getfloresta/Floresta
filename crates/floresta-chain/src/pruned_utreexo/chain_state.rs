@@ -1466,6 +1466,7 @@ mod test {
     use crate::pruned_utreexo::utxo_data::UtxoData;
     use crate::AssumeValidArg;
     use crate::BlockchainError;
+    use crate::ChainStore;
     use crate::FlatChainStore;
 
     fn setup_test_chain(
@@ -1776,5 +1777,92 @@ mod test {
             read_lock!(chain).best_block.best_block,
             headers[1].prev_blockhash
         );
+    }
+
+    /// After connecting FullyValid blocks, invalidating one must roll back the
+    /// validation_index so that `get_validation_index()` still returns a valid
+    /// height. Before the fix, `invalidate_block` left `validation_index`
+    /// pointing at a now-InvalidChain block, causing `get_validation_index()`
+    /// to fail with `BadValidationIndex`.
+    #[test]
+    fn test_invalidateblock_updatesvalidationindex() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        // Connect the first 10 blocks (they become FullyValid)
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+        }
+
+        let expected_height = 10;
+
+        assert_eq!(chain.get_height().unwrap(), expected_height);
+
+        // validation_index should be the same as height.
+        let val_before = chain.get_validation_index().unwrap();
+        assert!(val_before == expected_height);
+
+        // Invalidate block at height 5
+        let hash_at_5 = chain.get_block_hash(5).unwrap();
+
+        chain.invalidate_block(hash_at_5).unwrap();
+
+        assert_eq!(chain.get_height().unwrap(), 4);
+
+        // This is the critical check. Before the commit fixing
+        // the update of validation_index, this will break. Otherwise will pass fine.
+        let validation_index_after = chain.get_validation_index().unwrap();
+        assert!(validation_index_after == 4);
+
+        // The blocks before `hash_at_5`, 4..0 should be FullyValid.
+
+        // check the tip:
+        let val_hash = read_lock!(chain).best_block.validation_index;
+        let val_header = chain.get_disk_block_header(&val_hash).unwrap();
+        assert!(
+            matches!(val_header, DiskBlockHeader::FullyValid(..)),
+            "expected FullyValid, got: {val_header:?}"
+        );
+
+        // check the rest of the blocks.
+        for i in 0..=4 {
+            let val_hash = read_lock!(chain)
+                .chainstore
+                .get_block_hash(i)
+                .unwrap()
+                .unwrap();
+
+            let val_header = chain.get_disk_block_header(&val_hash).unwrap();
+
+            assert!(
+                matches!(val_header, DiskBlockHeader::FullyValid(..)),
+                "expected FullyValid, got: {val_header:?}"
+            );
+        }
+
+        // The blocks after `hash_at_5`, including `hash_at_5`, 5..10 should be InvalidChain.
+        for i in 5..10 {
+            let invalid_hash = read_lock!(chain)
+                .chainstore
+                .get_block_hash(i)
+                .unwrap()
+                .unwrap();
+
+            let invalid_header = chain.get_disk_block_header(&invalid_hash).unwrap();
+
+            assert!(
+                matches!(invalid_header, DiskBlockHeader::InvalidChain(..)),
+                "expected InvalidChain, got: {invalid_header:?}"
+            );
+        }
     }
 }
