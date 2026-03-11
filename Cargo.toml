@@ -56,7 +56,7 @@ kv = "0.24"
 miniscript = { version = "12.3", default-features = false }
 rand = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
-rustreexo = "0.4"
+rustreexo = { git = "https://github.com/mit-dci/rustreexo", rev = "b1080e0cca54e99213cd92e4bcb7743840802a1a" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = { version = "0.10", default-features = false }

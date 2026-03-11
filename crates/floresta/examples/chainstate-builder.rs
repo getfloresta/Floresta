@@ -12,7 +12,7 @@ use floresta_chain::AssumeValidArg;
 use floresta_chain::ChainParams;
 use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::stump::Stump;
 
 const DATA_DIR: &str = "./tmp-db";
 

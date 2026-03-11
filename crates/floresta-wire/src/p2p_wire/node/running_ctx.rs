@@ -18,7 +18,7 @@ use floresta_chain::ThreadSafeChain;
 use floresta_common::service_flags;
 use rand::seq::IteratorRandom;
 use rand::thread_rng;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::stump::Stump;
 use tokio::time;
 use tokio::time::MissedTickBehavior;
 use tracing::debug;

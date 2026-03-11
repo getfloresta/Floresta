@@ -26,6 +26,7 @@ use core::cell::UnsafeCell;
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
@@ -37,9 +38,9 @@ use bitcoin::Work;
 use floresta_common::Channel;
 #[cfg(feature = "metrics")]
 use metrics;
-use rustreexo::accumulator::node_hash::BitcoinNodeHash;
-use rustreexo::accumulator::proof::Proof;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::proof::Proof;
+use rustreexo::stump::Stump;
 use spin::RwLock;
 use tracing::debug;
 use tracing::info;
@@ -576,7 +577,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         };
 
         let mut acc = acc.as_slice();
-        let acc = Stump::deserialize(&mut acc).map_err(BlockchainError::UtreexoError)?;
+        let acc = Stump::deserialize(&mut acc)?;
         Ok(Some(acc))
     }
 
@@ -1000,7 +1001,10 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         acc: Stump,
     ) -> Result<(), Self::Error> {
         // Convert to BitcoinNodeHashes, from rustreexo
-        let del_hashes: Vec<_> = del_hashes.into_iter().map(Into::into).collect();
+        let del_hashes: Vec<_> = del_hashes
+            .into_iter()
+            .map(|hash| BitcoinNodeHash::Some(hash.to_byte_array()))
+            .collect();
 
         if !acc.verify(&proof, &del_hashes)? {
             return Err(BlockValidationErrors::InvalidProof)?;
@@ -1452,8 +1456,8 @@ mod test {
     use floresta_common::assert_ok;
     use floresta_common::bhash;
     use rand::Rng;
-    use rustreexo::accumulator::proof::Proof;
-    use rustreexo::accumulator::stump::Stump;
+    use rustreexo::proof::Proof;
+    use rustreexo::stump::Stump;
 
     use super::BlockchainInterface;
     use super::ChainParams;

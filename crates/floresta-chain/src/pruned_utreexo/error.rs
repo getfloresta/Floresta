@@ -20,6 +20,7 @@ use bitcoin::OutPoint;
 use bitcoin::Txid;
 use floresta_common::impl_error_from;
 use floresta_common::prelude::*;
+use rustreexo::stump::StumpError;
 
 use crate::proof_util::UtreexoLeafError;
 use crate::pruned_utreexo::chain_state_builder::BlockchainBuilderError;
@@ -35,7 +36,7 @@ pub enum BlockchainError {
     BlockValidation(BlockValidationErrors),
     TransactionError(TransactionError),
     InvalidProof,
-    UtreexoError(String),
+    UtreexoError(StumpError),
     UtreexoLeaf(UtreexoLeafError),
     Database(Box<dyn DatabaseError>),
     ConsensusDecode(bitcoin::consensus::encode::Error),
@@ -196,7 +197,7 @@ impl_error_from!(
     ConsensusDecode
 );
 impl_error_from!(BlockchainError, BlockValidationErrors, BlockValidation);
-impl_error_from!(BlockchainError, String, UtreexoError);
+impl_error_from!(BlockchainError, StumpError, UtreexoError);
 
 impl Display for BlockchainError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
