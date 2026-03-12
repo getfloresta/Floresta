@@ -1207,6 +1207,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         }
         // Roll back to our previous state. Note that acc doesn't actually change in this case
         // only the currently best known block.
+
         let new_tip = self
             .get_ancestor(&self.get_block_header(&block)?)?
             .block_hash();
