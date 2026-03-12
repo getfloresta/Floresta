@@ -844,11 +844,20 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(())
     }
 
-    fn update_tip(&self, best_block: BlockHash, height: u32) {
+    /// Updates the chain tip state to point at `best_block` at the given `height`.
+    ///
+    /// This sets both `best_block` and `validation_index` to the same hash,
+    /// so it should only be used when the caller knows the target block is
+    /// fully validated. If `acc` is provided, the in-memory accumulator is
+    /// also replaced.
+    fn update_tip(&self, best_block: BlockHash, height: u32, acc: Option<Stump>) {
         let mut inner = write_lock!(self);
         inner.best_block.validation_index = best_block;
         inner.best_block.best_block = best_block;
         inner.best_block.depth = height;
+        if let Some(unwrapped_acc) = acc {
+            inner.acc = unwrapped_acc
+        }
     }
 
     fn verify_script(&self, height: u32) -> Result<bool, PersistedState::Error> {
@@ -1205,14 +1214,15 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             let new_header = DiskBlockHeader::InvalidChain(header);
             self.update_header(&new_header)?;
         }
-        // Roll back to our previous state. Note that acc doesn't actually change in this case
-        // only the currently best known block.
 
         let new_tip = self
             .get_ancestor(&self.get_block_header(&block)?)?
             .block_hash();
 
-        self.update_tip(new_tip, height_to_invalidate - 1);
+        // Get the acc for the new tip, if theres any.
+        let new_acc = self.get_roots_for_block(height_to_invalidate - 1)?;
+
+        self.update_tip(new_tip, height_to_invalidate - 1, new_acc);
         Ok(())
     }
 
@@ -1774,10 +1784,10 @@ mod test {
         assert_eq!(chain.get_height().unwrap() as usize, random_height - 1);
 
         // update_tip
-        chain.update_tip(headers[1].prev_blockhash, 1);
+        chain.update_tip(headers[1].prev_blockhash, 1, None);
         assert_eq!(
             read_lock!(chain).best_block.best_block,
-            headers[1].prev_blockhash
+            headers[1].prev_blockhash,
         );
     }
 
