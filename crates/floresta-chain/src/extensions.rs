@@ -1,4 +1,7 @@
 use core::cmp::min;
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
 use core::ops::Add;
 
 use bitcoin::block::Header;
@@ -81,6 +84,16 @@ pub enum HeaderExtError {
 
     /// You got an overflow while calculating the chain work.
     ChainWorkOverflow,
+}
+
+impl Display for HeaderExtError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            HeaderExtError::Chain(e) => write!(f, "Chain error: {e}"),
+            HeaderExtError::BlockNotFound => write!(f, "Block not found"),
+            HeaderExtError::ChainWorkOverflow => write!(f, "Chain work overflow"),
+        }
+    }
 }
 
 impl HeaderExt for Header {

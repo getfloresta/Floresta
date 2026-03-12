@@ -3,6 +3,10 @@
 //! It's not meant to use in production, but for the integrated testing framework
 //!
 //! For actual databases that can be used for production code, see [KvDatabase](crate::kv_database::KvDatabase).
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
+
 use bitcoin::hashes::sha256;
 use bitcoin::Txid;
 use floresta_common::prelude::sync::RwLock;
@@ -31,6 +35,14 @@ pub struct MemoryDatabase {
 }
 
 type Result<T> = floresta_common::prelude::Result<T, MemoryDatabaseError>;
+
+impl Display for MemoryDatabaseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            MemoryDatabaseError::PoisonedLock => write!(f, "Poisoned lock"),
+        }
+    }
+}
 
 impl MemoryDatabase {
     fn get_inner(&self) -> Result<sync::RwLockReadGuard<'_, Inner>> {

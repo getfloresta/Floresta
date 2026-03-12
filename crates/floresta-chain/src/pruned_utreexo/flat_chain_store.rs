@@ -69,6 +69,9 @@
 
 extern crate std;
 
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
 use core::mem::size_of;
 use core::num::NonZeroUsize;
 use std::fs::DirBuilder;
@@ -380,6 +383,24 @@ pub enum FlatChainstoreError {
     /// The validation index doesn't have a height. This probably means it is in
     /// a fork or invalid chain
     InvalidValidationIndex,
+}
+
+impl Display for FlatChainstoreError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            FlatChainstoreError::Io(e) => write!(f, "I/O error: {e}"),
+            FlatChainstoreError::BlockNotFound => write!(f, "Block not found"),
+            FlatChainstoreError::IndexIsFull => write!(f, "Index is full"),
+            FlatChainstoreError::DbTooNew(v) => write!(f, "Database too new: {v}"),
+            FlatChainstoreError::Poisoned => write!(f, "Poisoned"),
+            FlatChainstoreError::InvalidMagic(m) => write!(f, "Invalid magic: {m}"),
+            FlatChainstoreError::AccumulatorTooBig => write!(f, "Accumulator too big"),
+            FlatChainstoreError::IndexTooBig => write!(f, "Index too big"),
+            FlatChainstoreError::InvalidMetadataPointer => write!(f, "Invalid metadata pointer"),
+            FlatChainstoreError::DbCorrupted => write!(f, "Database corrupted"),
+            FlatChainstoreError::InvalidValidationIndex => write!(f, "Invalid validation index"),
+        }
+    }
 }
 
 /// Need this to use [FlatChainstoreError] as a [DatabaseError] in [ChainStore]
