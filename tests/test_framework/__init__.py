@@ -10,29 +10,33 @@ The difference is that `florestad` will run under a `cargo run` subprocess, whic
 `add_node_settings`.
 """
 
-import os
-import re
-import sys
-import copy
-import random
-import socket
-import shutil
-import signal
 import contextlib
-import subprocess
+import copy
+import os
+import random
+import re
+import signal
+import socket
+import sys
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Pattern, Tuple, Optional
+from typing import Any, Dict, List, Optional, Pattern, Tuple
 
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
 )
 from test_framework.daemon import ConfigP2P
-from test_framework.rpc import ConfigRPC
+from test_framework.daemon.bitcoin import BitcoinDaemon
+from test_framework.daemon.floresta import FlorestaDaemon
+from test_framework.daemon.utreexo import UtreexoDaemon
 from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
+from test_framework.rpc import ConfigRPC
+from test_framework.rpc.bitcoin import BitcoinRPC
+from test_framework.rpc.floresta import FlorestaRPC
+from test_framework.rpc.utreexo import UtreexoRPC
 from test_framework.util import Utility
 
 
@@ -162,9 +166,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         except Exception as err:
             processes = []
             for node in self._nodes:
-                if node.daemon.is_running:
-                    continue
-
                 # If the node has an RPC server, stop it gracefully
                 # otherwise (maybe the error occurred before the RPC server
                 # is started), try to kill the process with SIGTERM. If that
@@ -202,6 +203,44 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         Tests must override this method to run nodes, etc.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def get_integration_test_dir():
+        """
+        Get path for florestad used in integration tests, generally set on
+        $FLORESTA_TEMP_DIR/binaries.
+
+        If FLORESTA_TEMP_DIR is not set, it is auto-resolved from
+        ``git describe`` so that individual test scripts can run standalone.
+        """
+        from test_framework.setup import (  # pylint: disable=import-outside-toplevel
+            get_temp_dir,
+        )
+
+        return get_temp_dir()
+
+    @staticmethod
+    def create_data_dirs(data_dir: str, base_name: str, nodes: int) -> list[str]:
+        """
+        Create the data directories for any nodes to be used in the test.
+        """
+        paths = []
+        for i in range(nodes):
+            p = os.path.join(data_dir, "data", base_name, f"node-{i}")
+            os.makedirs(p, exist_ok=True)
+            paths.append(p)
+
+        return paths
+
+    @staticmethod
+    def get_available_random_port(start: int, end: int = 65535):
+        """Get an available random port in the range [start, end]"""
+        while True:
+            port = random.randint(start, end)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # Check if the port is available
+                if s.connect_ex(("127.0.0.1", port)) != 0:
+                    return port
 
     def get_test_log_path(self) -> str:
         """

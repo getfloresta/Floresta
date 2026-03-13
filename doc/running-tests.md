@@ -97,192 +97,162 @@ just test-functional "-t floresta-cli -k stop -k ping"
 just test-functional "-t floresta-cli -k getblock"
 ```
 
-#### From helper script
+#### From the test runner directly
 
-We provide a single helper script [run_functional.sh](https://github.com/vinteumorg/Floresta/blob/master/tests/run_functional.sh) that checks build dependencies, builds all required binaries, and runs the tests.
+The test runner handles everything: checking dependencies, building binaries, and running the suite.
 
 Basic usage:
 
 ```bash
-./tests/run_functional.sh
+uv run tests/test_runner.py
 ```
 
 ##### Utreexod
 
-By default, the script will build `utreexod` at the `v0.4.0` tag.
+By default, the runner will build `utreexod` at the `v0.4.0` tag.
 If you want to build a specific release, set the `UTREEXOD_REVISION` environment variable.
 It must be a [valid tag](https://github.com/utreexo/utreexod/tags). For example:
 
 ```bash
-UTREEXOD_REVISION=v0.3.0 ./tests/run_functional.sh
+UTREEXOD_REVISION=v0.3.0 uv run tests/test_runner.py
 ```
 
 ##### Bitcoin-core
 
-By default, the setup script will obtain a runnable `bitcoind` binary in one of three exclusive ways. The default Bitcoin Core version is `30.2`, but you can override this by setting the `BITCOIN_REVISION` environment variable. The three methods are:
-
-1. **Using a user-provided binary**: If the `BITCOIND_EXE` environment variable is set and points to an executable, that exact binary is used. No download or build is attempted, and any `BITCOIN_REVISION` or build-parallelism settings are ignored.
-
-```bash
-    BITCOIND_EXE=/path/to/bitcoind ./tests/run_functional.sh
-```
-
-2. **Downloading a prebuilt binary**: If `BITCOIND_EXE` is not set, the script will try to download a prebuilt Bitcoin Core tarball for the specified `BITCOIN_REVISION`. Prebuilt binaries are available for all platforms and operating systems supported by Bitcoin Core. The supported versions are `30.2`, `29.2`, `28.3` and `27.2`.
-
-```bash
-    BITCOIN_REVISION=28.3 ./tests/run_functional.sh
-```
-
-3. **Building from source**: If no prebuilt binary is available for the platform, operating system, or specified version, the script will clone the Bitcoin Core repository and build `bitcoind` from the specified `BITCOIN_REVISION`. This can be a version tag (e.g., `29.1`) or a branch(e.g., `master`) from the remote repository.
-
-````bash
-    BITCOIN_REVISION=master ./tests/run_functional.sh
-
-Also, if you need to change the number of CPU cores for source builds, use
+By default, the runner will download a prebuilt `bitcoind` (v30.2). If you want to use a different version, configure it with the `BITCOIN_REVISION` environment variable. Also, if you need to change the number of CPU cores for source builds, use
 `BUILD_BITCOIND_NPROCS`. For example:
 
 ```bash
-BUILD_BITCOIND_NPROCS=2 ./tests/run_functional.sh
-````
+BITCOIN_REVISION=28.0 BUILD_BITCOIND_NPROCS=2 uv run tests/test_runner.py
+```
 
 Additionally, you can use some flags:
 
-The `--build` argument will force the script to fetch the `bitcoind` binary again and to build the `utreexod`.
+```bash
+uv run tests/test_runner.py --force-rebuild --preserve-data-dir
+```
 
-The `--release` argument will build the `florestad` binary in release mode, which is optimized for production use. If this flag is not provided, the binary will be built in debug mode by default.
-
-The `--preserve-data-dir` argument will keep the data and logs directories after successfully running the tests
+The `--force-rebuild` flag will force the runner to rebuild all binaries even if they are already present.
+The `--release` flag will build florestad in release mode (default is debug).
+The `--preserve-data-dir` flag will keep the data and logs directories after running the tests
 (this is useful if you want to keep the data for debugging purposes).
 
 Furthermore, you can run a set of specific tests, rather than all at once.
 
 ```bash
 # runs all tests in 'floresta-cli' suite
-./tests/run_functional.sh --test-suite floresta-cli
+uv run tests/test_runner.py --test-suite floresta-cli
 
 # same as above
-./tests/run_functional.sh -t floresta-cli
+uv run tests/test_runner.py -t floresta-cli
 
 # run the stop and ping tests in the floresta-cli suite
-./tests/run_functional.sh --test-suite floresta-cli --test-name stop --test-name ping
+uv run tests/test_runner.py --test-suite floresta-cli --test-name stop --test-name ping
 
 # same as above
-./tests/run_functional.sh -t floresta-cli -k stop -k ping
+uv run tests/test_runner.py -t floresta-cli -k stop -k ping
 
 # run many tests that start with the word `getblock` (getblockhash, getblockheader, etc...)
-./tests/run_functional.sh -t floresta-cli -k getblock
+uv run tests/test_runner.py -t floresta-cli -k getblock
 ```
 
-#### From python utility directly
+#### How the setup works
 
-Additional functional tests are available (minimum python version: 3.12).
-It's not recommended to run them directly, since you will need to manually
-build the binaries yourself and place them at `$FLORESTA_TEMP_DIR/binaries`.
-The advantage is that you can run a specific test suite. For this you'll need to:
+When you run `uv run tests/test_runner.py`, the runner automatically prepares
+everything before executing the test suite. The setup resolves a working directory
+(`FLORESTA_TEMP_DIR`), then obtains three binaries: **florestad**, **utreexod**,
+and **bitcoind**. Each binary is resolved using a three-tier fallback strategy:
 
-- Setup `floresta`/`utreexod` environment;
-- Setup python utility;
-- Run tests from python utility directly;
-- Clean up the environment.
+1. **Environment variable** — if `BITCOIND_EXE` or `UTREEXOD_EXE` is set, the
+   runner copies that executable directly into the binaries directory.
+2. **Prebuilt download** — the runner downloads a prebuilt binary from the
+   project's official release page and verifies its SHA256 checksum.
+3. **Source build** — as a last resort, the runner clones the repository and
+   builds from source.
 
-##### Setup `floresta`/`utreexod` environment
+For **florestad**, the runner always builds from the local source tree via
+`cargo build`. If a binary already exists in the target directory, it is skipped
+unless `--force-rebuild` is passed.
 
-After build the `floresta` and `utreexod` binaries, you'll need to define
-a `FLORESTA_TEMP_DIR` environment variable. This variable points to where
-our functional tests will look for the binaries.
+All binaries are placed under `$FLORESTA_TEMP_DIR/binaries/`.
 
-##### Setup python utility
+#### Manual setup
+
+If you prefer to manage binaries yourself (e.g. from a Nix shell or CI cache),
+you can skip the automatic setup entirely:
+
+1. Pick a working directory and export it:
+
+```bash
+export FLORESTA_TEMP_DIR=/tmp/floresta-func-tests
+mkdir -p "$FLORESTA_TEMP_DIR/binaries"
+```
+
+2. Place the three required binaries there:
+
+```bash
+# florestad — build from the local tree
+cargo build --bin florestad
+ln -sf "$(pwd)/target/debug/florestad" "$FLORESTA_TEMP_DIR/binaries/florestad"
+
+# utreexod — use your own build or a prebuilt binary
+cp /path/to/utreexod "$FLORESTA_TEMP_DIR/binaries/utreexod"
+
+# bitcoind — use your own build or a prebuilt binary
+cp /path/to/bitcoind "$FLORESTA_TEMP_DIR/binaries/bitcoind"
+```
+
+3. Run the tests. The runner will detect existing binaries and skip building:
+
+```bash
+uv run tests/test_runner.py
+```
+
+You can also point directly to external executables without copying:
+
+```bash
+BITCOIND_EXE=/usr/local/bin/bitcoind UTREEXOD_EXE=/usr/local/bin/utreexod \
+  uv run tests/test_runner.py
+```
+
+#### Python development tools
 
 - Recommended: install [uv: a rust-based python package and project manager](https://docs.astral.sh/uv/).
 
-- Configure an isolated environment:
-
-```bash
-# create a virtual environment
-# (it's good to not mess up with your os)
-uv venv
-
-# Alternatively, you can specify a python version (e.g, 3.12),
-uv venv --python 3.12
-
-# activate the python virtual environment
-source .venv/bin/activate
-
-# check if the python path was modified
-which python
-```
-
-- Install module dependencies:
-
-```bash
-# installs dependencies listed in pyproject.toml.
-# in local development environment
-# it do not remove existing packages.
-uv pip install -r pyproject.toml
-
-# if you're a old-school pythonist,
-# install from requirements.txt
-# without remove existing packages.
-uv pip install -r tests/requirements.txt
-
-# Alternatively, you can synchronize it
-# uses the uv.lock file to enforce
-# reproducible installations.
-uv sync
-```
-
-- Format code
+- Format code:
 
 ```bash
 uv run black ./tests
 
-# if you want to just check
+# check only (no changes)
 uv run black --check --verbose ./tests
 ```
 
-- Lint code
+- Lint code:
 
 ```bash
 uv run pylint ./tests
 ```
 
-##### Run tests from python utility directly
+#### Running individual test scripts
 
-Our tests are separated by "test suites". Suites are folders located in `./tests/<suite>` and the tests are the `./tests/<suite>/*-test.py` files. To run all suites, type:
-
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py
-```
-
-You can list all suites with:
+You can run a single test script directly. The framework will auto-resolve
+`FLORESTA_TEMP_DIR` if it is not set, but the binaries must already exist
+under `$FLORESTA_TEMP_DIR/binaries/`:
 
 ```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py --list-suites
+uv run tests/floresta-cli/ping.py
 ```
 
-To run a specific suite:
+#### Clean up
 
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py --test-suite <suite>
-```
+Before each run the runner removes stale `data/` and `logs/` directories left
+over from previous executions (including failed ones), so you always start from
+a clean state.
 
-You can even add more:
-
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py --test-suite <suite_A> --test-suite <suite_B>
-```
-
-##### Clean up the environment
-
-If you tests fails it will be necessary to cleanup the `data`
-folder created by the tests (some tests use it to retain
-information about tested nodes, like the `addnode` command).
-
-You can do this by running:
-
-```bash
-rm -rf FLORESTA_TEMP_DIR/data
-```
+On success the runner removes them again unless `--preserve-data-dir` is passed.
+If you need to inspect artefacts from a failed run, re-run with
+`--preserve-data-dir` to keep them around.
 
 ### Running/Developing Functional Tests with Nix
 
