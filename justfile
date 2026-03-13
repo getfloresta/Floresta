@@ -49,14 +49,6 @@ test-unit crate="": build
 test-wkspc: build
     cargo test --workspace -- --nocapture
 
-# Execute tests/prepare.sh.
-test-functional-prepare arg="":
-    bash tests/prepare.sh {{ arg }}
-
-# Execute tests/run.sh
-test-functional-run arg="":
-    bash tests/run.sh {{ arg }}
-
 # Format and lint functional tests
 test-functional-uv-fmt:
     @just check-command uv test-functional-uv-fmt "https://docs.astral.sh/uv/getting-started/installation/"
@@ -64,9 +56,8 @@ test-functional-uv-fmt:
     uv run pylint --verbose ./tests
 
 # Run the functional tests
-test-functional:
-    @just test-functional-prepare
-    @just test-functional-run
+test-functional arg="":
+    bash tests/run_functional.sh {{ arg }}
 
 # Run the benchmarks
 bench:
