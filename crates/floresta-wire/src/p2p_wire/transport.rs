@@ -1,3 +1,7 @@
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
+use core::fmt::Formatter;
 use std::io;
 
 use bip324::serde::deserialize as deserialize_v2;
@@ -14,12 +18,15 @@ use bitcoin::consensus::deserialize_partial;
 use bitcoin::consensus::encode;
 use bitcoin::consensus::serialize;
 use bitcoin::consensus::Decodable;
+use bitcoin::consensus::Encodable;
 use bitcoin::hashes::sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::HashEngine;
+use bitcoin::hex::DisplayHex;
 use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::message::NetworkMessage;
 use bitcoin::p2p::message::RawNetworkMessage;
+use bitcoin::p2p::message::MAX_MSG_SIZE;
 use bitcoin::p2p::Magic;
 use bitcoin::Network;
 use floresta_common::impl_error_from;
@@ -47,6 +54,46 @@ type TcpWriteTransport = WriteTransport<WriteHalf<TcpStream>>;
 type TransportResult =
     Result<(TcpReadTransport, TcpWriteTransport, TransportProtocol), TransportError>;
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+/// A wrapper type for a network checksum
+///
+/// This checksum accompanies every P2PV1 message to detect corruption.
+/// Computed as the first 4 bytes of `SHA-265d(<msg_payload>)`.
+pub struct P2PV1MessageChecksum([u8; 4]);
+
+impl Display for P2PV1MessageChecksum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_hex())
+    }
+}
+
+impl Debug for P2PV1MessageChecksum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl AsRef<[u8]> for P2PV1MessageChecksum {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl P2PV1MessageChecksum {
+    pub fn from_payload(payload: &[u8]) -> Self {
+        // Compute the `SHA-256d` digest of the message payload.
+        let mut hasher = sha256::Hash::engine();
+        hasher.input(payload);
+        let digest = sha256::Hash::from_engine(hasher);
+        let digest_double = digest.hash_again().to_byte_array();
+
+        // The checksum is the first 4 bytes of the digest.
+        let mut checksum = [0; 4];
+        checksum.copy_from_slice(&digest_double[0..4]);
+        P2PV1MessageChecksum(checksum)
+    }
+}
+
 #[derive(Debug)]
 /// Enum that deals with transport errors
 pub enum TransportError {
@@ -64,16 +111,36 @@ pub enum TransportError {
 
     /// Proxy error
     Proxy(Socks5Error),
+
+    /// Message is too big
+    OversizedMessage {
+        max_size: usize,
+        message_size: usize,
+    },
+
+    /// Peer sent us a corrupted message
+    BadChecksum {
+        expected: P2PV1MessageChecksum,
+        provided: P2PV1MessageChecksum,
+    },
+
+    /// Peer sent us a message with invalid magic bits
+    BadMagicBits { expected: Magic, provided: Magic },
 }
 
-impl std::fmt::Display for TransportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for TransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TransportError::Io(err) => write!(f, "IO error: {err:?}"),
             TransportError::Protocol(err) => write!(f, "V2 protocol error: {err:?}"),
             TransportError::SerdeV2(err) => write!(f, "V2 serde error: {err:?}"),
             TransportError::SerdeV1(err) => write!(f, "V1 serde error: {err:?}"),
             TransportError::Proxy(err) => write!(f, "Proxy error: {err:?}"),
+            TransportError::OversizedMessage { max_size, message_size } => write!(f, "Peer sent us an oversized message: size {message_size} is greater than the max of {max_size}"),
+            TransportError::BadChecksum { expected, provided } => write!(f, "Peer sent us a corrupted message: expected {expected}, got {provided}"),
+            TransportError::BadMagicBits { expected, provided } => {
+                write!(f, "Peer sent us a message with invalid magic bits: expected {expected}, got {provided}")
+            }
         }
     }
 }
@@ -86,7 +153,7 @@ impl_error_from!(TransportError, Socks5Error, Proxy);
 
 pub enum ReadTransport<R: AsyncRead + Unpin + Send> {
     V2(R, AsyncProtocolReader),
-    V1(R),
+    V1(R, Network),
 }
 
 pub enum WriteTransport<W: AsyncWrite + Unpin + Send + Sync> {
@@ -99,31 +166,48 @@ pub enum WriteTransport<W: AsyncWrite + Unpin + Send + Sync> {
 pub enum TransportProtocol {
     /// Encrypted V2 protocol defined in BIP-324.
     V2,
+
     /// Original unencrypted V1 protocol.
     V1,
 }
 
 struct V1MessageHeader {
-    _magic: Magic,
-    _command: [u8; 12],
-    length: u32,
-    _checksum: u32,
+    magic: Magic,
+    command: [u8; 12],
+    length: usize,
+    checksum: P2PV1MessageChecksum,
 }
 
 impl Decodable for V1MessageHeader {
     fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
         reader: &mut R,
-    ) -> std::result::Result<Self, bitcoin::consensus::encode::Error> {
-        let _magic = Magic::consensus_decode(reader)?;
-        let _command = <[u8; 12]>::consensus_decode(reader)?;
-        let length = u32::consensus_decode(reader)?;
-        let _checksum = u32::consensus_decode(reader)?;
+    ) -> Result<Self, encode::Error> {
+        let magic = Magic::consensus_decode(reader)?;
+        let command = <[u8; 12]>::consensus_decode(reader)?;
+        let length = u32::consensus_decode(reader)? as usize;
+        let checksum = <[u8; 4]>::consensus_decode(reader)?;
+
         Ok(Self {
-            _checksum,
-            _command,
+            checksum: P2PV1MessageChecksum(checksum),
+            command,
             length,
-            _magic,
+            magic,
         })
+    }
+}
+
+impl Encodable for V1MessageHeader {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut size = 0;
+        size += self.magic.consensus_encode(writer)?;
+        size += self.command.consensus_encode(writer)?;
+        size += (self.length as u32).consensus_encode(writer)?;
+        size += self.checksum.0.consensus_encode(writer)?;
+
+        Ok(size)
     }
 }
 
@@ -185,7 +269,7 @@ async fn try_connection<A: ToSocketAddrs>(
         true => {
             debug!("Using V1 protocol for connection to {peer_addr}");
             Ok((
-                ReadTransport::V1(reader),
+                ReadTransport::V1(reader, network),
                 WriteTransport::V1(writer, network),
                 TransportProtocol::V1,
             ))
@@ -283,7 +367,7 @@ async fn try_proxy_connection<A: ToSocketAddrs>(
         true => {
             info!("Using V1 protocol for proxy connection to {target_addr:?}",);
             Ok((
-                ReadTransport::V1(reader),
+                ReadTransport::V1(reader, network),
                 WriteTransport::V1(writer, network),
                 TransportProtocol::V1,
             ))
@@ -335,13 +419,34 @@ where
 
                 Ok(msg)
             }
-            ReadTransport::V1(reader) => {
+            ReadTransport::V1(reader, network) => {
                 let mut data: Vec<u8> = vec![0; 24];
                 reader.read_exact(&mut data).await?;
 
                 let header: V1MessageHeader = deserialize_partial(&data)?.0;
+                if header.length > MAX_MSG_SIZE {
+                    return Err(TransportError::OversizedMessage {
+                        max_size: MAX_MSG_SIZE,
+                        message_size: header.length,
+                    });
+                }
+                if header.magic != network.magic() {
+                    return Err(TransportError::BadMagicBits {
+                        provided: header.magic,
+                        expected: network.magic(),
+                    });
+                }
+
                 data.resize(24 + header.length as usize, 0);
                 reader.read_exact(&mut data[24..]).await?;
+
+                let checksum = P2PV1MessageChecksum::from_payload(&data[24..]);
+                if header.checksum != checksum {
+                    return Err(TransportError::BadChecksum {
+                        expected: checksum,
+                        provided: header.checksum,
+                    });
+                }
 
                 let msg: RawNetworkMessage = deserialize(&data)?;
                 Ok(msg.into_payload())
@@ -413,5 +518,192 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_transport {
+    use core::error;
+    use core::fmt;
+    use core::fmt::Display;
+    use core::fmt::Formatter;
+    use std::io;
+    use std::io::ErrorKind;
+    use std::pin::Pin;
+    use std::task::Context;
+    use std::task::Poll;
+
+    use bip324::Network;
+    use tokio::io::AsyncRead;
+    use tokio::io::AsyncWrite;
+    use tokio::io::ReadBuf;
+
+    use super::ReadTransport;
+
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct UnexpectedEofError;
+
+    impl Display for UnexpectedEofError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "unexpected eof")
+        }
+    }
+
+    impl error::Error for UnexpectedEofError {}
+
+    #[derive(Debug, Default)]
+    pub struct Reader {
+        data: Vec<u8>,
+    }
+
+    impl AsyncRead for Reader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let size = buf.capacity();
+            if size > self.data.len() {
+                return Poll::Ready(Err(io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    UnexpectedEofError,
+                )));
+            }
+
+            buf.put_slice(&self.data.drain(0..size).collect::<Vec<_>>());
+
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    pub fn create_reader_v1(data: Vec<u8>) -> ReadTransport<Reader> {
+        ReadTransport::V1(Reader { data }, Network::Regtest)
+    }
+
+    pub struct Writer;
+
+    impl AsyncWrite for Writer {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            // No-op writer
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_write_vectored(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bufs: &[io::IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            let len = bufs.iter().map(|buf| buf.len()).sum();
+            // No-op writer
+            Poll::Ready(Ok(len))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bip324::Network;
+    use bitcoin::consensus::serialize;
+    use bitcoin::p2p::message::NetworkMessage;
+    use bitcoin::p2p::message::RawNetworkMessage;
+
+    use super::test_transport::*;
+    use crate::p2p_wire::transport::P2PV1MessageChecksum;
+    use crate::p2p_wire::transport::TransportError;
+    use crate::p2p_wire::transport::V1MessageHeader;
+
+    #[tokio::test]
+    async fn test_oversized_message() {
+        let oversized_message_header = V1MessageHeader {
+            magic: Network::Regtest.magic(),
+            checksum: P2PV1MessageChecksum([0; 4]),
+            command: [0; 12],
+            length: u32::MAX as usize,
+        };
+
+        let data = serialize(&oversized_message_header);
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::OversizedMessage { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_bad_magic() {
+        let bad_magic_msg_header = V1MessageHeader {
+            magic: Network::Signet.magic(),
+            checksum: P2PV1MessageChecksum([0; 4]),
+            command: [0; 12],
+            length: 0,
+        };
+
+        let data = serialize(&bad_magic_msg_header);
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::BadMagicBits { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_bad_checksum() {
+        let payload = NetworkMessage::Ping(0);
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), payload);
+        let mut data = serialize(&message);
+        // mess with the checksum
+        data[23] ^= 1;
+
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::BadChecksum { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_wrong_length() {
+        let payload = NetworkMessage::Ping(0);
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), payload);
+        let mut data = serialize(&message);
+        // make the size look one byte bigger than the actual message is, this will cause an EOF
+        data[16] = 9;
+        let mut transport_reader = create_reader_v1(data);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        assert!(matches!(error, TransportError::Io(_)));
+    }
+
+    #[tokio::test]
+    async fn test_valid_message() {
+        let payload = NetworkMessage::Ping(0);
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), payload);
+        let data = serialize(&message);
+        // make the size look one byte bigger than the actual message is, this will cause an EOF
+        let mut transport_reader = create_reader_v1(data);
+
+        let res = transport_reader
+            .read_message()
+            .await
+            .expect("Message should be a valid ping");
+
+        assert_eq!(res, NetworkMessage::Ping(0));
     }
 }

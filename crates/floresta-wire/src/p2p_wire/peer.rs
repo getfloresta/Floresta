@@ -27,6 +27,7 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::error;
@@ -62,6 +63,11 @@ const GET_UTREEXO_PROOF_CMD: &str = "getuproof";
 /// the rate of addrv2 messages a peer can send us to one every
 /// 10 seconds.
 const ADDRV2_MESSAGE_INTERVAL_SECS: u64 = 10;
+
+/// How many messages/sec a peer is allowed to send.
+///
+/// If a peer sends more than this, we disconnect it.
+const MAX_MSGS_PER_SEC: u64 = 10_000;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -127,7 +133,7 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     actor_receiver: UnboundedReceiver<ReaderMessage>, // Add the receiver for messages from TcpStreamActor
     writer: WriteTransport<T>,
     our_user_agent: String,
-    cancellation_sender: tokio::sync::oneshot::Sender<()>,
+    cancellation_sender: Option<oneshot::Sender<()>>,
     transport_protocol: TransportProtocol,
 }
 
@@ -216,11 +222,8 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Debug for Peer<T> {
 type Result<T> = std::result::Result<T, PeerError>;
 
 impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
-    pub async fn read_loop(mut self) -> Result<()> {
-        let err = self.peer_loop_inner().await;
-        if err.is_err() {
-            debug!("Peer {} connection loop closed: {err:?}", self.id);
-        }
+    pub async fn read_loop(mut self) -> Result<Self> {
+        let result = self.peer_loop_inner().await;
 
         let now = Instant::now();
         self.send_to_node(PeerMessages::Disconnected(self.address_id), now);
@@ -233,18 +236,19 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             );
         }
 
-        if let Err(cancellation_err) = self.cancellation_sender.send(()) {
+        if let Some(Err(cancellation_err)) = self.cancellation_sender.take().map(|ch| ch.send(())) {
             debug!(
                 "Failed to propagate cancellation signal for Peer {}: {cancellation_err:?}",
                 self.id
             );
         }
 
-        if let Err(err) = err {
-            debug!("Peer {} connection loop closed: {err:?}", self.id);
+        if let Err(e) = result {
+            debug!("Peer {} connection loop closed: {e:?}", self.id);
+            return Err(e);
         }
 
-        Ok(())
+        Ok(self)
     }
 
     async fn peer_loop_inner(&mut self) -> Result<()> {
@@ -276,6 +280,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                             return Err(e);
                         }
                         Some(ReaderMessage::Message(msg, time)) => {
+                            println!("{msg:?}");
                             self.handle_peer_message(msg, time).await?;
                         }
                     }
@@ -312,7 +317,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 .checked_div(Instant::now().duration_since(self.start_time).as_secs())
                 .unwrap_or(0);
 
-            if msg_sec > 10 {
+            if msg_sec > MAX_MSGS_PER_SEC {
                 error!(
                     "Peer {} is sending us too many messages, disconnecting",
                     self.id
@@ -417,6 +422,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         time: Instant,
     ) -> Result<()> {
         self.last_message = time;
+        self.messages += 1;
 
         debug!("Received {} from peer {}", message.command(), self.id);
         match self.state {
@@ -661,7 +667,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             actor_receiver, // Add the receiver for messages from TcpStreamActor
             writer,
             our_user_agent,
-            cancellation_sender,
+            cancellation_sender: Some(cancellation_sender),
             transport_protocol,
         };
 
@@ -803,4 +809,162 @@ pub enum PeerMessages {
 
     /// Remote peer sent us a Utreexo proof,
     UtreexoProof(UtreexoProof),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use bip324::serde::NetworkMessage;
+    use bip324::Network;
+    use bitcoin::p2p::ServiceFlags;
+    use floresta_mempool::Mempool;
+    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::sync::mpsc::UnboundedSender;
+    use tokio::sync::oneshot;
+    use tokio::sync::Mutex;
+
+    use crate::node::ConnectionKind;
+    use crate::node::NodeNotification;
+    use crate::node::NodeRequest;
+    use crate::p2p_wire::peer::peer_utils;
+    use crate::p2p_wire::peer::Peer;
+    use crate::p2p_wire::peer::PeerError;
+    use crate::p2p_wire::peer::ReaderMessage;
+    use crate::p2p_wire::peer::State;
+    use crate::p2p_wire::transport::test_transport::Writer;
+    use crate::p2p_wire::transport::WriteTransport;
+    use crate::TransportProtocol;
+
+    /// All the data needed to run a test.
+    struct SetupData {
+        /// The actual peer, it should be spawned and the future must not be dropped.
+        peer: Peer<Writer>,
+
+        /// This is used to send a message to a peer, mimicking a real network message.
+        actor_sender: UnboundedSender<ReaderMessage>,
+
+        /// Channel used to send requests to a peer, this will mimic the `UtreexoNode` sending
+        /// something to our peer.
+        node_sender: UnboundedSender<NodeRequest>,
+
+        /// This is the opposite of node_sender, when a peer receives a message, you can read it
+        /// here.
+        node_receiver: UnboundedReceiver<NodeNotification>,
+    }
+
+    fn create_peer() -> SetupData {
+        let (node_tx, node_receiver) = unbounded_channel();
+        let (node_sender, node_requests) = unbounded_channel();
+        let (actor_sender, actor_receiver) = unbounded_channel();
+        let (cancellation_sender, _) = oneshot::channel();
+
+        let peer = Peer {
+            writer: WriteTransport::V1(Writer, Network::Regtest),
+            state: State::Connected,
+            kind: ConnectionKind::Manual,
+            id: 0,
+            mempool: Arc::new(Mutex::new(Mempool::new(1000))),
+            node_tx,
+            services: ServiceFlags::NONE,
+            messages: 0,
+            shutdown: false,
+            last_ping: Some(Instant::now()),
+            user_agent: "/Mock-Peer:0.0.0/".into(),
+            start_time: Instant::now(),
+            address_id: 0,
+            blocks_only: true,
+            last_addrv2: Instant::now(),
+            last_message: Instant::now(),
+            send_headers: true,
+            wants_addrv2: true,
+            node_requests,
+            actor_receiver,
+            our_user_agent: "/Floresta-test:0.0.0/".into(),
+            current_best_block: 0,
+            transport_protocol: TransportProtocol::V1,
+            cancellation_sender: Some(cancellation_sender),
+        };
+
+        SetupData {
+            peer,
+            actor_sender,
+            node_sender,
+            node_receiver,
+        }
+    }
+
+    fn send_to_peer(
+        actor_sender: &mut UnboundedSender<ReaderMessage>,
+        network_message: NetworkMessage,
+    ) {
+        actor_sender
+            .send(ReaderMessage::Message(network_message, Instant::now()))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unexpected_message_handshake() {
+        let SetupData {
+            peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer();
+
+        let fut = tokio::spawn(peer.read_loop());
+
+        // Send a ping before the handshake completes
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(0));
+
+        let err = fut.await.unwrap().unwrap_err();
+        assert!(matches!(err, PeerError::UnexpectedMessage));
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    #[tokio::test]
+    async fn test_increment_peer_messages() {
+        let SetupData {
+            peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer();
+
+        let fut = tokio::spawn(peer.read_loop());
+
+        send_to_peer(
+            &mut actor_sender,
+            peer_utils::build_version_message("/Floresta-test:0.0.0/".into()),
+        );
+
+        send_to_peer(&mut actor_sender, NetworkMessage::Verack);
+
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(2));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(3));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(4));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(5));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(6));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(7));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(8));
+        send_to_peer(&mut actor_sender, NetworkMessage::Ping(9));
+
+        // give the peer a little time to process everything
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // Asks the peer to shutdown
+        node_sender.send(NodeRequest::Shutdown).unwrap();
+
+        let peer = fut.await.unwrap().unwrap();
+        assert_eq!(peer.messages, 10);
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+    }
 }
