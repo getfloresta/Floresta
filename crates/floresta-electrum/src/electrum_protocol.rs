@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use core::error;
 use std::collections::HashMap;
 use std::collections::HashSet;

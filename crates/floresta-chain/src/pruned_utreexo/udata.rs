@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! UData is the serialized data used for proof propagation in utreexo. It contains all
 //! data needed for validating some piece of information, like a transaction and a block.
 

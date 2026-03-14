@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A small Zero Message Queue (ZMQ) implementation for floresta, that pushes new blocks
 //! as they are found.
 //!

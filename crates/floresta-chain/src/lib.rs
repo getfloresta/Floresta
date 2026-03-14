@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! # Floresta Chain
 //! This crate provides the core validation logic for a full node using libfloresta.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use clap::Parser;

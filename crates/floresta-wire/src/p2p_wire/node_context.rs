@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! During the lifetime of a Bitcoin client, we have a couple of phases that are slightly different
 //! from each other, having to implement their own state-machines and logic for handing requests.
 //! While we could simply put everything in one struct and have a single `impl` block, that would

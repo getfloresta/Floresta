@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A partial chain is a chain that only contains a subset of the blocks in the
 //! full chain. We use multiple partial chains to sync up with the full chain,
 //! and then merge them together to get the full chain. This allows us to make

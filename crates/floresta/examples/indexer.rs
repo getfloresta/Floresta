@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! In node.rs we created a node that connects to the Bitcoin network and downloads the blockchain.
 //! We use the default chainstate, which starts at genesis and validates all blocks, but you can

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module defines the structure for JSON-RPC requests and provides utility functions to
 //! extract parameters from the request.
 

@@ -1,4 +1,4 @@
-// SPDX license specifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! # floresta-cli - A command line interface for florestad
 //!

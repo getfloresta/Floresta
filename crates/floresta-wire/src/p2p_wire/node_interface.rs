@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! node_interface, which holds [`NodeInterface`] and related methods
 //! that define the API to interact with the floresta node
 

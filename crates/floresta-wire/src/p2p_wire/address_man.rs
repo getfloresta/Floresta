@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Address manager is a module that keeps track of known peer addresses and associated
 //! metadata. This module is very important in keeping our node protected against targeted
 //! attacks, like eclipse attacks.

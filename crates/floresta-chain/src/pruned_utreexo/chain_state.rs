@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module is centered around the `ChainState` type, defining it and providing
 //! implementations for the [BlockchainInterface] and [UpdatableChainstate] traits.
 //!
@@ -14,6 +16,7 @@
 //! Key definitions:
 //! - [ChainState]: The high-level chain backend
 //! - [BlockConsumer]: Trait for receiving new block notifications
+
 extern crate alloc;
 
 use alloc::borrow::ToOwned;

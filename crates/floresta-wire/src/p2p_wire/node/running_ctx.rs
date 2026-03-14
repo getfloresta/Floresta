@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! After a node catches-up with the network, we can start listening for new blocks, handing any
 //! request our user might make and keep our peers alive. This mode requires way less bandwidth and
 //! CPU to run, being bound by the number of blocks found in a given period.
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::time::Duration;

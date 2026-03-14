@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The pruned utreexo module handles the full blockchain logic: validation, state tracking and
 //! interfacing. This blockchain backend does not store the historical blocks, it's pruned.
 //!

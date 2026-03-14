@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module provides a builder pattern for constructing ChainState instances with various
 //! optional configurations.
 //!
@@ -8,6 +10,7 @@
 //! - Assumed valid blocks for validation optimization
 //! - UTREEXO accumulator state
 //! - Current chain tip and header
+
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::BlockHash;
 use bitcoin::Network;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;

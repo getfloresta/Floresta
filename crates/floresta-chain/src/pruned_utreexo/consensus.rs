@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A collection of functions that implement the consensus rules for the Bitcoin Network.
 //! This module contains functions that are used to verify blocks and transactions, and doesn't
 //! assume anything about the chainstate, so it can be used in any context.
 //! We use this to avoid code reuse among the different implementations of the chainstate.
+
 extern crate alloc;
 
 use core::ffi::c_uint;

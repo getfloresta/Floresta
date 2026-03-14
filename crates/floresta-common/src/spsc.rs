@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A no-std Single Producer, Single Consumer channel for unidirectional message exchange between
 //! modules. This module don't use anything from the standard lib and can be easily used in no-std
 //! environments. We only use mem::take from [core].

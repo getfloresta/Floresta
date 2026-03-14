@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module defines the [ChainStore] trait, which provides the Floresta node API
 //! for persisting and retrieving blockchain data (headers, block hashes linked to a
 //! height, the best chain data, and the accumulator for each block).

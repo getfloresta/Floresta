@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module defines the structures and methods for handling Utreexo proofs in the context of
 //! messaging in the bitcoin network.
 //!

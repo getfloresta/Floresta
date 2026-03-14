@@ -14,27 +14,23 @@
   </p>
 
   <p>
-    <a href="https://github.com/getfloresta/Floresta/blob/master/LICENSE">
-      <img alt="MIT Licensed" src="https://img.shields.io/github/license/getfloresta/floresta" />
-    </a>
     <a href="https://github.com/getfloresta/Floresta/releases/latest">
-      <img alt="Latest release" src="https://img.shields.io/github/v/release/getfloresta/floresta" />
+      <img alt="version" src="https://img.shields.io/github/v/release/getfloresta/floresta"/>
+    </a>
+    <a href="https://docs.getfloresta.sh">
+      <img alt="API Docs" src="https://img.shields.io/badge/docs-floresta-brightgreen"/>
+    </a>
+    <a href="https://blog.rust-lang.org/2024/09/05/Rust-1.81.0/">
+      <img alt="MSRV 1.81.0+" src="https://img.shields.io/badge/rustc-1.81.0%2B-orange.svg"/>
+    </a>
+    <a href="https://github.com/mit-dci/rustreexo/blob/main/LICENSE">
+      <img src="https://img.shields.io/badge/License-MIT%2FApache--2.0-red.svg"/>
+    </a>
+    <a href="https://github.com/getfloresta/Floresta/actions/workflows/rust.yml">
+      <img src="https://img.shields.io/github/actions/workflow/status/getfloresta/Floresta/rust.yml?label=Rust%20CI"/>
     </a>
     <a href="https://github.com/getfloresta/Floresta/actions/workflows/functional.yml">
-      <img alt="Functional Tests" src="https://github.com/getfloresta/Floresta/actions/workflows/functional.yml/badge.svg" />
-    </a>
-    <a href="https://docs.getfloresta.sh"><img alt="API Docs" src="https://img.shields.io/badge/docs-floresta-green" /></a>
-    <a href="https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/">
-      <img alt="Rustc Version 1.81.0+" src="https://img.shields.io/badge/rustc-1.81.0%2B-lightgrey.svg" />
-    </a>
-    <a href="https://hub.docker.com/r/dlsz/floresta">
-      <img alt="Docker pulls" src="https://img.shields.io/docker/pulls/dlsz/floresta" />
-    </a>
-    <a href="https://github.com/getfloresta/Floresta/actions/workflows/docker.yml">
-      <img alt="Docker Build Status" src="https://github.com/getfloresta/Floresta/actions/workflows/docker.yml/badge.svg" />
-    </a>
-    <a href="https://discord.gg/5Wj8fjjS93">
-      <img alt="Chat on Discord" src="https://img.shields.io/discord/1185232004506198056" />
+      <img src="https://img.shields.io/github/actions/workflow/status/getfloresta/Floresta/functional.yml?label=Functional%20Tests"/>
     </a>
   </p>
 
@@ -107,7 +103,12 @@ To report security vulnerabilities, please see the [Security Policy](SECURITY.md
 
 ## License
 
-This project is licensed under the [MIT License](https://github.com/getfloresta/Floresta/blob/master/LICENSE).
+Licensed under either of
+
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+
+at your option.
 
 ## Acknowledgments
 

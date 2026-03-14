@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! An in-memory database to store addresses data. Being in-memory means this database is
 //! volatile, and all data is lost after the database is dropped or the process is terminated.
 //! It's not meant to use in production, but for the integrated testing framework

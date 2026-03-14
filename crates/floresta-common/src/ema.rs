@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use core::num::NonZeroU16;
 
 #[derive(Debug, Clone)]

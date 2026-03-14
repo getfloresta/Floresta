@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Handles different inputs, try to make sense out of it and store a sane descriptor at the end
 
 use core::str::FromStr;

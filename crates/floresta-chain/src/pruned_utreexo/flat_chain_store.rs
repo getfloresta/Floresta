@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A fast database for the chainstore
 //!
 //! In its infancy, floresta-chain used `kv` as database, since `kv` is a small and efficient

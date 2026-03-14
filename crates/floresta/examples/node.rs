@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! A simple example of a Bitcoin node using the floresta crates. It connects to the Bitcoin
 //! network, downloads the blockchain, and prints the current state of the accumulator.

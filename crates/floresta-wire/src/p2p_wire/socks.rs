@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A wrapper around a TCP stream that handles the SOCKS5 handshake. This module only
 //! drives the handshake and returns the stream back to the caller. It does not
 //! perform any I/O on the stream after the handshake is complete. The caller is

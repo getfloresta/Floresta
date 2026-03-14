@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module defines error types specific to the blockchain validation and database operations, along with conversion between types.
 //!
 //! The main error types are:

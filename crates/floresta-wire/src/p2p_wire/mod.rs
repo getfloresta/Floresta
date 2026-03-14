@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Main module for the p2p chain. This is a blockchain provider, just like cli-chain, but it's
 //! backed by p2p Bitcoin's p2p network.
 

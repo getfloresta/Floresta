@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::hint::black_box;

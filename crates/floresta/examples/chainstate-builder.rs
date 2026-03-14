@@ -1,10 +1,11 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! In node.rs we created a node that connects to the Bitcoin network and downloads the blockchain.
 //! We use the default chainstate, which starts at genesis and validates all blocks. This is
 //! the simplest way to create a node, but you can also create a node that starts at a given
 //! block, or that doesn't validate all signatures. All customizations are done through the
 //! ChainStateBuilder struct. This example shows how to use it.
+
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::Network;
 use floresta_chain::pruned_utreexo::chain_state_builder::ChainStateBuilder;

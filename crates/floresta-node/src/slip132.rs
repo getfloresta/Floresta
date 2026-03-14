@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 // Based on slip132 from LNP/BP Descriptor Wallet library by:
 //     Dr. Maxim Orlovsky <orlovsky@lnp-bp.org>
 //

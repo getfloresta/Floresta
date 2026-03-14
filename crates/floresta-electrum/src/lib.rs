@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 // cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]

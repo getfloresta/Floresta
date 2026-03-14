@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module provides configuration and parameters for different Bitcoin networks (mainnet,
 //! testnet, signet, and regtest).
 //!

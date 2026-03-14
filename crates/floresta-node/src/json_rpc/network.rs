@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! This module holds all RPC server side methods for interacting with our node's network stack.
 
 use std::net::IpAddr;

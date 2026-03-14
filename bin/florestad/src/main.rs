@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! This is a modular-(ish) utreexo powered wallet backend and fully validating node, it's
 //! developed as an experiment to showcase utreexo. This wallet also comes with an Electrum

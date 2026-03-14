@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A simple mempool that keeps our transactions in memory. It try to rebroadcast
 //! our transactions every 1 hour.
 //! Once our transaction is included in a block, we remove it from the mempool.

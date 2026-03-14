@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use core::cmp::min;
 use core::error::Error;
 use core::ops::Add;
