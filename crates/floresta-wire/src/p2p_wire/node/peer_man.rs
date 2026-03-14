@@ -531,7 +531,9 @@ where
             }
 
             // `handle_disconnection` will mark the address as banned when `Peer` object return
+            let peer_addr = peer.address;
             peer.state = PeerStatus::Banned;
+            self.ban_man.add_ban(peer_addr, 0);
         }
 
         self.send_to_peer(peer, NodeRequest::Shutdown)?;
