@@ -481,7 +481,11 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     self.write(NetworkMessage::Inv(Vec::new())).await?;
                 }
                 NetworkMessage::GetAddr => {
-                    self.write(NetworkMessage::AddrV2(Vec::new())).await?;
+                    if self.wants_addrv2 {
+                        self.write(NetworkMessage::AddrV2(Vec::new())).await?;
+                    } else {
+                        self.write(NetworkMessage::Addr(Vec::new())).await?;
+                    }
                 }
                 NetworkMessage::GetData(inv) => {
                     for inv_el in inv {
@@ -497,8 +501,8 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     }
                 }
                 NetworkMessage::SendAddrV2 => {
-                    self.wants_addrv2 = true;
-                    self.write(NetworkMessage::SendAddrV2).await?;
+                    warn!("Peer {} sent SendAddrV2 after handshake completed", self.id);
+                    return Err(PeerError::UnexpectedMessage);
                 }
                 NetworkMessage::Pong(_) => {
                     self.last_ping = None;
