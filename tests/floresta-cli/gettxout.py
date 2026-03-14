@@ -11,6 +11,7 @@ import time
 import os
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.util import wait_until
 
 # TODO Use many addresses types as possible to test the gettxout command
 WALLET_CONFIG = "\n".join(
@@ -78,18 +79,17 @@ class GetTxoutTest(FlorestaTestFramework):
         self.connect_nodes(self.bitcoind, self.utreexod)
 
         self.log("=== Wait for the nodes to sync...")
-        end = time.time() + 20
-        while time.time() < end:
-            if (
-                self.florestad.rpc.get_block_count()
-                == self.bitcoind.rpc.get_block_count()
-                == self.utreexod.rpc.get_block_count()
-            ) and not self.florestad.rpc.get_blockchain_info()["ibd"]:
-                break
-
-            time.sleep(1)
-
-        self.assertFalse(self.florestad.rpc.get_blockchain_info()["ibd"])
+        wait_until(
+            predicate=lambda: (
+                (
+                    self.florestad.rpc.get_block_count()
+                    == self.bitcoind.rpc.get_block_count()
+                    == self.utreexod.rpc.get_block_count()
+                )
+                and not self.florestad.rpc.get_blockchain_info()["ibd"]
+            ),
+            interval=1,
+        )
 
         self.log("=== Get a list of transactions")
         blocks = self.florestad.rpc.get_block_count()
