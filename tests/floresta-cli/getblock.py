@@ -9,6 +9,7 @@ import random
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.util import wait_until
 
 
 class GetBlockTest(FlorestaTestFramework):
@@ -54,11 +55,9 @@ class GetBlockTest(FlorestaTestFramework):
         self.connect_nodes(self.florestad, self.bitcoind)
 
         block_count = self.bitcoind.rpc.get_block_count()
-        end = time.time() + 20
-        while time.time() < end:
-            if self.florestad.rpc.get_block_count() == block_count:
-                break
-            time.sleep(0.5)
+        wait_until(
+            predicate=lambda: self.florestad.rpc.get_block_count() == block_count
+        )
 
         self.assertEqual(
             self.florestad.rpc.get_block_count(), self.bitcoind.rpc.get_block_count()

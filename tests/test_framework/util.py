@@ -1,6 +1,7 @@
 """Utility helpers used by the test framework (paths, ports, TLS helpers)."""
 
 import os
+import time
 import random
 import socket
 import subprocess
@@ -104,3 +105,16 @@ class Utility:
         )
 
         return (pk_path, cert_path)
+
+
+def wait_until(predicate, timeout=30, interval=0.5, error_msg="Condition not met"):
+    """
+    Wait until a predicate returns True or timeout is reached.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if predicate():
+            return True
+        time.sleep(interval)
+
+    raise TimeoutError(f"{error_msg} after {timeout} seconds")
