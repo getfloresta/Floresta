@@ -3,6 +3,7 @@ use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
 
+pub use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
 use serde::Deserialize;
 use serde::Serialize;
@@ -82,7 +83,7 @@ pub struct RawTx {
     pub vin: Vec<TxIn>,
     /// A list of outputs being created by this tx
     ///
-    /// Se [TxOut] for more information
+    /// See [TxOut] for more information
     pub vout: Vec<TxOut>,
     /// The hash of the block that included this tx, if any
     pub blockhash: String,
@@ -192,6 +193,13 @@ pub enum GetBlockRes {
     Zero(String),
 
     One(Box<GetBlockVerboseOne>),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum GetBlockheaderRes {
+    Zero(String),
+    One(Box<GetBlockHeaderVerbose>),
 }
 
 /// A confidence enum to auxiliate rescan timestamp values.
