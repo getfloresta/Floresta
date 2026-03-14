@@ -7,10 +7,9 @@ utreexod. Then, assert that the command returns the same hash of
 and utreexod, respectively.
 """
 
-import time
 import pytest
 
-TIMEOUT_SECONDS = 20
+from test_framework.util import wait_until
 
 
 @pytest.mark.rpc
@@ -27,14 +26,11 @@ def test_get_best_block_hash(florestad_utreexod):
     assert floresta_best_block == utreexo_best_block
 
     utreexod.rpc.generate(10)
-    end = time.time() + TIMEOUT_SECONDS
-    while time.time() < end:
-        floresta_block = florestad.rpc.get_block_count()
-        utreexo_block = utreexod.rpc.get_block_count()
-        if floresta_block == utreexo_block:
-            break
 
-        time.sleep(1)
+    wait_until(
+        predicate=lambda: florestad.rpc.get_block_count()
+        == utreexod.rpc.get_block_count()
+    )
 
     utreexo_chain = utreexod.rpc.get_blockchain_info()
     floresta_best_block = florestad.rpc.get_bestblockhash()

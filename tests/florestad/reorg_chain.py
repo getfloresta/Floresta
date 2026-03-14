@@ -9,8 +9,9 @@ make florestad switch to the new chain. We then compare the two node's main chai
 accumulator to make sure they are the same.
 """
 
-import time
 import pytest
+
+from test_framework.util import wait_until
 
 
 @pytest.mark.florestad
@@ -74,16 +75,8 @@ class ChainReorgTest:
         self.log.info(f"Utreexod node mine {blocks} blocks")
         self.utreexod.rpc.generate(blocks)
 
-        timeout = 30
-        end = time.time() + timeout
-        while time.time() < end:
-            florestad_block = self.florestad.rpc.get_block_count()
-            utreexod_block = self.utreexod.rpc.get_block_count()
-            if florestad_block == utreexod_block:
-                self.log.info(f"Nodes are in sync: {florestad_block} blocks")
-                break
-
-            time.sleep(1)
-
-        if florestad_block != utreexod_block:
-            pytest.fail("Florestad node did not sync with Utreexod node in time")
+        wait_until(
+            predicate=lambda: self.florestad.rpc.get_block_count()
+            == self.utreexod.rpc.get_block_count(),
+            error_msg="Florestad node did not sync with Utreexod node in time.",
+        )

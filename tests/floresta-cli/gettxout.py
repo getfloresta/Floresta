@@ -6,10 +6,9 @@ gettxout.py
 This functional test cli utility to interact with a Floresta node with `gettxout` command.
 """
 
-import time
 import pytest
 
-TIMEOUT_SECONDS = 120
+from test_framework.util import wait_until
 
 
 # pylint: disable=too-many-locals
@@ -27,19 +26,8 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain):
     best_block_hash = utreexod.rpc.get_blockhash(blocks)
 
     log.info("Waiting for Floresta and Bitcoind to sync with Utreexod...")
-    timeout = time.time() + TIMEOUT_SECONDS
-    while time.time() < timeout:
-        floresta_info = florestad.rpc.get_blockchain_info()
-        if (
-            floresta_info["height"]
-            == utreexod.rpc.get_block_count()
-            == bitcoind.rpc.get_block_count()
-            == blocks
-            and not floresta_info["ibd"]
-        ):
-            break
 
-        time.sleep(1)
+    def check_sync():
         # Forcing a re-fetch of the block from the peer
         try:
             bitcoind.rpc.get_block_from_peer(best_block_hash, peer_id)
@@ -47,7 +35,18 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain):
         except Exception as e:
             log.error(f"Error fetching block from peer: {e}")
 
-    assert floresta_info["height"] == blocks and not floresta_info["ibd"]
+        floresta_info = florestad.rpc.get_blockchain_info()
+        return (
+            floresta_info["height"]
+            == utreexod.rpc.get_block_count()
+            == bitcoind.rpc.get_block_count()
+            and not floresta_info["ibd"]
+        )
+
+    wait_until(
+        check_sync,
+        error_msg="Floresta and Bitcoind did not sync with Utreexod within the timeout period.",
+    )
 
     log.info("Comparing gettxout results between Floresta and Bitcoind...")
     for height in range(2, blocks):
