@@ -35,7 +35,7 @@ from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
 from test_framework.util import Utility, wait_until
 from test_framework.p2p import P2P_SERVICES, P2PInterface, NetworkThread
-from test_framework.messages import NODE_P2P_V2
+from test_framework.messages import NODE_P2P_V2, CAddress
 
 
 class FlorestaTestMetaClass(type):
@@ -656,6 +656,34 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             method=method,
             **kwargs,
         )
+
+    def create_node_address(self, quantity: int):
+        """
+        Create a list of node addresses.
+        """
+
+        i2p_addr = "c4gfnttsuwqomiygupdqqqyy5y5emnk5c73hrfvatri67prd7vyq.b32.i2p"
+        onion_addr = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+
+        address_list = []
+        for i in range(quantity):
+            addr = CAddress()
+            addr.time = int(time.time()) + i
+            addr.port = 8333 + i
+            addr.nServices = P2P_SERVICES
+            # Add one I2P and one onion V3 address at an arbitrary position.
+            if i % 5 == 0:
+                addr.net = addr.NET_I2P
+                addr.ip = i2p_addr
+                addr.port = 0
+            elif i % 3 == 0:
+                addr.net = addr.NET_TORV3
+                addr.ip = onion_addr
+            else:
+                addr.ip = f"123.123.123.{i % 256}"
+            address_list.append(addr)
+
+        return address_list
 
     # pylint: disable=invalid-name
     def assertTrue(self, condition: bool):

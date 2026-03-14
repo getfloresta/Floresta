@@ -71,13 +71,14 @@ BASE_TEST_SUITE = [
     ("example", "bitcoin"),
     ("example", "utreexod"),
     ("florestad", "node-info"),
+    ("p2p", "p2p_addr_relay"),
 ]
 
 # Before running the tests, we check if the number of tests
 # in the base test suite matches the number of tests in the
 # `example`, `floresta-cli`, and `florestad` directories.
 tests_count = 0
-for testdir in ("example", "floresta-cli", "florestad"):
+for testdir in ("example", "floresta-cli", "florestad", "p2p"):
     dirname = os.path.abspath(os.path.dirname(__file__))
     tests_path = os.path.join(dirname, testdir)
     for test_name in os.listdir(tests_path):
