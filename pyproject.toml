@@ -45,6 +45,7 @@ markers = [
     "example: marks tests that demonstrate how to use the Floresta test framework",
     "florestad: marks tests specific to the Florestad daemon",
     "rpc: marks tests focused on RPC calls",
+    "p2p: marks tests related to peer-to-peer interactions",
 ]
 
 minversion = "9.0"
