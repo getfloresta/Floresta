@@ -328,14 +328,26 @@ impl<R> ReadTransport<R>
 where
     R: AsyncRead + Unpin + Send,
 {
-    /// Read the next message from the transport.
+    /// Read the next [`NetworkMessage`] from the transport's [`AsyncProtocolReader`] buffer.
     pub async fn read_message(&mut self) -> Result<NetworkMessage, TransportError> {
         match self {
             ReadTransport::V2(reader, protocol) => {
                 let payload = protocol.read_and_decrypt(reader).await?;
                 let contents = payload.contents();
-                let msg = deserialize_v2(contents)?;
 
+                // TODO: remove this once https://github.com/rust-bitcoin/rust-bitcoin/pull/5671
+                // and https://github.com/rust-bitcoin/rust-bitcoin/pull/5009 make it into a release
+                /// P2PV2 BIP-0324 message type for `uproof`.
+                const P2PV2_UPROOF_MSG_TYPE: u8 = 29;
+                if contents.len() > 1 && contents[0] == P2PV2_UPROOF_MSG_TYPE {
+                    let msg = NetworkMessage::Unknown {
+                        command: CommandString::try_from_static("uproof").unwrap(),
+                        payload: contents[1..].to_vec(),
+                    };
+                    return Ok(msg);
+                }
+
+                let msg = deserialize_v2(contents)?;
                 Ok(msg)
             }
             ReadTransport::V1(reader) => {
@@ -364,10 +376,30 @@ impl<W> WriteTransport<W>
 where
     W: AsyncWrite + Unpin + Send + Sync,
 {
-    /// Write a message to the transport.
+    /// Write a [`NetworkMessage`] to the transport's [`AsyncProtocolWriter`] buffer.
     pub async fn write_message(&mut self, message: NetworkMessage) -> Result<(), TransportError> {
         match self {
             WriteTransport::V2(writer, protocol) => {
+                // TODO: remove this once https://github.com/rust-bitcoin/rust-bitcoin/pull/5671 and
+                // https://github.com/rust-bitcoin/rust-bitcoin/pull/5009 make it into a release
+                if let NetworkMessage::Unknown { command, payload } = message {
+                    /// P2PV2 BIP-0324 message type for `getuproof`.
+                    const P2PV2_GETUPROOF_MSG_TYPE: u8 = 30;
+
+                    let expected_cmd = CommandString::try_from_static("getuproof").unwrap();
+                    assert_eq!(
+                        command, expected_cmd,
+                        "getuproof is supported as unknown message"
+                    );
+
+                    let mut data = vec![];
+                    data.push(P2PV2_GETUPROOF_MSG_TYPE);
+                    data.extend(payload);
+                    protocol.encrypt_and_write(&data, writer).await?;
+
+                    return Ok(());
+                }
+
                 let data = serialize_v2(message)?;
                 protocol.encrypt_and_write(&data, writer).await?;
             }

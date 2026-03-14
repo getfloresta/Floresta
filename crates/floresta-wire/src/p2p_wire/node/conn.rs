@@ -57,39 +57,54 @@ where
 {
     // === CONNECTION CREATION ===
 
-    pub(crate) fn create_connection(&mut self, mut kind: ConnectionKind) -> Result<(), WireError> {
-        let is_fixed = self.fixed_peer.is_some();
-
-        // Connection with fixed peers should be marked as `manual`, rather than `regular`
-        if is_fixed && matches!(kind, ConnectionKind::Regular(_)) {
-            kind = ConnectionKind::Manual;
+    /// Create a new outgoing connection, selecting an appropriate peer address.
+    ///
+    /// If a fixed peer is set via the `--connect` CLI argument, its connection
+    /// kind will always be coerced to [`ConnectionKind::Manual`]. Otherwise,
+    /// an address is selected from the [`AddressMan`] based on the required
+    /// [`ServiceFlags`] for the given `connection_kind`.
+    ///
+    /// If no address is available and the kind is not [`ConnectionKind::Manual`],
+    /// hardcoded addresses are loaded into the [`AddressMan`] as a fallback.
+    pub(crate) fn create_connection(
+        &mut self,
+        mut conn_kind: ConnectionKind,
+    ) -> Result<(), WireError> {
+        // Set the fixed peer's connection kind to manual, if set.
+        if self.fixed_peer.is_some() {
+            conn_kind = ConnectionKind::Manual;
+            debug!("Setting the fixed peer's connection kind to manual")
         }
 
-        let required_services = match kind {
+        // Get the peer's `ServiceFlags`.
+        let required_services = match conn_kind {
             ConnectionKind::Regular(services) => services,
             _ => ServiceFlags::NONE,
         };
 
-        let address = self
+        // Get the fixed peer's `peer_id` and `LocalAddress` if set,
+        // or fetch a new address from the address manager.
+        let candidate_peer = self
             .fixed_peer
             .as_ref()
             .map(|addr| (0, addr.clone()))
             .or_else(|| {
                 self.address_man.get_address_to_connect(
                     required_services,
-                    matches!(kind, ConnectionKind::Feeler),
+                    matches!(conn_kind, ConnectionKind::Feeler),
                 )
             });
 
-        let Some((peer_id, address)) = address else {
-            // No peers with the desired services are known, load hardcoded addresses
-            let net = self.network;
-            self.address_man.add_fixed_addresses(net);
-
+        // Load hardcoded addresses to the address manager if no fixed or manual peers exist.
+        let Some((peer_id, peer_local_address)) = candidate_peer else {
+            if !matches!(conn_kind, ConnectionKind::Manual) {
+                let net = self.network;
+                self.address_man.add_fixed_addresses(net);
+            }
             return Err(WireError::NoAddressesAvailable);
         };
 
-        debug!("attempting connection with address={address:?} kind={kind:?}",);
+        debug!("Attempting connection with address={peer_local_address:?} kind={conn_kind:?}",);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -100,25 +115,25 @@ where
         self.address_man
             .update_set_state(peer_id, AddressState::Failed(now));
 
-        // Don't connect to the same peer twice
-        let is_connected = |(_, peer_addr): (_, &LocalPeerView)| {
-            peer_addr.address == address.get_net_address() && peer_addr.port == address.get_port()
+        // Don't open duplicate connections to the same peer.
+        let is_peer_connected = |(_, peer_address): (_, &LocalPeerView)| {
+            peer_address.address == peer_local_address.get_net_address()
+                && peer_address.port == peer_local_address.get_port()
         };
-
-        if self.peers.iter().any(is_connected) {
+        if self.peers.iter().any(is_peer_connected) {
             return Err(WireError::PeerAlreadyExists(
-                address.get_net_address(),
-                address.get_port(),
+                peer_local_address.get_net_address(),
+                peer_local_address.get_port(),
             ));
         }
 
-        // We allow V1 fallback only if the cli option was set, it's a --connect peer
-        // or if we are connecting to a utreexo peer, since utreexod doesn't support V2 yet.
-        let allow_v1 = self.config.allow_v1_fallback
-            || kind == ConnectionKind::Regular(service_flags::UTREEXO.into())
-            || is_fixed;
+        // Only allow P2PV1 fallback if the peer's connection kind is manual,
+        // or if the `--allow-v1-fallback` CLI argument was set.
+        let allow_v1_fallback =
+            matches!(conn_kind, ConnectionKind::Manual) || self.config.allow_v1_fallback;
 
-        self.open_connection(kind, peer_id, address, allow_v1)?;
+        // Open a connection to the peer.
+        self.open_connection(conn_kind, peer_id, peer_local_address, allow_v1_fallback)?;
 
         Ok(())
     }
