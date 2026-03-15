@@ -21,7 +21,7 @@ use floresta_chain::AssumeValidArg;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
-use rustreexo::accumulator::proof::Proof;
+use rustreexo::proof::Proof;
 
 /// Reads the first 151 blocks (or 150 blocks on top of genesis) from blocks.txt, which are regtest
 fn read_blocks_txt() -> Vec<Block> {

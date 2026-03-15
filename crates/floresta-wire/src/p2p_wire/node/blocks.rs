@@ -10,7 +10,7 @@ use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
 use floresta_common::service_flags;
-use rustreexo::accumulator::proof::Proof;
+use rustreexo::proof::Proof;
 use tracing::debug;
 use tracing::error;
 use tracing::warn;

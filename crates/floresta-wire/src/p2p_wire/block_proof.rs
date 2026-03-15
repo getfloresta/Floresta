@@ -23,12 +23,13 @@
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
 use bitcoin::BlockHash;
 use bitcoin::VarInt;
 use floresta_chain::CompactLeafData;
 use floresta_chain::ScriptPubKeyKind;
 use floresta_common::read_bounded_len;
-use rustreexo::accumulator::node_hash::BitcoinNodeHash;
+use rustreexo::node_hash::BitcoinNodeHash;
 
 /// The maximum possible inputs you can have per block.
 ///
@@ -243,7 +244,7 @@ impl Decodable for UtreexoProof {
         let mut proof_hashes = Vec::with_capacity(n_hashes);
         for _ in 0..n_hashes {
             let hash = sha256::Hash::consensus_decode(reader)?;
-            proof_hashes.push(hash.into());
+            proof_hashes.push(BitcoinNodeHash::Some(hash.to_byte_array()));
         }
 
         // Read the targets
@@ -280,6 +281,7 @@ impl Decodable for UtreexoProof {
 mod utreexo_proof_tests {
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::hashes::sha256;
+    use bitcoin::hashes::Hash;
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::Network;
@@ -292,9 +294,9 @@ mod utreexo_proof_tests {
     use floresta_chain::FlatChainStoreConfig;
     use floresta_common::acchashes;
     use floresta_common::bhash;
-    use rustreexo::accumulator::node_hash::BitcoinNodeHash;
-    use rustreexo::accumulator::proof::Proof;
-    use rustreexo::accumulator::stump::Stump;
+    use rustreexo::node_hash::BitcoinNodeHash;
+    use rustreexo::proof::Proof;
+    use rustreexo::stump::Stump;
 
     use crate::block_proof::UtreexoProof;
     use crate::p2p_wire::block_proof::Bitmap;
@@ -338,7 +340,9 @@ mod utreexo_proof_tests {
     }
 
     fn to_acc_hashes(vec: Vec<sha256::Hash>) -> Vec<BitcoinNodeHash> {
-        vec.into_iter().map(Into::into).collect()
+        vec.into_iter()
+            .map(|hash| BitcoinNodeHash::Some(hash.to_byte_array()))
+            .collect()
     }
 
     #[test]

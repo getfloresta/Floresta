@@ -28,9 +28,9 @@ use bitcoin::hashes::sha256;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::OutPoint;
-use rustreexo::accumulator::node_hash::BitcoinNodeHash;
-use rustreexo::accumulator::proof::Proof;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::proof::Proof;
+use rustreexo::stump::Stump;
 
 use self::partial_chain::PartialChainState;
 use crate::prelude::*;

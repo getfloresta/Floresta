@@ -23,7 +23,7 @@ use bitcoin::Network;
 use floresta_common::acchashes;
 use floresta_common::bhash;
 use floresta_common::service_flags;
-use rustreexo::accumulator::node_hash::BitcoinNodeHash;
+use rustreexo::node_hash::BitcoinNodeHash;
 
 use crate::prelude::*;
 use crate::AssumeValidArg;

@@ -11,7 +11,7 @@ use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use floresta_mempool::mempool::AcceptToMempoolError;
-use rustreexo::accumulator::proof::Proof;
+use rustreexo::proof::Proof;
 use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;

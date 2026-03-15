@@ -202,7 +202,7 @@ pub mod proof_util {
     use bitcoin::WPubkeyHash;
     use bitcoin::WScriptHash;
     use floresta_common::impl_error_from;
-    use rustreexo::accumulator::node_hash::BitcoinNodeHash;
+    use rustreexo::node_hash::BitcoinNodeHash;
     use sha2::Digest;
     use sha2::Sha512_256;
 
@@ -378,9 +378,10 @@ pub mod proof_util {
                     // Do not add unspendable nor already spent utxos
                     continue;
                 }
-                adds.push(
-                    get_leaf_hashes(txid, is_cb, vout as u32, output, height, block_hash).into(),
-                );
+
+                let leaf_hash =
+                    get_leaf_hashes(txid, is_cb, vout as u32, output, height, block_hash);
+                adds.push(BitcoinNodeHash::Some(leaf_hash.to_byte_array()));
             }
         }
 

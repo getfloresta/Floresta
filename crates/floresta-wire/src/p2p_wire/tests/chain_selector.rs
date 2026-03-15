@@ -5,8 +5,8 @@ mod tests {
     use floresta_chain::pruned_utreexo::BlockchainInterface;
     use floresta_common::acchashes;
     use floresta_common::prelude::HashMap;
-    use rustreexo::accumulator::node_hash::BitcoinNodeHash;
-    use rustreexo::accumulator::stump::Stump;
+    use rustreexo::node_hash::BitcoinNodeHash;
+    use rustreexo::stump::Stump;
 
     use crate::p2p_wire::tests::utils::create_false_acc;
     use crate::p2p_wire::tests::utils::setup_node;

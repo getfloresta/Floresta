@@ -27,8 +27,8 @@ use bitcoin::block::Header as BlockHeader;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use floresta_common::prelude::*;
-use rustreexo::accumulator::node_hash::BitcoinNodeHash;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::stump::Stump;
 use tracing::info;
 
 use super::chainparams::ChainParams;
@@ -131,7 +131,7 @@ impl PartialChainStateInner {
     pub fn process_block(
         &mut self,
         block: &bitcoin::Block,
-        proof: rustreexo::accumulator::proof::Proof,
+        proof: rustreexo::proof::Proof,
         inputs: HashMap<bitcoin::OutPoint, UtxoData>,
         del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
     ) -> Result<u32, BlockchainError> {
@@ -259,7 +259,7 @@ impl UpdatableChainstate for PartialChainState {
     fn connect_block(
         &self,
         block: &bitcoin::Block,
-        proof: rustreexo::accumulator::proof::Proof,
+        proof: rustreexo::proof::Proof,
         inputs: HashMap<bitcoin::OutPoint, UtxoData>,
         del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
     ) -> Result<u32, BlockchainError> {
@@ -400,7 +400,7 @@ impl BlockchainInterface for PartialChainState {
     fn validate_block(
         &self,
         _block: &bitcoin::Block,
-        _proof: rustreexo::accumulator::proof::Proof,
+        _proof: rustreexo::proof::Proof,
         _inputs: HashMap<bitcoin::OutPoint, UtxoData>,
         _del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
         _acc: Stump,
@@ -417,7 +417,7 @@ impl BlockchainInterface for PartialChainState {
         _acc: Stump,
         _block: &Block,
         _height: u32,
-        _proof: rustreexo::accumulator::proof::Proof,
+        _proof: rustreexo::proof::Proof,
         _del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
     ) -> Result<Stump, Self::Error> {
         unimplemented!("PartialChainState::update_acc")
@@ -467,9 +467,9 @@ mod tests {
     use bitcoin::Block;
     use bitcoin::Network;
     use floresta_common::acchashes;
-    use rustreexo::accumulator::node_hash::BitcoinNodeHash;
-    use rustreexo::accumulator::proof::Proof;
-    use rustreexo::accumulator::stump::Stump;
+    use rustreexo::node_hash::BitcoinNodeHash;
+    use rustreexo::proof::Proof;
+    use rustreexo::stump::Stump;
 
     use super::PartialChainState;
     use crate::pruned_utreexo::chainparams::ChainParams;

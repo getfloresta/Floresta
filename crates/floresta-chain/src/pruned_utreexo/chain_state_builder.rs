@@ -11,7 +11,7 @@
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::BlockHash;
 use bitcoin::Network;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::stump::Stump;
 
 use super::chain_state::ChainState;
 use super::chainparams::ChainParams;

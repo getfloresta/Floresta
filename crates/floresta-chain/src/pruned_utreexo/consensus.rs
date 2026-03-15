@@ -11,6 +11,7 @@ use bitcoin::blockdata::Weight;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
 use bitcoin::merkle_tree;
 use bitcoin::script;
 use bitcoin::Amount;
@@ -25,8 +26,9 @@ use bitcoin::Txid;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoinkernel::PrecomputedTransactionData;
 use floresta_common::prelude::*;
-use rustreexo::accumulator::proof::Proof;
-use rustreexo::accumulator::stump::Stump;
+use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::proof::Proof;
+use rustreexo::stump::Stump;
 
 use super::chainparams::ChainParams;
 use super::error::BlockValidationErrors;
@@ -498,7 +500,10 @@ impl Consensus {
         }
 
         // Convert to BitcoinNodeHash, from rustreexo
-        let del_hashes: Vec<_> = del_hashes.into_iter().map(Into::into).collect();
+        let del_hashes: Vec<_> = del_hashes
+            .into_iter()
+            .map(|hash| BitcoinNodeHash::Some(hash.to_byte_array()))
+            .collect();
 
         let adds = udata::proof_util::get_block_adds(block, height, block_hash);
 
