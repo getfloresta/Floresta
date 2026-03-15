@@ -208,7 +208,13 @@ pub enum Methods {
     },
 
     /// Returns the transaction, assuming it is cached by our watch only wallet
-    #[command(name = "gettransaction")]
+    #[doc = include_str!("../../../doc/rpc/gettransaction.md")]
+    #[command(
+        name = "gettransaction",
+        about = "Get detailed information about in-wallet transaction",
+        long_about = Some(include_str!("../../../doc/rpc/gettransaction.md")),
+        disable_help_subcommand = true
+    )]
     GetTransaction { txid: Txid, verbose: Option<bool> },
 
     #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
