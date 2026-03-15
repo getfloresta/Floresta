@@ -12,6 +12,7 @@ import time
 
 from test_framework import FlorestaTestFramework
 from test_framework.node import NodeType
+from test_framework.constants import WALLET_ADDRESS
 
 
 class ChainReorgTest(FlorestaTestFramework):
@@ -25,7 +26,7 @@ class ChainReorgTest(FlorestaTestFramework):
         self.utreexod = self.add_node_extra_args(
             variant=NodeType.UTREEXOD,
             extra_args=[
-                "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
+                f"--miningaddr={WALLET_ADDRESS}",
                 "--utreexoproofindex",
                 "--prune=0",
             ],
