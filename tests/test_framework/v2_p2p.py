@@ -282,12 +282,16 @@ class EncryptedP2PState:
         Returns:
         bytes - encrypted packet contents
         """
-        assert len(contents) <= 2**24 - 1
+        length_field_len = LENGTH_FIELD_LEN
+        if len(contents) > 2**24 - 1:
+            print("Warning: Oversized packet detected")
+            length_field_len = 4
+
         header = (ignore << IGNORE_BIT_POS).to_bytes(HEADER_LEN, "little")
         plaintext = header + contents
         aead_ciphertext = self.peer["send_P"].encrypt(aad, plaintext)
         enc_plaintext_len = self.peer["send_L"].crypt(
-            len(contents).to_bytes(LENGTH_FIELD_LEN, "little")
+            len(contents).to_bytes(length_field_len, "little")
         )
         return enc_plaintext_len + aead_ciphertext
 

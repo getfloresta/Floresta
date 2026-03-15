@@ -16,7 +16,6 @@ import os
 import re
 import sys
 import copy
-import random
 import socket
 import shutil
 import signal
@@ -37,7 +36,13 @@ from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
 from test_framework.util import Utility, wait_until
 from test_framework.p2p import P2P_SERVICES, P2PInterface, NetworkThread
-from test_framework.messages import NODE_P2P_V2, CAddress
+from test_framework.messages import (
+    NODE_P2P_V2,
+    CAddress,
+    msg_generic,
+    MAX_PROTOCOL_MESSAGE_LENGTH,
+    MAX_MSG_PER_SECOND,
+)
 
 
 # pylint: disable=too-many-public-methods
@@ -264,7 +269,7 @@ class FlorestaTestFramework:
             and NetworkThread.network_event_loop is not None
             and self._network_thread.is_alive()
         ):
-            self._network_thread.close(timeout=1)
+            self._network_thread.close(timeout=10)
             NetworkThread.network_event_loop = None
 
     def check_connection(self, peer_one: Node, peer_two: Node, is_connected: bool):
@@ -497,6 +502,15 @@ class FlorestaTestFramework:
             method=method,
             **kwargs,
         )
+
+    def create_msg_random(self, msgtype, size: int):
+        """
+        Create a message of a given size.
+        """
+        oversized_payload = b"\x00" * size
+
+        # Create a generic message
+        return msg_generic(msgtype, oversized_payload)
 
     def create_node_address(self, quantity: int):
         """
