@@ -40,6 +40,7 @@ from test_framework.messages import (
     CAddress,
     msg_generic,
     MAX_PROTOCOL_MESSAGE_LENGTH,
+    MAX_MSG_PER_SECOND,
 )
 
 
@@ -671,6 +672,35 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
 
         # Create a generic message
         return msg_generic(msgtype, oversized_payload)
+
+    def send_spam_p2p_messages(
+        self,
+        p2p_conn: P2PInterface,
+        msg,
+        quantity: int = MAX_MSG_PER_SECOND + 1,
+        check_disconnection: bool = True,
+    ):
+        """
+        Send multiple copies of a message to a P2P connection to test rate limiting.
+        """
+        build_message = p2p_conn.build_message(msg)
+
+        for _ in range(quantity):
+            try:
+                p2p_conn.send_raw_message(build_message)
+            except IOError as e:
+                if check_disconnection:
+                    self.log(f"Connection closed during spam (expected): {e}")
+                    break
+
+                raise RuntimeError(
+                    f"Connection closed during spam (unexpected): {e}"
+                ) from e
+
+        if check_disconnection:
+            p2p_conn.wait_for_disconnect()
+        elif not p2p_conn.is_connected:
+            raise RuntimeError("P2P connection was not disconnected as expected")
 
     def create_node_address(self, quantity: int):
         """
