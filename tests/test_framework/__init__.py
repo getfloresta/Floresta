@@ -16,7 +16,6 @@ import os
 import re
 import sys
 import copy
-import random
 import socket
 import shutil
 import signal
@@ -37,7 +36,12 @@ from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
 from test_framework.util import Utility, wait_until
 from test_framework.p2p import P2P_SERVICES, P2PInterface, NetworkThread
-from test_framework.messages import NODE_P2P_V2, CAddress
+from test_framework.messages import (
+    NODE_P2P_V2,
+    CAddress,
+    msg_generic,
+    MAX_PROTOCOL_MESSAGE_LENGTH,
+)
 
 
 class FlorestaTestMetaClass(type):
@@ -658,6 +662,15 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             method=method,
             **kwargs,
         )
+
+    def create_msg_random(self, msgtype, size: int = MAX_PROTOCOL_MESSAGE_LENGTH + 1):
+        """
+        Create a message of a given size.
+        """
+        oversized_payload = b"\x00" * size
+
+        # Create a generic message
+        return msg_generic(msgtype, oversized_payload)
 
     def create_node_address(self, quantity: int):
         """
