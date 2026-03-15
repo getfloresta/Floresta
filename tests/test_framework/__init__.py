@@ -41,6 +41,7 @@ from test_framework.messages import (
     CAddress,
     msg_generic,
     MAX_PROTOCOL_MESSAGE_LENGTH,
+    MAX_MSG_PER_SECOND,
 )
 
 
@@ -671,6 +672,55 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
 
         # Create a generic message
         return msg_generic(msgtype, oversized_payload)
+
+    def send_spam_p2p_messages(
+        self,
+        p2p_conn: P2PInterface,
+        msg,
+        timeout: int = 10,
+        range_msg=range(MAX_MSG_PER_SECOND * 2),
+        check_disconnection: bool = True,
+    ):
+        """
+        Flood a P2P connection with repeated message batches to test rate limiting.
+
+        This method sends batches of messages in rapid succession for a specified duration.
+        Each batch contains `range_msg` copies of the same message. The function continues
+        sending message batches until either:
+        - The timeout is reached (normal completion)
+        - The peer disconnects due to rate limit violations (if check_disconnection=True)
+        """
+        build_message = p2p_conn.build_message(msg)
+        msg_count = 0
+        start = time.time()
+        end_time = start + timeout
+
+        try:
+            while time.time() <= end_time:
+                for _ in range_msg:
+                    p2p_conn.send_raw_message(build_message)
+
+                msg_count += len(range_msg)
+
+        except IOError as e:
+            elapsed = time.time() - start
+            self.log(f"Sent {msg_count} messages in: {elapsed:.2f}s")
+
+            if check_disconnection:
+                self.log(f"Connection closed during spam (expected): {e}")
+                return
+
+            raise RuntimeError(
+                f"Connection closed during spam (unexpected): {e}"
+            ) from e
+
+        elapsed = time.time() - start
+        self.log(f"Sent {msg_count} messages in: {elapsed:.2f}s")
+
+        if check_disconnection:
+            p2p_conn.wait_for_disconnect()
+        elif not p2p_conn.is_connected:
+            raise RuntimeError("P2P connection was not disconnected as expected")
 
     def create_node_address(self, quantity: int):
         """
