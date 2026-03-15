@@ -72,6 +72,7 @@ BASE_TEST_SUITE = [
     ("example", "utreexod"),
     ("florestad", "node-info"),
     ("p2p", "p2p_addr_relay"),
+    ("p2p", "p2p_oversized_msg"),
 ]
 
 # Before running the tests, we check if the number of tests
