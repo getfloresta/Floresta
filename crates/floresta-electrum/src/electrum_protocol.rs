@@ -19,7 +19,7 @@ use floresta_common::get_spk_hash;
 use floresta_common::spsc::Channel;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
-use floresta_watch_only::kv_database::KvDatabase;
+use floresta_watch_only::sqlite_database::SqliteDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_wire::node_interface::NodeInterface;
@@ -174,7 +174,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
 
     /// The address cache is used to store addresses and transactions, like a
     /// watch-only wallet, but it is adapted to the electrum protocol.
-    address_cache: Arc<AddressCache<KvDatabase>>,
+    address_cache: Arc<AddressCache<SqliteDatabase>>,
 
     /// The clients are the clients connected to our server, we keep track of them
     /// using a unique id.
@@ -216,7 +216,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
 
 impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     pub fn new(
-        address_cache: Arc<AddressCache<KvDatabase>>,
+        address_cache: Arc<AddressCache<SqliteDatabase>>,
         chain: Arc<Blockchain>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         node_interface: NodeInterface,
@@ -381,7 +381,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = get_spk_hash(&script);
 
                 if !self.address_cache.is_address_cached(&hash) {
-                    self.address_cache.cache_address(script.clone());
+                    self.address_cache.cache_address(script.clone())?;
                     self.addresses_to_scan.push(script);
                     let res = json!({
                         "confirmed": 0,
@@ -402,7 +402,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = get_spk_hash(&script);
 
                 if !self.address_cache.is_address_cached(&hash) {
-                    self.address_cache.cache_address(script.clone());
+                    self.address_cache.cache_address(script.clone())?;
                     self.addresses_to_scan.push(script);
                     return json_rpc_res!(request, null);
                 }
@@ -468,7 +468,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                 let updated = self
                     .address_cache
-                    .cache_mempool_transaction(&tx)
+                    .cache_mempool_transaction(&tx)?
                     .into_iter()
                     .map(|spend| (tx.clone(), spend))
                     .collect::<Vec<_>>();
@@ -538,7 +538,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     }
 
     pub async fn rebroadcast_mempool_transactions(&self) {
-        let unconfirmed = self.address_cache.find_unconfirmed().unwrap();
+        let unconfirmed = match self.address_cache.find_unconfirmed() {
+            Ok(txs) => txs,
+            Err(e) => {
+                error!("Error fetching unconfirmed transactions: {e}");
+                return;
+            }
+        };
         for tx in unconfirmed {
             let txid = tx.compute_txid();
             if let Ok(Err(e)) = self.node_interface.broadcast_transaction(tx.clone()).await {
@@ -592,9 +598,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     continue;
                 }
 
-                self.addresses_to_scan.iter().for_each(|address| {
-                    self.address_cache.cache_address(address.clone());
-                });
+                for address in self.addresses_to_scan.iter() {
+                    if let Err(e) = self.address_cache.cache_address(address.clone()) {
+                        error!("Error caching address: {e}");
+                    }
+                }
 
                 info!("Catching up with addresses {:?}", self.addresses_to_scan);
                 let addresses: Vec<_> = self.addresses_to_scan.drain(..).collect();
@@ -700,10 +708,12 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }]
         });
 
-        let current_height = self.address_cache.get_cache_height();
+        let current_height = self.address_cache.get_cache_height().unwrap_or(0);
 
         if (!self.chain.is_in_ibd() || height % 1000 == 0) && (height > current_height) {
-            self.address_cache.bump_height(height);
+            if let Err(e) = self.address_cache.bump_height(height) {
+                error!("Error bumping cache height: {e}");
+            }
         }
 
         if self.chain.get_height().unwrap() == height {
@@ -715,9 +725,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
         }
 
-        let transactions = self.address_cache.block_process(&block, height);
-
-        self.wallet_notify(&transactions);
+        match self.address_cache.block_process(&block, height) {
+            Ok(transactions) => self.wallet_notify(&transactions),
+            Err(e) => error!("Error processing block at height {height}: {e}"),
+        }
     }
 
     /// Handles each kind of Message
@@ -954,8 +965,8 @@ mod test {
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
     use floresta_mempool::Mempool;
-    use floresta_watch_only::kv_database::KvDatabase;
     use floresta_watch_only::merkle::MerkleProof;
+    use floresta_watch_only::sqlite_database::SqliteDatabase;
     use floresta_watch_only::AddressCache;
     use floresta_wire::address_man::AddressMan;
     use floresta_wire::address_man::ReachableNetworks;
@@ -1017,14 +1028,13 @@ mod test {
         headers
     }
 
-    fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
-        let test_id: u32 = rand::random();
-        let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
-        let cache = AddressCache::new(cache);
+    fn get_test_cache() -> Arc<AddressCache<SqliteDatabase>> {
+        let db = SqliteDatabase::new_ephemeral().unwrap();
+        let cache = AddressCache::new(db).unwrap();
 
         // Inserting test transactions in the wallet
         let (transaction, proof) = get_test_transaction();
-        cache.cache_transaction(
+        let _ = cache.cache_transaction(
             &transaction,
             118511,
             transaction.output[0].value.to_sat(),
