@@ -316,6 +316,17 @@ class Node:
 
         self.rpc.addnode(node.p2p_url, method, v2transport=v2transport)
 
+    def connect_node_by_url(self, url, method: str = "add", v2transport: bool = True):
+        """
+        Connect to a node by URL.
+        """
+        if not self.daemon.is_running:
+            raise ValueError(
+                f"Node '{self.variant}' must be running to connect to a node."
+            )
+
+        self.rpc.addnode(url, method, v2transport=v2transport)
+
     def get_connection_info(self) -> Tuple[str, Optional[str]]:
         """
         Get the user agent and host for the current node.
