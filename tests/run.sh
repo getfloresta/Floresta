@@ -38,10 +38,11 @@ for arg in "$@"; do
     fi
 done
 
-# Clean up the logs dir if --preserve-data-dir was not passed
+# Clean up logsm data files and other stuffs
+# if --preserve-data-dir was not passed
 if [ "$PRESERVE_DATA" = false ]; then
     echo "Cleaning up test directories before running tests..."
-    rm -rf "$FLORESTA_TEMP_DIR/logs"
+    sh contrib/clean_data.sh
 fi
 
 # Run the tests
