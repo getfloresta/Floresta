@@ -42,6 +42,7 @@ use tracing::info;
 
 use super::address_man::AddressMan;
 use super::address_man::LocalAddress;
+use super::ban_man::BanMan;
 use super::block_proof::Bitmap;
 use super::error::WireError;
 use super::node_context::NodeContext;
@@ -257,6 +258,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) peer_by_service: HashMap<ServiceFlags, Vec<u32>>,
     pub(crate) max_banscore: u32,
     pub(crate) address_man: AddressMan,
+    pub(crate) ban_man: BanMan,
     pub(crate) added_peers: Vec<AddedPeerInfo>,
 
     // 3. Internal Communication
@@ -370,6 +372,7 @@ where
                 node_rx,
                 node_tx,
                 address_man,
+                ban_man: BanMan::new(),
                 last_tip_update: Instant::now(),
                 last_connection: Instant::now(),
                 last_peer_db_dump: Instant::now(),
