@@ -539,6 +539,25 @@ where
         Ok(())
     }
 
+    /// Bans a peer for `T::BAN_TIME`.
+    pub fn handle_ban_peer(&mut self, addr: IpAddr, port: Option<u16>) -> Result<(), WireError> {
+        let peer_id = self
+            .peers
+            .iter()
+            .find(|(_, peer)| {
+                addr == peer.address && port.unwrap_or(Self::get_port(self.network)) == peer.port
+            })
+            .map(|(&peer_id, _)| peer_id);
+
+        match peer_id {
+            Some(peer_id) => self.disconnect_and_ban(peer_id),
+            None => Err(WireError::PeerNotFoundAtAddress(
+                addr,
+                port.unwrap_or(Self::get_port(self.network)),
+            )),
+        }
+    }
+
     /// Checks whether some of our inflight requests have timed out.
     ///
     /// This function will check if any of our inflight requests have timed out, and if so,

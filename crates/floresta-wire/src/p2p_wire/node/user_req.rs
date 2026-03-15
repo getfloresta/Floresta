@@ -169,6 +169,29 @@ where
                 let _ = responder.send(NodeResponse::TransactionBroadcastResult(Ok(txid)));
                 return;
             }
+
+            UserRequest::BanPeer((addr, port)) => {
+                let node_response = match self.handle_ban_peer(addr, port) {
+                    Ok(()) => {
+                        info!(
+                            "Banned peer {addr}:{}",
+                            port.unwrap_or(Self::get_port(self.network))
+                        );
+                        NodeResponse::BanPeer(true)
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to ban peer {addr}:{}: {:?}",
+                            port.unwrap_or(Self::get_port(self.network)),
+                            err
+                        );
+                        NodeResponse::BanPeer(false)
+                    }
+                };
+
+                let _ = responder.send(node_response);
+                return;
+            }
         };
 
         let peer = self.send_to_fast_peer(req, ServiceFlags::NONE);
