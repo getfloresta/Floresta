@@ -27,6 +27,8 @@ use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
+use crate::json_rpc::res::ChainTip;
+use crate::json_rpc::res::ChainTipStatus;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
 
@@ -308,7 +310,61 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getblockstats
     // getchainstates
-    // getchaintips
+
+    pub(super) fn get_chain_tips(&self) -> Result<Vec<ChainTip>, JsonRpcError> {
+        let tips = self
+            .chain
+            .get_chain_tips()
+            .map_err(|_| JsonRpcError::Chain)?;
+
+        let (best_height, best_hash) = self
+            .chain
+            .get_best_block()
+            .map_err(|_| JsonRpcError::Chain)?;
+
+        let mut result = Vec::with_capacity(tips.len());
+
+        for tip in tips {
+            if tip == best_hash {
+                result.push(ChainTip {
+                    height: best_height,
+                    hash: tip.to_string(),
+                    branchlen: 0,
+                    status: ChainTipStatus::Active,
+                });
+                continue;
+            }
+
+            let tip_height = self
+                .chain
+                .get_block_height(&tip)
+                .map_err(|_| JsonRpcError::Chain)?
+                .ok_or(JsonRpcError::Chain)?;
+
+            let fork_point = self
+                .chain
+                .get_fork_point(tip)
+                .map_err(|_| JsonRpcError::Chain)?;
+
+            let fork_height = self
+                .chain
+                .get_block_height(&fork_point)
+                .map_err(|_| JsonRpcError::Chain)?
+                .ok_or(JsonRpcError::Chain)?;
+
+            let branchlen = tip_height.saturating_sub(fork_height);
+
+            result.push(ChainTip {
+                height: tip_height,
+                hash: tip.to_string(),
+                branchlen,
+                status: ChainTipStatus::ValidFork,
+            });
+        }
+
+        Ok(result)
+    }
+
     // getchaintxstats
     // getdeploymentinfo
     // getdifficulty
