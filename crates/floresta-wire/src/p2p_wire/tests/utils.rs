@@ -340,7 +340,7 @@ pub async fn setup_node(
 
         // Add a fixed peer to avoid opening real P2P connections
         if i == 0 {
-            node.fixed_peer = Some(to_addr_v2(peer.address).into());
+            node.fixed_peer = Some(vec![to_addr_v2(peer.address).into()]);
         }
 
         node.peers.insert(peer_id, peer);
