@@ -18,11 +18,11 @@
 /// # use floresta_common::impl_error_from;
 /// enum MyError {
 ///     Io(std::io::Error),
-///     Parse(std::num::ParseIntError),
+///     Parse(core::num::ParseIntError),
 /// }
 ///
 /// impl_error_from!(MyError, std::io::Error, Io);
-/// impl_error_from!(MyError, std::num::ParseIntError, Parse);
+/// impl_error_from!(MyError, core::num::ParseIntError, Parse);
 ///
 /// fn parse_number(s: &str) -> Result<i32, MyError> {
 ///     let n: i32 = s.parse()?; // Automatically converts ParseIntError into MyError

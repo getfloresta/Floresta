@@ -1,5 +1,5 @@
+use core::net::IpAddr;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;

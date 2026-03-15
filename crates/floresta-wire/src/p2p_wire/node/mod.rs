@@ -11,8 +11,8 @@ pub mod sync_ctx;
 mod user_req;
 
 use core::fmt::Debug;
+use core::net::IpAddr;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;

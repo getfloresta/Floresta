@@ -1,7 +1,7 @@
 //! Main module for the p2p chain. This is a blockchain provider, just like cli-chain, but it's
 //! backed by p2p Bitcoin's p2p network.
 
-use std::net::SocketAddr;
+use core::net::SocketAddr;
 
 use bitcoin::Network;
 use floresta_chain::AssumeUtreexoValue;

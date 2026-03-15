@@ -1,5 +1,5 @@
-use std::net::IpAddr;
-use std::net::SocketAddr;
+use core::net::IpAddr;
+use core::net::SocketAddr;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;

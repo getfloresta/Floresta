@@ -1,8 +1,8 @@
 //! node_interface, which holds [`NodeInterface`] and related methods
 //! that define the API to interact with the floresta node
 
-use std::net::IpAddr;
-use std::net::SocketAddr;
+use core::net::IpAddr;
+use core::net::SocketAddr;
 use std::time::Instant;
 
 use bitcoin::p2p::ServiceFlags;

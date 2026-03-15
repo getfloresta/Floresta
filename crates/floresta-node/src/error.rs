@@ -2,7 +2,7 @@ use core::error;
 use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
-use std::net::AddrParseError;
+use core::net::AddrParseError;
 
 use bitcoin::consensus::encode;
 use floresta_chain::BlockValidationErrors;
@@ -21,7 +21,7 @@ pub enum FlorestadError {
     Encode(encode::Error),
 
     /// Integer parsing error.
-    ParseNum(std::num::ParseIntError),
+    ParseNum(core::num::ParseIntError),
 
     /// Proof validation failure.
     Rustreexo(String),
@@ -246,7 +246,7 @@ macro_rules! impl_from_error {
 }
 
 impl_from_error!(Encode, encode::Error);
-impl_from_error!(ParseNum, std::num::ParseIntError);
+impl_from_error!(ParseNum, core::num::ParseIntError);
 impl_from_error!(Rustreexo, String);
 impl_from_error!(Io, std::io::Error);
 impl_from_error!(ScriptValidation, bitcoin::blockdata::script::Error);

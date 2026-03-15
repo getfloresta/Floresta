@@ -1,5 +1,5 @@
+use core::net::SocketAddr;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::slice;
 use std::sync::Arc;
 use std::time::Instant;

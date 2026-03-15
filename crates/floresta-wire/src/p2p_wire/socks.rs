@@ -10,9 +10,9 @@ use core::error;
 use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
-use std::net::Ipv4Addr;
-use std::net::Ipv6Addr;
-use std::net::SocketAddr;
+use core::net::Ipv4Addr;
+use core::net::Ipv6Addr;
+use core::net::SocketAddr;
 
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;

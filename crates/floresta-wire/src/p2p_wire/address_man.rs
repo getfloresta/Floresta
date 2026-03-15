@@ -2,14 +2,14 @@
 //! metadata. This module is very important in keeping our node protected against targeted
 //! attacks, like eclipse attacks.
 
+use core::net::IpAddr;
+use core::net::Ipv4Addr;
+use core::net::Ipv6Addr;
+use core::net::SocketAddr;
 use core::str::FromStr;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::read_to_string;
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
-use std::net::Ipv6Addr;
-use std::net::SocketAddr;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -131,7 +131,7 @@ impl FromStr for LocalAddress {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         LocalAddress::try_from(s)
     }
-    type Err = std::net::AddrParseError;
+    type Err = core::net::AddrParseError;
 }
 
 // Note that, since we can't know the network we are operating in, this code
@@ -158,7 +158,7 @@ impl TryFrom<&str> for LocalAddress {
         ))
     }
 
-    type Error = std::net::AddrParseError;
+    type Error = core::net::AddrParseError;
 }
 
 impl LocalAddress {
@@ -180,22 +180,40 @@ impl LocalAddress {
         }
     }
 
-    /// Sets the port used by this node
-    pub fn set_port(&mut self, port: u16) {
-        self.port = port;
+    /// Get the [`AddrV2`] for this [`LocalAddress`].
+    pub fn get_addrv2(&self) -> AddrV2 {
+        self.address.clone()
     }
 
-    /// Sets the services advertised by this node
-    pub fn set_services(&mut self, services: ServiceFlags) {
-        self.services = services;
+    /// Get the [`SocketAddr`] for this [`LocalAddress`].
+    pub fn get_socket_address(&self) -> SocketAddr {
+        let ip = self.get_net_address();
+        let port = self.get_port();
+
+        SocketAddr::new(ip, port)
     }
 
-    /// Returns this address's port
+    /// Get the `port` for this [`LocalAddress`].
     pub fn get_port(&self) -> u16 {
         self.port
     }
 
-    /// Return an IP address associated with this peer address
+    /// Set the `port` for this [`LocalAddress`].
+    pub fn set_port(&mut self, port: u16) {
+        self.port = port;
+    }
+
+    /// Get the [`ServiceFlags`] for this [`LocalAddress`].
+    pub fn get_services(&self) -> ServiceFlags {
+        self.services
+    }
+
+    /// Set the [`ServiceFlags`] for this [`LocalAddress`].
+    pub fn set_services(&mut self, services: ServiceFlags) {
+        self.services = services;
+    }
+
+    /// Get the [`IpAddr`] for with this [`LocalAddress`].
     pub fn get_net_address(&self) -> IpAddr {
         match self.address {
             // IPV4
@@ -204,12 +222,6 @@ impl LocalAddress {
             AddrV2::Ipv6(ipv6) => IpAddr::V6(ipv6),
             _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
-    }
-
-    /// Returns the actual address, as defined in AddrV2. This is useful
-    /// if we are trying a peer that needs a proxy like Tor.
-    pub fn get_address(&self) -> AddrV2 {
-        self.address.clone()
     }
 
     /// Return whether the address can be reached from our node
@@ -1089,8 +1101,8 @@ pub enum Address {
 
 /// Simple implementation of a DNS-over-HTTPS (DoH) lookup routed through the SOCKS5 proxy
 pub mod dns_proxy {
-    use std::net::IpAddr;
-    use std::net::SocketAddr;
+    use core::net::IpAddr;
+    use core::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1178,10 +1190,10 @@ pub mod dns_proxy {
 
 #[cfg(test)]
 mod test {
+    use core::net::Ipv4Addr;
     use std::fs::File;
     use std::io::Read;
     use std::io::{self};
-    use std::net::Ipv4Addr;
 
     use bitcoin::p2p::address::AddrV2;
     use bitcoin::p2p::ServiceFlags;

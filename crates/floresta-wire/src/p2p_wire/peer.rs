@@ -41,6 +41,7 @@ use super::node::NodeRequest;
 use super::transport::TransportError;
 use super::transport::TransportProtocol;
 use super::transport::WriteTransport;
+use crate::address_man::LocalAddress;
 use crate::block_proof::UtreexoProofMask;
 use crate::node::ConnectionKind;
 use crate::node::MAX_ADDRV2_ADDRESSES;
@@ -123,13 +124,14 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     state: State,
     send_headers: bool,
     node_requests: UnboundedReceiver<NodeRequest>,
-    address_id: usize,
+    address: LocalAddress,
     kind: ConnectionKind,
     wants_addrv2: bool,
     shutdown: bool,
     actor_receiver: UnboundedReceiver<ReaderMessage>, // Add the receiver for messages from TcpStreamActor
     writer: WriteTransport<T>,
     our_user_agent: String,
+    our_best_block: u32,
     cancellation_sender: tokio::sync::oneshot::Sender<()>,
     transport_protocol: TransportProtocol,
 }
@@ -226,7 +228,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         }
 
         let now = Instant::now();
-        self.send_to_node(PeerMessages::Disconnected(self.address_id), now);
+        self.send_to_node(PeerMessages::Disconnected(self.address.id), now);
 
         // force the stream to shutdown to prevent leaking resources
         if let Err(shutdown_err) = self.writer.shutdown().await {
@@ -251,9 +253,13 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
     }
 
     async fn peer_loop_inner(&mut self) -> Result<()> {
-        // send a version
-        let version = peer_utils::build_version_message(self.our_user_agent.clone());
-        self.write(version).await?;
+        // Send a `version` message to the peer.
+        let message_version = peer_utils::build_version_message(
+            self.our_user_agent.clone(),
+            self.our_best_block,
+            self.address.clone(),
+        );
+        self.write(message_version).await?;
         self.state = State::SentVersion(Instant::now());
         loop {
             tokio::select! {
@@ -576,7 +582,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                             protocol_version: 0,
                             id: self.id,
                             blocks: self.current_best_block.unsigned_abs(),
-                            address_id: self.address_id,
+                            address_id: self.address.id,
                             services: self.services,
                             kind: self.kind,
                             transport_protocol: self.transport_protocol,
@@ -630,19 +636,20 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
     #[allow(clippy::too_many_arguments)]
     pub fn create_peer<W: AsyncWrite + Unpin + Send + Sync + 'static>(
         id: u32,
+        address: LocalAddress,
         mempool: Arc<Mutex<Mempool>>,
         node_tx: UnboundedSender<NodeNotification>,
         node_requests: UnboundedReceiver<NodeRequest>,
-        address_id: usize,
         kind: ConnectionKind,
         actor_receiver: UnboundedReceiver<ReaderMessage>,
         writer: WriteTransport<W>,
         our_user_agent: String,
+        our_best_block: u32,
         cancellation_sender: tokio::sync::oneshot::Sender<()>,
         transport_protocol: TransportProtocol,
     ) {
         let peer = Peer {
-            address_id,
+            address,
             blocks_only: false,
             current_best_block: -1,
             id,
@@ -664,6 +671,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             actor_receiver, // Add the receiver for messages from TcpStreamActor
             writer,
             our_user_agent,
+            our_best_block,
             cancellation_sender,
             transport_protocol,
         };
@@ -697,64 +705,82 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 }
 
 pub(super) mod peer_utils {
-    use std::net::IpAddr;
-    use std::net::Ipv4Addr;
-    use std::net::SocketAddr;
+    use core::net::IpAddr;
+    use core::net::Ipv4Addr;
+    use core::net::SocketAddr;
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
-    use bitcoin::p2p::address;
+    use bitcoin::p2p::message;
     use bitcoin::p2p::message::NetworkMessage;
-    use bitcoin::p2p::message::{self};
-    use bitcoin::p2p::message_network;
-    use floresta_common::service_flags;
+    use bitcoin::p2p::message_network::VersionMessage;
+    use bitcoin::p2p::Address;
+    use bitcoin::p2p::ServiceFlags;
+    use rand::thread_rng;
+    use rand::Rng;
+
+    use crate::address_man::LocalAddress;
 
     /// Protocol version we speak
     pub const PROTOCOL_VERSION: u32 = 70016;
 
+    /// Build the [pong](NetworkMessage::Pong) message, which must be sent  whenever a peer sends us a
+    /// [ping](NetworkMessage::Ping). Note that the nonce received in the ping must be reused in the pong.
     pub(super) fn make_pong(nonce: u64) -> NetworkMessage {
         NetworkMessage::Pong(nonce)
     }
 
-    pub(crate) fn build_version_message(user_agent: String) -> message::NetworkMessage {
-        use bitcoin::p2p::ServiceFlags;
+    /// Build the [version](NetworkMessage::Version) message used to perform the peer connection
+    /// handshake, as described in the [Bitcoin Wiki](https://en.bitcoin.it/wiki/Protocol_documentation#version).
+    pub(crate) fn build_version_message(
+        user_agent: String,
+        best_block: u32,
+        peer_address: LocalAddress,
+    ) -> message::NetworkMessage {
+        // Services supported by this node.
+        //
+        // As Floresta does not persist blocks, and is
+        // unable to serve Utreexo proofs for the last
+        // 288 blocks, only `P2P_V2` is advertised.
+        let services = ServiceFlags::P2P_V2;
 
-        // Building version message, see https://en.bitcoin.it/wiki/Protocol_documentation#version
-        let my_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 38332);
-
-        // "bitfield of features to be enabled for this connection"
-        let services =
-            ServiceFlags::NETWORK | ServiceFlags::WITNESS | service_flags::UTREEXO.into();
-
-        // "standard UNIX timestamp in seconds"
+        // The current UNIX timestamp.
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("Time error")
-            .as_secs();
+            .expect("Great Scott!")
+            .as_secs() as i64;
 
-        // "The network address of the node receiving this message"
-        let addr_recv = address::Address::new(&my_address, ServiceFlags::NONE);
+        // This node's `Address`.
+        // Per the version message specification, we can use a dummy address.
+        let fake_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 38332);
+        let sender_address = Address::new(&fake_socket, services);
 
-        // "The network address of the node emitting this message"
-        let addr_from = address::Address::new(&my_address, ServiceFlags::NONE);
+        // The remote peer's `Address`.
+        let receiver_address = Address::new(
+            &peer_address.get_socket_address(),
+            peer_address.get_services(),
+        );
 
-        // "Node random nonce, randomly generated every time a version packet is sent. This nonce is used to detect connections to self."
-        let nonce: u64 = 1;
+        // Generate a per-message nonce.
+        let mut prng = thread_rng();
+        let nonce: u64 = prng.gen();
 
-        // "The last block received by the emitting node"
-        let start_height: i32 = 0;
+        // Inform the peer of this node's chain tip.
+        let start_height = best_block as i32;
 
-        // Construct the message
-        message::NetworkMessage::Version(message_network::VersionMessage {
+        // Floresta does not implement transaction relay.
+        let relay = false;
+
+        NetworkMessage::Version(VersionMessage {
+            version: PROTOCOL_VERSION,
             services,
-            timestamp: timestamp as i64,
-            receiver: addr_recv,
-            sender: addr_from,
+            timestamp,
+            sender: sender_address,
+            receiver: receiver_address,
             nonce,
             user_agent,
             start_height,
-            relay: false,
-            version: PROTOCOL_VERSION,
+            relay,
         })
     }
 }

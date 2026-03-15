@@ -1,7 +1,9 @@
-use std::fs;
 #[cfg(feature = "metrics")]
-use std::net::Ipv4Addr;
-use std::net::SocketAddr;
+use core::net::IpAddr;
+#[cfg(feature = "metrics")]
+use core::net::Ipv4Addr;
+use core::net::SocketAddr;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -612,7 +614,7 @@ impl Florestad {
         #[cfg(feature = "metrics")]
         {
             let metrics_server_address =
-                SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
 
             task::spawn(metrics::metrics_server(metrics_server_address));
             info!("Started metrics server on: {metrics_server_address}",);

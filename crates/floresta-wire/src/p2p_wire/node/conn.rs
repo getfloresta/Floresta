@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use core::net::IpAddr;
+use core::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -124,7 +125,7 @@ where
     }
 
     pub(crate) fn open_feeler_connection(&mut self) -> Result<(), WireError> {
-        // No feeler if `-connect` is set
+        // No feeler if `--connect` is set
         if self.fixed_peer.is_some() {
             return Ok(());
         }
@@ -151,7 +152,7 @@ where
         &mut self,
         kind: ConnectionKind,
         peer_id: usize,
-        address: LocalAddress,
+        peer_address: LocalAddress,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
         let (requests_tx, requests_rx) = unbounded_channel();
@@ -164,11 +165,11 @@ where
                     self.mempool.clone(),
                     self.network,
                     self.node_tx.clone(),
-                    peer_id,
-                    address.clone(),
+                    peer_address.clone(),
                     requests_rx,
                     self.peer_id_count,
                     self.config.user_agent.clone(),
+                    self.chain.get_best_block().unwrap().0,
                     allow_v1_fallback,
                 ),
             ));
@@ -177,14 +178,14 @@ where
                 Duration::from_secs(10),
                 Self::open_non_proxy_connection(
                     kind,
-                    peer_id,
-                    address.clone(),
+                    peer_address.clone(),
                     requests_rx,
                     self.peer_id_count,
                     self.mempool.clone(),
                     self.network,
                     self.node_tx.clone(),
                     self.config.user_agent.clone(),
+                    self.chain.get_best_block().unwrap().0,
                     allow_v1_fallback,
                 ),
             ));
@@ -201,8 +202,8 @@ where
             peer_count,
             LocalPeerView {
                 message_times: Ema::with_half_life_50(),
-                address: address.get_net_address(),
-                port: address.get_port(),
+                address: peer_address.get_net_address(),
+                port: peer_address.get_port(),
                 user_agent: "".to_string(),
                 state: PeerStatus::Awaiting,
                 channel: requests_tx,
@@ -240,20 +241,22 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn open_non_proxy_connection(
         kind: ConnectionKind,
-        peer_id: usize,
-        address: LocalAddress,
+        peer_address: LocalAddress,
         requests_rx: UnboundedReceiver<NodeRequest>,
         peer_id_count: u32,
         mempool: Arc<Mutex<Mempool>>,
         network: Network,
         node_tx: UnboundedSender<NodeNotification>,
-        user_agent: String,
+        our_user_agent: String,
+        our_best_block: u32,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
-        let address = (address.get_net_address(), address.get_port());
-
-        let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect(address, network, allow_v1_fallback).await?;
+        let (transport_reader, transport_writer, transport_protocol) = transport::connect(
+            (peer_address.get_net_address(), peer_address.get_port()),
+            network,
+            allow_v1_fallback,
+        )
+        .await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);
@@ -267,14 +270,15 @@ where
         // Use create_peer function instead of manually creating the peer
         Peer::<WriteHalf>::create_peer(
             peer_id_count,
+            peer_address,
             mempool,
             node_tx.clone(),
             requests_rx,
-            peer_id,
             kind,
             actor_receiver,
             transport_writer,
-            user_agent,
+            our_user_agent,
+            our_best_block,
             cancellation_sender,
             transport_protocol,
         );
@@ -290,15 +294,16 @@ where
         mempool: Arc<Mutex<Mempool>>,
         network: Network,
         node_tx: UnboundedSender<NodeNotification>,
-        peer_id: usize,
-        address: LocalAddress,
+        peer_address: LocalAddress,
         requests_rx: UnboundedReceiver<NodeRequest>,
         peer_id_count: u32,
-        user_agent: String,
+        our_user_agent: String,
+        our_best_block: u32,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
         let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect_proxy(proxy, address, network, allow_v1_fallback).await?;
+            transport::connect_proxy(proxy, peer_address.clone(), network, allow_v1_fallback)
+                .await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);
@@ -311,14 +316,15 @@ where
 
         Peer::<WriteHalf>::create_peer(
             peer_id_count,
+            peer_address,
             mempool,
             node_tx,
             requests_rx,
-            peer_id,
             kind,
             actor_receiver,
             transport_writer,
-            user_agent,
+            our_user_agent,
+            our_best_block,
             cancellation_sender,
             transport_protocol,
         );
@@ -426,8 +432,8 @@ where
                     .map_err(|_e| AddrParseError::InvalidHostname)?;
                 let id = rand::random();
                 let ip = match ip[0] {
-                    std::net::IpAddr::V4(ip) => AddrV2::Ipv4(ip),
-                    std::net::IpAddr::V6(ip) => AddrV2::Ipv6(ip),
+                    IpAddr::V4(ip) => AddrV2::Ipv4(ip),
+                    IpAddr::V6(ip) => AddrV2::Ipv6(ip),
                 };
 
                 Ok(LocalAddress::new(

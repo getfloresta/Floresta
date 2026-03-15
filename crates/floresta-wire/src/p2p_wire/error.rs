@@ -1,8 +1,8 @@
 use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
+use core::net::IpAddr;
 use std::io;
-use std::net::IpAddr;
 
 use floresta_chain::BlockchainError;
 use floresta_common::impl_error_from;

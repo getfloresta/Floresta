@@ -248,7 +248,7 @@ pub async fn connect_proxy<A: ToSocketAddrs>(
     network: Network,
     allow_v1_fallback: bool,
 ) -> TransportResult {
-    let addr = match address.get_address() {
+    let addr = match address.get_addrv2() {
         AddrV2::Cjdns(addr) => Socks5Addr::Ipv6(addr),
         AddrV2::I2p(addr) => Socks5Addr::Domain(addr.into()),
         AddrV2::Ipv4(addr) => Socks5Addr::Ipv4(addr),
