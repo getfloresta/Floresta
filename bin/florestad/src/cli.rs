@@ -1,5 +1,7 @@
 use bitcoin::BlockHash;
 use bitcoin::Network;
+#[cfg(unix)]
+use clap::CommandFactory;
 use clap::Parser;
 use floresta_node::AssumeValidArg;
 
@@ -160,11 +162,11 @@ pub struct Cli {
 
     #[cfg(unix)]
     #[arg(long, default_value = "false")]
-    /// Whether we should run as a daemon
+    /// Run florestad as a daemon.
     pub daemon: bool,
 
     #[cfg(unix)]
-    #[arg(long, value_name = "FILE", requires = "daemon")]
+    #[arg(long, value_name = "PID_FILE")]
     /// File to write `florestad`'s PID to.
     ///
     /// In case you're using the daemon option, and you want to know the process ID, you can
@@ -184,6 +186,24 @@ pub struct Cli {
     /// This will run in the background and wont't affect node's operation. However,
     /// to disable backfilling, run floresta using this flag.
     pub no_backfill: bool,
+}
+
+impl Cli {
+    /// Validate arguments passed to [`Cli`].
+    ///
+    /// Checks:
+    ///   - If `--pid-file` is passed, `--daemon` must also be passed.
+    pub fn validate(&self) {
+        #[cfg(unix)]
+        if self.pid_file.is_some() && !self.daemon {
+            Cli::command()
+                .error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    "--pid-file requires that --daemon be set",
+                )
+                .exit();
+        }
+    }
 }
 
 fn parse_assume_valid(s: &str) -> Result<AssumeValidArg, String> {

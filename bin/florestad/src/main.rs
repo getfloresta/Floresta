@@ -17,6 +17,8 @@
 #![deny(non_upper_case_globals)]
 
 mod cli;
+#[cfg(unix)]
+mod daemonize;
 
 use std::env;
 use std::fs;
@@ -30,8 +32,6 @@ use std::time::Duration;
 use bitcoin::Network;
 use clap::Parser;
 use cli::Cli;
-#[cfg(unix)]
-use daemonize::Daemonize;
 use floresta_node::Config;
 use floresta_node::Florestad;
 use tokio::sync::RwLock;
@@ -46,8 +46,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 
+#[cfg(unix)]
+use crate::daemonize::Daemon;
+
 fn main() {
     let params = Cli::parse();
+    params.validate();
 
     // If not provided defaults to `$HOME/.floresta`. Uses a subdirectory for non-mainnet networks.
     let data_dir = data_dir_path(params.data_dir, params.network);
@@ -95,11 +99,12 @@ fn main() {
 
     #[cfg(unix)]
     if params.daemon {
-        let mut daemon = Daemonize::new();
+        let mut daemon = Daemon::new(&config.data_dir);
         if let Some(pid_file) = params.pid_file {
             daemon = daemon.pid_file(pid_file);
         }
-        daemon.start().expect("Failed to daemonize");
+
+        daemon.fork().expect("failed to daemonize");
     }
 
     let mut _log_guard: Option<WorkerGuard> = None;
