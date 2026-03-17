@@ -366,13 +366,7 @@ impl Florestad {
         Florestad::validate_data_dir(data_dir)?;
 
         info!("Loading watch-only wallet");
-        let mut wallet = Self::load_wallet(data_dir)?;
-        wallet
-            .setup()
-            .map_err(FlorestadError::CouldNotInitializeWallet)?;
-
-        // Try to add more wallets to watch if needed
-        self.setup_wallet(&mut wallet)?;
+        let wallet = self.setup_wallet()?;
 
         info!("Loading blockchain database");
         let blockchain_state = Arc::new(Self::load_chain_state(
@@ -716,13 +710,16 @@ impl Florestad {
             .map_err(FlorestadError::CouldNotLoadFlatChainStore)
     }
 
-    fn load_wallet(data_dir: &String) -> Result<AddressCache<KvDatabase>, FlorestadError> {
-        let database =
-            KvDatabase::new(data_dir.to_owned()).map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-        Ok(AddressCache::new(database))
-    }
+    fn setup_wallet(&self) -> Result<AddressCache<KvDatabase>, FlorestadError> {
+        let database = KvDatabase::new(self.config.data_dir.clone())
+            .map_err(FlorestadError::CouldNotOpenKvDatabase)?;
 
-    fn setup_wallet(&self, wallet: &mut AddressCache<KvDatabase>) -> Result<(), FlorestadError> {
+        let wallet = AddressCache::new(database);
+
+        wallet
+            .setup()
+            .map_err(FlorestadError::CouldNotInitializeWallet)?;
+
         // Add the configured descriptors and addresses to the wallet
         for descriptor in self.get_descriptors() {
             match wallet.push_descriptor(&descriptor) {
@@ -750,7 +747,7 @@ impl Florestad {
         }
 
         info!("Wallet setup completed!");
-        Ok(())
+        Ok(wallet)
     }
 
     /// Get the wallet descriptors from the config file and the environment.
