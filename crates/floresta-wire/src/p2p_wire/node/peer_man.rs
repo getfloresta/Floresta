@@ -36,6 +36,7 @@ use crate::node_context::PeerId;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::PeerInfo;
 use crate::node_interface::UserRequest;
+use crate::p2p_wire::ban_man::BanSubnet;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
@@ -510,11 +511,15 @@ where
         let is_missbehaving = peer.banscore >= self.common.max_banscore;
         // extra peers should be banned immediately
         let is_extra = peer.kind == ConnectionKind::Extra;
+        let peer_addr = peer.address;
 
         if is_missbehaving || is_extra {
             warn!("banning peer {peer_id} for misbehaving");
             peer.channel.send(NodeRequest::Shutdown)?;
             peer.state = PeerStatus::Banned;
+            self.common
+                .ban_man
+                .add_ban(BanSubnet::from_ip(peer_addr), 0);
             return Ok(());
         }
 
@@ -533,8 +538,10 @@ where
 
             let ban_state = AddressState::Banned(T::BAN_TIME);
             let addr_id = peer.address_id as usize;
+            let peer_addr = peer.address;
 
             self.address_man.update_set_state(addr_id, ban_state);
+            self.ban_man.add_ban(BanSubnet::from_ip(peer_addr), 0);
         }
 
         self.send_to_peer(peer, NodeRequest::Shutdown)?;

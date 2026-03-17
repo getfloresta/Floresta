@@ -91,6 +91,11 @@ where
             return Err(WireError::NoAddressesAvailable);
         };
 
+        let net_address = address.get_net_address();
+        if self.ban_man.is_banned(net_address) {
+            return Err(WireError::PeerBanned(net_address));
+        }
+
         debug!("attempting connection with address={address:?} kind={kind:?}",);
 
         let now = SystemTime::now()

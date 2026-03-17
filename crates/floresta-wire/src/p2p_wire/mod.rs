@@ -88,6 +88,7 @@ impl Default for UtreexoNodeConfig {
 }
 
 pub mod address_man;
+pub mod ban_man;
 pub mod block_proof;
 pub mod error;
 pub mod node;
