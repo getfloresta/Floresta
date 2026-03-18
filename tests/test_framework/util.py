@@ -25,10 +25,12 @@ class Utility:
         $FLORESTA_TEMP_DIR/binaries
         """
         if os.getenv("FLORESTA_TEMP_DIR") is None:
-            raise RuntimeError(
-                "FLORESTA_TEMP_DIR not set. "
-                + " Please set it to the path of the integration test directory."
+            # Auto-resolve if not set
+            from test_framework.setup import (  # pylint: disable=import-outside-toplevel
+                get_temp_dir,
             )
+
+            return get_temp_dir()
         return os.getenv("FLORESTA_TEMP_DIR")
 
     @staticmethod

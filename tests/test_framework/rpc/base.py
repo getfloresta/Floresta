@@ -8,19 +8,20 @@ Define a base class for making RPC calls to a
 """
 
 import json
+import os
+import re
 import socket
 import time
-import re
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
-from abc import ABC, abstractmethod
 
 from requests import post
 from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
-from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
+from test_framework.rpc.exceptions import JSONRPCError
 
 
 # pylint: disable=too-many-public-methods
@@ -40,7 +41,7 @@ class BaseRPC(ABC):
     Subclasses should use `perform_request` to implement RPC calls.
     """
 
-    TIMEOUT: int = 15  # seconds
+    TIMEOUT: int = int(os.environ.get("FLORESTA_TEST_TIMEOUT", 15))
 
     def __init__(self, config: ConfigRPC):
         self._config = config
