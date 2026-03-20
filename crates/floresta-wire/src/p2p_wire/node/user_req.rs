@@ -154,6 +154,12 @@ where
                 return;
             }
 
+            UserRequest::GetAddedNodeInfo => {
+                let info = self.handle_get_added_node_info();
+                try_and_log!(responder.send(NodeResponse::GetAddedNodeInfo(info)));
+                return;
+            }
+
             UserRequest::SendTransaction(transaction) => {
                 let txid = transaction.compute_txid();
                 let mut mempool = self.mempool.lock().await;

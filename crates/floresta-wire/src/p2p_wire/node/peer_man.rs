@@ -33,6 +33,7 @@ use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
+use crate::node_interface::AddedNodeInfo;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::PeerInfo;
 use crate::node_interface::UserRequest;
@@ -815,6 +816,30 @@ where
             kind: peer.kind,
             transport_protocol: peer.transport_protocol,
         })
+    }
+
+    pub(crate) fn handle_get_added_node_info(&self) -> Vec<AddedNodeInfo> {
+        self.added_peers
+            .iter()
+            .map(|added| {
+                let added_addr = match &added.address {
+                    AddrV2::Ipv4(ip) => IpAddr::V4(*ip),
+                    AddrV2::Ipv6(ip) => IpAddr::V6(*ip),
+                    _ => IpAddr::V4(core::net::Ipv4Addr::UNSPECIFIED),
+                };
+
+                let connected = self.peers.values().any(|peer| {
+                    peer.address == added_addr
+                        && peer.port == added.port
+                        && peer.state == PeerStatus::Ready
+                });
+
+                AddedNodeInfo {
+                    addednode: format!("{}:{}", added_addr, added.port),
+                    connected,
+                }
+            })
+            .collect()
     }
 
     // === ADDNODE ===
