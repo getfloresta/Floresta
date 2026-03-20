@@ -96,6 +96,18 @@ pub enum UserRequest {
 
     /// Adds a transaction to mempool and advertises it
     SendTransaction(Transaction),
+
+    /// Return information about all manually added nodes.
+    GetAddedNodeInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Information about a manually added node (via `addnode`).
+pub struct AddedNodeInfo {
+    /// The address of the added node in "ip:port" format.
+    pub addednode: String,
+    /// Whether we are currently connected to this node.
+    pub connected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,6 +169,9 @@ pub enum NodeResponse {
 
     /// Transaction broadcast
     TransactionBroadcastResult(Result<Txid, MempoolError>),
+
+    /// Information about all manually added nodes.
+    GetAddedNodeInfo(Vec<AddedNodeInfo>),
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +341,15 @@ impl NodeInterface {
         let val = self.send_request(UserRequest::Ping).await?;
 
         extract_variant!(Ping, val)
+    }
+
+    /// Returns information about all manually added nodes.
+    pub async fn get_added_node_info(
+        &self,
+    ) -> Result<Vec<AddedNodeInfo>, oneshot::error::RecvError> {
+        let val = self.send_request(UserRequest::GetAddedNodeInfo).await?;
+
+        extract_variant!(GetAddedNodeInfo, val)
     }
 }
 
