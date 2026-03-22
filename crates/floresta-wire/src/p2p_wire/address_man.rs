@@ -28,6 +28,8 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::p2p_wire::ban_man::BanMan;
+
 /// How long we'll wait before trying to connect to a peer that failed
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
 
@@ -62,9 +64,6 @@ pub enum AddressState {
 
     /// We tried this peer before, and had success at least once, so we know what to expect
     Tried(u64),
-
-    /// This peer misbehaved and we banned them
-    Banned(u64),
 
     /// We are connected to this peer right now
     Connected,
@@ -664,10 +663,8 @@ impl AddressMan {
             let peer = self.addresses.keys().nth(idx)?;
             let address = self.addresses.get(peer)?.to_owned();
 
-            // don't try to connect to a peer that is banned or already connected
-            if matches!(address.state, AddressState::Banned(_))
-                | matches!(address.state, AddressState::Connected)
-            {
+            // don't try to connect to a peer that is already connected
+            if matches!(address.state, AddressState::Connected) {
                 return None;
             }
 
@@ -701,8 +698,6 @@ impl AddressMan {
 
                     self.good_addresses.retain(|&x| x != id);
                 }
-
-                AddressState::Banned(_) => {}
             }
         }
 
@@ -780,16 +775,16 @@ impl AddressMan {
     /// This function moves addresses between buckets, like if the ban time of a peer expired,
     /// or if we tried to connect to a peer and it failed in the past, but now it might be online
     /// again.
-    pub fn rearrange_buckets(&mut self) {
+    pub fn rearrange_buckets(&mut self, ban_man: &BanMan) {
         let now = Self::time_since_unix();
+        let banned_ips = ban_man.banned_ips();
+
+        // Purge banned IPs from the address database
+        self.addresses
+            .retain(|_, address| !banned_ips.contains(&address.get_net_address()));
 
         for (_, address) in self.addresses.iter_mut() {
             match address.state {
-                AddressState::Banned(ban_time) => {
-                    if ban_time < now {
-                        address.state = AddressState::NeverTried;
-                    }
-                }
                 AddressState::Tried(tried_time) => {
                     if tried_time + ASSUME_STALE < now {
                         address.state = AddressState::NeverTried;
@@ -867,9 +862,6 @@ impl AddressMan {
         }
 
         match state {
-            AddressState::Banned(_) => {
-                self.good_addresses.retain(|&x| x != idx);
-            }
             AddressState::Tried(_) => {
                 if !self.good_addresses.contains(&idx) {
                     self.good_addresses.push(idx);
@@ -910,6 +902,24 @@ impl AddressMan {
         }
 
         self
+    }
+
+    /// Removes all addresses matching the given IP from the address book.
+    pub fn remove_address_by_ip(&mut self, ip: IpAddr) {
+        let removed_ids: Vec<usize> = self
+            .addresses
+            .iter()
+            .filter(|(_, addr)| addr.get_net_address() == ip)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in &removed_ids {
+            self.addresses.remove(id);
+            self.good_addresses.retain(|&x| x != *id);
+            for peers in self.good_peers_by_service.values_mut() {
+                peers.retain(|&x| x != *id);
+            }
+        }
     }
 
     /// Adds a peer to the list of peers known to have some service
@@ -1211,6 +1221,7 @@ mod test {
     use super::LocalAddress;
     use crate::address_man::AddressMan;
     use crate::address_man::ReachableNetworks;
+    use crate::p2p_wire::ban_man::BanMan;
 
     /// Seed Data for paesing in tests.
     #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1378,7 +1389,9 @@ mod test {
             None, // No proxy
         ));
 
-        address_man.rearrange_buckets();
+        let ban_man = BanMan::new();
+
+        address_man.rearrange_buckets(&ban_man);
     }
 
     #[test]
@@ -1443,6 +1456,7 @@ mod test {
     fn test_rearrange_buckets() {
         let mut address_man = AddressMan::new(None, &[]);
         let addresses = get_addresses_and_random_times();
+        let banman = BanMan::new();
         address_man.addresses.extend(
             addresses
                 .iter()
@@ -1451,7 +1465,7 @@ mod test {
         );
 
         assert_eq!(address_man.addresses.len(), addresses.len());
-        address_man.rearrange_buckets();
+        address_man.rearrange_buckets(&banman);
 
         assert!(address_man.addresses.iter().all(|(_, addr)| {
             matches!(
@@ -1459,6 +1473,36 @@ mod test {
                 AddressState::NeverTried | AddressState::Tried(_)
             )
         }));
+    }
+
+    #[test]
+    fn test_rearrange_buckets_purges_banned_ips() {
+        let mut address_man = AddressMan::new(None, &[]);
+        let mut ban_man = BanMan::new();
+        let addresses = get_addresses_and_random_times();
+
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+        );
+
+        let total = address_man.addresses.len();
+        assert!(total > 0);
+
+        // Ban the first address
+        let first_addr = addresses[0].get_net_address();
+        ban_man.add_ban(first_addr, 3600);
+
+        // Run rearrange_buckets — should purge the banned address
+        address_man.rearrange_buckets(&ban_man);
+
+        assert_eq!(address_man.addresses.len(), total - 1);
+        assert!(!address_man
+            .addresses
+            .values()
+            .any(|addr| addr.get_net_address() == first_addr));
     }
 
     #[test]
@@ -1629,13 +1673,13 @@ mod test {
         );
 
         for addr in addresses {
-            address_man.update_set_state(addr.id, AddressState::Banned(0));
+            address_man.update_set_state(addr.id, AddressState::Failed(0));
         }
 
         assert!(address_man
             .addresses
             .values()
-            .all(|addr| matches!(addr.state, AddressState::Banned(_))));
+            .all(|addr| matches!(addr.state, AddressState::Failed(_))));
     }
 
     #[test]

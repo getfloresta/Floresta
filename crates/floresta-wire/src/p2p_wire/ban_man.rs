@@ -6,14 +6,17 @@ use std::time::UNIX_EPOCH;
 /// Default ban duration in seconds
 const DEFAULT_BAN_DURATION: u64 = 60 * 60 * 24;
 
+/// Absolute Unix timestamp in seconds.
+type BanExpiry = u64;
+
 /// Centralized manager for tracking banned IP addresses.
 #[derive(Debug, Default)]
 pub struct BanMan {
-    banned: HashMap<IpAddr, u64>,
+    banned: HashMap<IpAddr, BanExpiry>,
 }
 
 impl BanMan {
-    /// Creates a new empty Banman
+    /// Creates a new empty `Banman`.
     pub fn new() -> Self {
         Self {
             banned: HashMap::new(),
@@ -22,7 +25,7 @@ impl BanMan {
 
     /// Bans an IP address for `duration` seconds from now
     ///
-    /// If `duration` is 0, the default ban time (24 hours) will be use
+    /// If `duration` is 0, the default ban time (24 hours) will be used instead.
     pub fn add_ban(&mut self, ip: IpAddr, duration: u64) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -57,6 +60,22 @@ impl BanMan {
         }
 
         false
+    }
+
+    /// Returns the set of currently banned IPs.
+    ///
+    /// Only includes IPs whose ban has not yet expired.
+    pub fn banned_ips(&self) -> Vec<IpAddr> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        self.banned
+            .iter()
+            .filter(|(_, ban_until)| **ban_until > now)
+            .map(|(ip, _)| *ip)
+            .collect()
     }
 }
 

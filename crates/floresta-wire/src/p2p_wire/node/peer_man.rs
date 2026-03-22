@@ -30,7 +30,6 @@ use super::UtreexoNode;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
 use crate::block_proof::Bitmap;
-use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_interface::NodeResponse;
@@ -459,8 +458,7 @@ where
                         .update_set_state(idx, AddressState::Failed(now));
                 }
                 PeerStatus::Banned => {
-                    self.address_man
-                        .update_set_state(idx, AddressState::Banned(RunningNode::BAN_TIME));
+                    // Already removed from address_man in disconnect_and_ban
                 }
             }
         }
@@ -530,10 +528,10 @@ where
                 return Ok(());
             }
 
-            // `handle_disconnection` will mark the address as banned when `Peer` object return
             let peer_addr = peer.address;
             peer.state = PeerStatus::Banned;
             self.ban_man.add_ban(peer_addr, 0);
+            self.address_man.remove_address_by_ip(peer_addr);
         }
 
         self.send_to_peer(peer, NodeRequest::Shutdown)?;

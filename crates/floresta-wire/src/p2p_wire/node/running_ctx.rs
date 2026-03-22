@@ -403,7 +403,7 @@ where
 
         // Rework our address database
         periodic_job!(
-            self.context.last_address_rearrange => self.address_man.rearrange_buckets(),
+            self.context.last_address_rearrange => self.common.address_man.rearrange_buckets(&self.common.ban_man),
             RunningNode::ADDRESS_REARRANGE_INTERVAL,
             no_log,
         );
