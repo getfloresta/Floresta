@@ -80,11 +80,18 @@ pub enum NodeNotification {
     FromWorker((WorkerResult, BlockHash, u32)),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Whether we want to request full or stripped blocks (for witnessless sync).
+pub enum WitnessMode {
+    Full,
+    Witnessless,
+}
+
 #[derive(Debug, Clone, PartialEq, Hash)]
 /// Sent from node to peers, usually to request something
 pub enum NodeRequest {
     /// Request the full block data for one or more blocks
-    GetBlock(Vec<BlockHash>),
+    GetBlock(Vec<BlockHash>, WitnessMode),
 
     /// Asks peer for headers
     GetHeaders(Vec<BlockHash>),
@@ -310,6 +317,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) datadir: PathBuf,
     pub(crate) network: Network,
     pub(crate) kill_signal: Arc<tokio::sync::RwLock<bool>>,
+    pub(crate) witness_mode: WitnessMode,
 }
 
 /// The main node that operates while florestad is up.
@@ -412,6 +420,7 @@ where
                 config,
                 kill_signal,
                 added_peers: Vec::new(),
+                witness_mode: WitnessMode::Full,
             },
             context: T::default(),
         })

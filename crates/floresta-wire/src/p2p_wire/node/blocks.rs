@@ -126,8 +126,8 @@ where
             return Ok(());
         }
 
-        let peer =
-            self.send_to_fast_peer(NodeRequest::GetBlock(blocks.clone()), ServiceFlags::NETWORK)?;
+        let block_req = NodeRequest::GetBlock(blocks.clone(), self.witness_mode);
+        let peer = self.send_to_fast_peer(block_req, ServiceFlags::NETWORK)?;
 
         for block in blocks.iter() {
             self.inflight
