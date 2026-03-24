@@ -96,6 +96,7 @@ pub mod node_context;
 pub mod node_interface;
 pub mod peer;
 pub mod socks;
+mod stump_updater;
 #[cfg(test)]
 #[doc(hidden)]
 pub mod tests;
