@@ -83,7 +83,7 @@ pub enum NodeNotification {
 /// Sent from node to peers, usually to request something
 pub enum NodeRequest {
     /// Request the full block data for one or more blocks
-    GetBlock(Vec<BlockHash>),
+    GetBlock(Vec<BlockHash>, bool),
 
     /// Asks peer for headers
     GetHeaders(Vec<BlockHash>),
@@ -304,6 +304,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) datadir: PathBuf,
     pub(crate) network: Network,
     pub(crate) kill_signal: Arc<tokio::sync::RwLock<bool>>,
+    pub(crate) witnessless: bool,
 }
 
 /// The main node that operates while florestad is up.
@@ -405,6 +406,7 @@ where
                 config,
                 kill_signal,
                 added_peers: Vec::new(),
+                witnessless: false,
             },
             context: T::default(),
         })

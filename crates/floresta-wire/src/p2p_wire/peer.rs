@@ -356,10 +356,13 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         assert_eq!(self.state, State::Connected);
         debug!("Handling node request: {request:?}");
         match request {
-            NodeRequest::GetBlock(block_hashes) => {
+            NodeRequest::GetBlock(block_hashes, witnessless) => {
                 let inv = block_hashes
                     .iter()
-                    .map(|block| Inventory::Block(*block))
+                    .map(|block| match witnessless {
+                        false => Inventory::WitnessBlock(*block),
+                        true => Inventory::Block(*block),
+                    })
                     .collect();
 
                 let _ = self.write(NetworkMessage::GetData(inv)).await;

@@ -64,6 +64,8 @@ pub struct SwiftSync {
     /// A mapping of block heights to their utreexo leaves.
     utreexo_leaves: BTreeMap<u32, Vec<BitcoinNodeHash>>,
 
+    leaves: usize,
+
     /// The `TxOut` aggregator.
     agg: SwiftSyncAgg,
 
@@ -279,6 +281,7 @@ where
             return self;
         }
 
+        self.witnessless = true; // enable witnessless sync
         self.context.stop_height = hints.stop_height();
 
         assert_eq!(
@@ -408,6 +411,10 @@ where
         let final_agg = self.context.agg;
         let final_supply = self.context.supply;
         let final_acc = self.context.acc.0.clone();
+
+        // Disable witnessless mode, since we are done with SwiftSync. UtreexoSync requires the
+        // witness data in order to reconstruct P2WPKH and P2WSH outputs.
+        self.witnessless = false;
 
         if !final_agg.is_zero() {
             error!("SwiftSync failed with the provided hints file; end aggregator is not zero");
@@ -540,6 +547,9 @@ where
             Ok((agg_re, unspent_amount, utreexo_adds)) => {
                 self.context.agg += agg_re;
                 self.context.supply += unspent_amount;
+
+                self.context.leaves += utreexo_adds.len();
+                info!("total leaves: {}", self.context.leaves);
 
                 self.context.utreexo_leaves.insert(height, utreexo_adds);
                 self.try_building_utreexo_acc();

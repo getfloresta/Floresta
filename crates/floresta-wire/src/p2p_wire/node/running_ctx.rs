@@ -787,7 +787,7 @@ where
 
                             self.send_to_peer(
                                 peer,
-                                NodeRequest::GetBlock(vec![header.block_hash()]),
+                                NodeRequest::GetBlock(vec![header.block_hash()], false),
                             )?;
 
                             self.inflight.insert(

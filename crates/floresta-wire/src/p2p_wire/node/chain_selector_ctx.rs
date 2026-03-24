@@ -439,7 +439,7 @@ where
         peer: PeerId,
         block_hash: BlockHash,
     ) -> Result<InflightBlock, WireError> {
-        self.send_to_peer(peer, NodeRequest::GetBlock(vec![block_hash]))?;
+        self.send_to_peer(peer, NodeRequest::GetBlock(vec![block_hash], false))?;
 
         let timeout = Instant::now() + Duration::from_secs(60);
         let mut block = None;

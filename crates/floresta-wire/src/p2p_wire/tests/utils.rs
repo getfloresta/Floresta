@@ -125,7 +125,7 @@ impl SimulatedPeer {
                         .send(NodeNotification::FromPeer(self.peer_id, peer_msg, now))
                         .unwrap();
                 }
-                NodeRequest::GetBlock(hashes) => {
+                NodeRequest::GetBlock(hashes, _) => {
                     for hash in hashes {
                         let block = self.blocks.get(&hash).unwrap().clone();
 
