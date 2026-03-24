@@ -37,6 +37,7 @@ use crate::node::MAX_ADDRV2_ADDRESSES;
 use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
+use crate::node::WitnessMode;
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
 use crate::node::swift_sync_ctx::SwiftSync;
@@ -796,7 +797,7 @@ where
 
                             self.send_to_peer(
                                 peer,
-                                NodeRequest::GetBlock(vec![header.block_hash()]),
+                                NodeRequest::GetBlock(vec![header.block_hash()], WitnessMode::Full),
                             )?;
 
                             self.inflight.insert(
