@@ -83,6 +83,27 @@ pub enum ReachableNetworks {
     Cjdns,
 }
 
+/// Per-network address manager statistics.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NetworkStats {
+    /// Number of new (untried) addresses.
+    pub new: usize,
+    /// Number of tried addresses.
+    pub tried: usize,
+    /// Total number of addresses (new + tried).
+    pub total: usize,
+}
+
+/// Address manager statistics broken down by network.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ConnectionStats {
+    pub ipv4: NetworkStats,
+    pub ipv6: NetworkStats,
+    pub onion: NetworkStats,
+    pub i2p: NetworkStats,
+    pub cjdns: NetworkStats,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// How do we store peers locally
 pub struct LocalAddress {
@@ -386,6 +407,30 @@ impl AddressMan {
     /// Returns the total number of addresses stored in the address manager.
     pub fn address_count(&self) -> usize {
         self.addresses.len()
+    }
+
+    /// Returns address manager statistics broken down by network type.
+    pub fn get_addrman_info(&self) -> ConnectionStats {
+        let mut stats = ConnectionStats::default();
+
+        for addr in self.addresses.values() {
+            let bucket = match &addr.address {
+                AddrV2::Ipv4(_) => &mut stats.ipv4,
+                AddrV2::Ipv6(_) => &mut stats.ipv6,
+                AddrV2::TorV3(_) => &mut stats.onion,
+                AddrV2::I2p(_) => &mut stats.i2p,
+                AddrV2::Cjdns(_) => &mut stats.cjdns,
+                _ => continue,
+            };
+
+            bucket.total += 1;
+            match addr.state {
+                AddressState::Tried(_) | AddressState::Connected => bucket.tried += 1,
+                _ => bucket.new += 1,
+            }
+        }
+
+        stats
     }
 
     /// Add a new address to our list of known address

@@ -331,6 +331,12 @@ class BaseRPC(ABC):
         params = [count] if network is None else [count, network]
         return self.perform_request("getnodeaddresses", params)
 
+    def get_addrman_info(self) -> dict:
+        """
+        Get address manager statistics broken down by network
+        """
+        return self.perform_request("getaddrmaninfo")
+
     def add_peer_address(self, address: str, port: int, tried: bool = False) -> dict:
         """
         Add a peer address to the address manager

@@ -383,6 +383,11 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
+        "getaddrmaninfo" => state
+            .get_addrman_info()
+            .await
+            .map(|v| serde_json::to_value(v).unwrap()),
+
         "addpeeraddress" => {
             let address = get_string(&params, 0, "address")?;
             let port: u16 = get_numeric(&params, 1, "port")?;

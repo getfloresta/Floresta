@@ -38,6 +38,8 @@ use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_interface::AddedNodeInfo;
+use crate::node_interface::AddrManInfo;
+use crate::node_interface::AddrManNetworkInfo;
 use crate::node_interface::NodeAddress;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::PeerInfo;
@@ -890,6 +892,43 @@ where
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn handle_get_addrman_info(&self) -> AddrManInfo {
+        let stats = self.address_man.get_addrman_info();
+
+        let to_info = |s: crate::p2p_wire::address_man::NetworkStats| AddrManNetworkInfo {
+            total: s.total,
+            new: s.new,
+            tried: s.tried,
+        };
+
+        let all_networks = AddrManNetworkInfo {
+            total: stats.ipv4.total
+                + stats.ipv6.total
+                + stats.onion.total
+                + stats.i2p.total
+                + stats.cjdns.total,
+            new: stats.ipv4.new
+                + stats.ipv6.new
+                + stats.onion.new
+                + stats.i2p.new
+                + stats.cjdns.new,
+            tried: stats.ipv4.tried
+                + stats.ipv6.tried
+                + stats.onion.tried
+                + stats.i2p.tried
+                + stats.cjdns.tried,
+        };
+
+        AddrManInfo {
+            all_networks,
+            ipv4: to_info(stats.ipv4),
+            ipv6: to_info(stats.ipv6),
+            onion: to_info(stats.onion),
+            i2p: to_info(stats.i2p),
+            cjdns: to_info(stats.cjdns),
+        }
     }
 
     pub(crate) fn handle_add_peer_address(

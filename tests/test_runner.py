@@ -71,6 +71,7 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getaddednodeinfo"),
     ("floresta-cli", "getnodeaddresses"),
     ("floresta-cli", "addpeeraddress"),
+    ("floresta-cli", "getaddrmaninfo"),
     ("floresta-cli", "getblockchaininfo"),
     ("floresta-cli", "getblockheader"),
     ("example", "bitcoin"),

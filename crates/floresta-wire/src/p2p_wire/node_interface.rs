@@ -104,6 +104,31 @@ pub enum UserRequest {
     /// Add a peer address to the address manager.
     /// Fields: (address string, port, tried)
     AddPeerAddress((String, u16, bool)),
+
+    /// Return address manager statistics.
+    GetAddrManInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Per-network address manager statistics.
+pub struct AddrManNetworkInfo {
+    /// Total number of addresses for this network.
+    pub total: usize,
+    /// Number of new (untried) addresses.
+    pub new: usize,
+    /// Number of tried addresses.
+    pub tried: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Address manager statistics broken down by network.
+pub struct AddrManInfo {
+    pub all_networks: AddrManNetworkInfo,
+    pub ipv4: AddrManNetworkInfo,
+    pub ipv6: AddrManNetworkInfo,
+    pub onion: AddrManNetworkInfo,
+    pub i2p: AddrManNetworkInfo,
+    pub cjdns: AddrManNetworkInfo,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,6 +220,9 @@ pub enum NodeResponse {
 
     /// Whether the peer address was successfully added.
     AddPeerAddress(bool),
+
+    /// Address manager statistics.
+    GetAddrManInfo(AddrManInfo),
 }
 
 #[derive(Debug, Clone)]
@@ -393,6 +421,13 @@ impl NodeInterface {
             .await?;
 
         extract_variant!(AddPeerAddress, val)
+    }
+
+    /// Returns address manager statistics broken down by network.
+    pub async fn get_addrman_info(&self) -> Result<AddrManInfo, oneshot::error::RecvError> {
+        let val = self.send_request(UserRequest::GetAddrManInfo).await?;
+
+        extract_variant!(GetAddrManInfo, val)
     }
 }
 
