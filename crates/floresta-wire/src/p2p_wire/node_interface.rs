@@ -99,6 +99,10 @@ pub enum UserRequest {
 
     /// Return information about all manually added nodes.
     GetAddedNodeInfo,
+
+    /// Add a peer address to the address manager.
+    /// Fields: (address string, port, tried)
+    AddPeerAddress((String, u16, bool)),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,6 +176,9 @@ pub enum NodeResponse {
 
     /// Information about all manually added nodes.
     GetAddedNodeInfo(Vec<AddedNodeInfo>),
+
+    /// Whether the peer address was successfully added.
+    AddPeerAddress(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +357,20 @@ impl NodeInterface {
         let val = self.send_request(UserRequest::GetAddedNodeInfo).await?;
 
         extract_variant!(GetAddedNodeInfo, val)
+    }
+
+    /// Adds a peer address to the address manager.
+    pub async fn add_peer_address(
+        &self,
+        address: String,
+        port: u16,
+        tried: bool,
+    ) -> Result<bool, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::AddPeerAddress((address, port, tried)))
+            .await?;
+
+        extract_variant!(AddPeerAddress, val)
     }
 }
 
