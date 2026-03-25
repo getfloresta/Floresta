@@ -160,6 +160,12 @@ where
                 return;
             }
 
+            UserRequest::AddPeerAddress((address, port, tried)) => {
+                let success = self.handle_add_peer_address(address, port, tried);
+                try_and_log!(responder.send(NodeResponse::AddPeerAddress(success)));
+                return;
+            }
+
             UserRequest::SendTransaction(transaction) => {
                 let txid = transaction.compute_txid();
                 let mut mempool = self.mempool.lock().await;

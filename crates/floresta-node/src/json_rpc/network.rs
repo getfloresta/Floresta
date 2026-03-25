@@ -126,4 +126,19 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .await
             .map_err(|e| JsonRpcError::Node(e.to_string()))
     }
+
+    pub(crate) async fn add_peer_address(
+        &self,
+        address: String,
+        port: u16,
+        tried: bool,
+    ) -> Result<Value> {
+        let success = self
+            .node
+            .add_peer_address(address, port, tried)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        Ok(json!({ "success": success }))
+    }
 }

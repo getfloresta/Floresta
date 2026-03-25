@@ -842,6 +842,42 @@ where
             .collect()
     }
 
+    pub(crate) fn handle_add_peer_address(
+        &mut self,
+        address: String,
+        port: u16,
+        tried: bool,
+    ) -> bool {
+        let addr = if let Ok(ipv4) = address.parse::<Ipv4Addr>() {
+            AddrV2::Ipv4(ipv4)
+        } else if let Ok(ipv6) = address.parse::<Ipv6Addr>() {
+            AddrV2::Ipv6(ipv6)
+        } else {
+            return false;
+        };
+
+        let state = if tried {
+            AddressState::Tried(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            )
+        } else {
+            AddressState::NeverTried
+        };
+
+        let services = ServiceFlags::WITNESS | ServiceFlags::NETWORK_LIMITED;
+        let id = rand::random::<usize>();
+        let local_addr = LocalAddress::new(addr, 0, state, services, port, id);
+
+        let count_before = self.address_man.address_count();
+        self.address_man.push_addresses(&[local_addr]);
+        let count_after = self.address_man.address_count();
+
+        count_after > count_before
+    }
+
     // === ADDNODE ===
 
     // TODO: remove this after bitcoin-0.33.0

@@ -383,6 +383,11 @@ impl AddressMan {
             .as_secs()
     }
 
+    /// Returns the total number of addresses stored in the address manager.
+    pub fn address_count(&self) -> usize {
+        self.addresses.len()
+    }
+
     /// Add a new address to our list of known address
     pub fn push_addresses(&mut self, addresses: &[LocalAddress]) {
         for address in addresses {

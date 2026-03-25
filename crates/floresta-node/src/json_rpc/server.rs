@@ -361,6 +361,17 @@ async fn handle_json_rpc_request(
             .await
             .map(|v| serde_json::to_value(v).unwrap()),
 
+        "addpeeraddress" => {
+            let address = get_string(&params, 0, "address")?;
+            let port: u16 = get_numeric(&params, 1, "port")?;
+            let tried = get_optional_field(&params, 2, "tried", get_bool)?.unwrap_or(false);
+
+            state
+                .add_peer_address(address, port, tried)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+
         "addnode" => {
             let node = get_string(&params, 0, "node")?;
             let command = get_string(&params, 1, "command")?;

@@ -8,19 +8,19 @@ Define a base class for making RPC calls to a
 """
 
 import json
+import re
 import socket
 import time
-import re
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
-from abc import ABC, abstractmethod
 
 from requests import post
 from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
-from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
+from test_framework.rpc.exceptions import JSONRPCError
 
 
 # pylint: disable=too-many-public-methods
@@ -322,6 +322,12 @@ class BaseRPC(ABC):
         Get information about manually added nodes
         """
         return self.perform_request("getaddednodeinfo")
+
+    def add_peer_address(self, address: str, port: int, tried: bool = False) -> dict:
+        """
+        Add a peer address to the address manager
+        """
+        return self.perform_request("addpeeraddress", [address, port, tried])
 
     def disconnectnode(self, node_address: str, node_id: Optional[int] = None):
         """
