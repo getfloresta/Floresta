@@ -160,6 +160,12 @@ where
                 return;
             }
 
+            UserRequest::GetNodeAddresses(count, network) => {
+                let addresses = self.handle_get_node_addresses(count, network);
+                try_and_log!(responder.send(NodeResponse::GetNodeAddresses(addresses)));
+                return;
+            }
+
             UserRequest::AddPeerAddress((address, port, tried)) => {
                 let success = self.handle_add_peer_address(address, port, tried);
                 try_and_log!(responder.send(NodeResponse::AddPeerAddress(success)));

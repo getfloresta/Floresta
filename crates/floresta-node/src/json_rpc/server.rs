@@ -35,6 +35,7 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
+use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::node_interface::NodeInterface;
 use serde_json::json;
 use serde_json::Value;
@@ -360,6 +361,27 @@ async fn handle_json_rpc_request(
             .get_added_node_info()
             .await
             .map(|v| serde_json::to_value(v).unwrap()),
+
+        "getnodeaddresses" => {
+            let count = get_optional_field(&params, 0, "count", get_numeric)?.unwrap_or(1);
+            let network = get_optional_field(&params, 1, "network", get_string)?
+                .map(|s| match s.as_str() {
+                    "ipv4" => Ok(ReachableNetworks::IPv4),
+                    "ipv6" => Ok(ReachableNetworks::IPv6),
+                    "onion" => Ok(ReachableNetworks::TorV3),
+                    "i2p" => Ok(ReachableNetworks::I2P),
+                    "cjdns" => Ok(ReachableNetworks::Cjdns),
+                    other => Err(JsonRpcError::InvalidParameterType(format!(
+                        "Unknown network '{other}'. Expected one of: ipv4, ipv6, onion, i2p, cjdns"
+                    ))),
+                })
+                .transpose()?;
+
+            state
+                .get_node_addresses(count, network)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
 
         "addpeeraddress" => {
             let address = get_string(&params, 0, "address")?;

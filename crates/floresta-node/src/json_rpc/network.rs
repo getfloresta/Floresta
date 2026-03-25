@@ -6,7 +6,9 @@ use core::net::IpAddr;
 use core::net::SocketAddr;
 
 use bitcoin::Network;
+use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::node_interface::AddedNodeInfo;
+use floresta_wire::node_interface::NodeAddress;
 use floresta_wire::node_interface::PeerInfo;
 use serde_json::json;
 use serde_json::Value;
@@ -123,6 +125,17 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub(crate) async fn get_added_node_info(&self) -> Result<Vec<AddedNodeInfo>> {
         self.node
             .get_added_node_info()
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))
+    }
+
+    pub(crate) async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<Vec<NodeAddress>> {
+        self.node
+            .get_node_addresses(count, network)
             .await
             .map_err(|e| JsonRpcError::Node(e.to_string()))
     }

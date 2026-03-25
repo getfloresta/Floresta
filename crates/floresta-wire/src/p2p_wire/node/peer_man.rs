@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::net::IpAddr;
+use core::net::Ipv4Addr;
+use core::net::Ipv6Addr;
 use core::net::SocketAddr;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -13,6 +15,7 @@ use bitcoin::p2p::ServiceFlags;
 use bitcoin::Transaction;
 use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
+use hex;
 use rand::distributions::Distribution;
 use rand::distributions::WeightedIndex;
 use rand::prelude::SliceRandom;
@@ -29,11 +32,13 @@ use super::PeerStatus;
 use super::UtreexoNode;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
+use crate::address_man::ReachableNetworks;
 use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_interface::AddedNodeInfo;
+use crate::node_interface::NodeAddress;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::PeerInfo;
 use crate::node_interface::UserRequest;
@@ -838,6 +843,51 @@ where
                     addednode: format!("{}:{}", added_addr, added.port),
                     connected,
                 }
+            })
+            .collect()
+    }
+
+    pub(crate) fn handle_get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Vec<NodeAddress> {
+        let addresses = self.address_man.get_addresses_to_send();
+        // count=0 means return all known addresses, matching Bitcoin Core behavior
+        let count = if count == 0 {
+            addresses.len()
+        } else {
+            (count as usize).min(addresses.len())
+        };
+
+        addresses
+            .into_iter()
+            .filter(|(addr, _, _, _)| match &network {
+                None => true,
+                Some(ReachableNetworks::IPv4) => matches!(addr, AddrV2::Ipv4(_)),
+                Some(ReachableNetworks::IPv6) => matches!(addr, AddrV2::Ipv6(_)),
+                Some(ReachableNetworks::TorV3) => matches!(addr, AddrV2::TorV3(_)),
+                Some(ReachableNetworks::I2P) => matches!(addr, AddrV2::I2p(_)),
+                Some(ReachableNetworks::Cjdns) => matches!(addr, AddrV2::Cjdns(_)),
+            })
+            .take(count)
+            .filter_map(|(addr, time, services, port)| {
+                let (address, network) = match &addr {
+                    AddrV2::Ipv4(ip) => (ip.to_string(), "ipv4"),
+                    AddrV2::Ipv6(ip) => (ip.to_string(), "ipv6"),
+                    AddrV2::Cjdns(ip) => (ip.to_string(), "cjdns"),
+                    AddrV2::TorV3(key) => (hex::encode(key), "onion"),
+                    AddrV2::I2p(key) => (hex::encode(key), "i2p"),
+                    _ => return None,
+                };
+
+                Some(NodeAddress {
+                    time,
+                    services: services.to_u64(),
+                    address,
+                    port,
+                    network: network.to_string(),
+                })
             })
             .collect()
     }
