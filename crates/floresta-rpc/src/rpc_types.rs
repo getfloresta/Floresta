@@ -188,6 +188,26 @@ pub struct PeerInfo {
     pub transport_protocol: String,
 }
 
+/// Information about a manually added peer, as returned by `getaddednodeinfo`.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AddedNodeInfo {
+    /// The node address in `ip:port` format, as provided to `addnode`.
+    pub addednode: String,
+    /// Whether the node is currently connected.
+    pub connected: bool,
+    /// A list of addresses with connection direction info. Empty when not connected.
+    pub addresses: Vec<AddedNodeAddressInfo>,
+}
+
+/// An address entry within [`AddedNodeInfo`].
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AddedNodeAddressInfo {
+    /// The address in `ip:port` format.
+    pub address: String,
+    /// Connection direction: `"outbound"` when connected.
+    pub connected: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum GetBlockRes {

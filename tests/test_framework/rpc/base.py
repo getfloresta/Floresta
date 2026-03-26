@@ -327,3 +327,11 @@ class BaseRPC(ABC):
                 "disconnectnode", params=[node_address, node_id]
             )
         return self.perform_request("disconnectnode", params=[node_address])
+
+    def get_addednodeinfo(self, node: Optional[str] = None):
+        """
+        Returns information about the given added node, or all added nodes
+        """
+        if node is not None:
+            return self.perform_request("getaddednodeinfo", params=[node])
+        return self.perform_request("getaddednodeinfo")

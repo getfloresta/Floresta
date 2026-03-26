@@ -92,6 +92,9 @@ pub trait FlorestaRPC {
     /// the peer's IP address, the peer's version, the peer's user agent, the transport protocol
     /// and the peer's current height.
     fn get_peer_info(&self) -> Result<Vec<PeerInfo>>;
+    #[doc = include_str!("../../../doc/rpc/getaddednodeinfo.md")]
+    /// Returns information about manually added peers.
+    fn get_added_node_info(&self, node: Option<String>) -> Result<Vec<AddedNodeInfo>>;
     /// Returns a block, given a block hash
     ///
     /// This method returns a block, given a block hash. If the verbosity flag is 0, the block
@@ -291,6 +294,13 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
         self.call("getpeerinfo", &[])
+    }
+
+    fn get_added_node_info(&self, node: Option<String>) -> Result<Vec<AddedNodeInfo>> {
+        match node {
+            Some(node) => self.call("getaddednodeinfo", &[Value::String(node)]),
+            None => self.call("getaddednodeinfo", &[]),
+        }
     }
 
     fn get_best_block_hash(&self) -> Result<BlockHash> {

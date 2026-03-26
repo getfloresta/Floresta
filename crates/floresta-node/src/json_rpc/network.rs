@@ -118,4 +118,14 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .await
             .map_err(|_| JsonRpcError::Node("Failed to get peer information".to_string()))
     }
+
+    pub(crate) async fn get_added_node_info(
+        &self,
+        node: Option<String>,
+    ) -> Result<Vec<floresta_wire::node_interface::AddedNodeInfoItem>> {
+        self.node
+            .get_added_node_info(node)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))
+    }
 }

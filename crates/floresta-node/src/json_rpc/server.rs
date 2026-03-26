@@ -356,6 +356,15 @@ async fn handle_json_rpc_request(
             .await
             .map(|v| serde_json::to_value(v).unwrap()),
 
+        "getaddednodeinfo" => {
+            let node = get_optional_field(&params, 0, "node", get_string)?;
+
+            state
+                .get_added_node_info(node)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
+
         "addnode" => {
             let node = get_string(&params, 0, "node")?;
             let command = get_string(&params, 1, "command")?;

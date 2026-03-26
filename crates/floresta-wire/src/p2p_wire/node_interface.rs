@@ -93,6 +93,9 @@ pub enum UserRequest {
 
     /// Adds a transaction to mempool and advertises it
     SendTransaction(Transaction),
+
+    /// Return information about manually added peers, optionally filtered by address.
+    GetAddedNodeInfo(Option<String>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +114,26 @@ pub struct PeerInfo {
     pub state: PeerStatus,
     pub kind: ConnectionKind,
     pub transport_protocol: TransportProtocol,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Information about a manually added peer, as returned by `getaddednodeinfo`.
+pub struct AddedNodeInfoItem {
+    /// The address of the added node in `ip:port` format.
+    pub addednode: String,
+    /// Whether the node is currently connected.
+    pub connected: bool,
+    /// A list of addresses associated with this added node, with connection direction info.
+    pub addresses: Vec<AddedNodeAddress>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// An address entry within `AddedNodeInfoItem`.
+pub struct AddedNodeAddress {
+    /// The address in `ip:port` format.
+    pub address: String,
+    /// The connection direction: `"outbound"` if connected, `"false"` if not.
+    pub connected: String,
 }
 
 #[derive(Debug)]
@@ -151,6 +174,9 @@ pub enum NodeResponse {
 
     /// Transaction broadcast
     TransactionBroadcastResult(Result<Txid, AcceptToMempoolError>),
+
+    /// A response containing a list of manually added peer information.
+    GetAddedNodeInfo(Vec<AddedNodeInfoItem>),
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +332,24 @@ impl NodeInterface {
         let val = self.send_request(UserRequest::GetPeerInfo).await?;
 
         extract_variant!(GetPeerInfo, val);
+    }
+
+    /// Gets information about all manually added peers, optionally filtered by address.
+    ///
+    /// This function will return a list of `AddedNodeInfoItem` structs, each of which contains
+    /// information about a manually added peer.
+    ///
+    /// If an address is provided, the function will only return information about the peer with
+    /// that address.
+    pub async fn get_added_node_info(
+        &self,
+        node: Option<String>,
+    ) -> Result<Vec<AddedNodeInfoItem>, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::GetAddedNodeInfo(node))
+            .await?;
+
+        extract_variant!(GetAddedNodeInfo, val);
     }
 
     /// Pings all connected peers to check if they are alive.

@@ -13,9 +13,12 @@ use tracing::warn;
 use super::try_and_log;
 use super::NodeRequest;
 use super::UtreexoNode;
+use crate::address_man::LocalAddress;
 use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
+use crate::node_interface::AddedNodeAddress;
+use crate::node_interface::AddedNodeInfoItem;
 use crate::node_interface::NodeInterface;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::UserRequest;
@@ -45,6 +48,52 @@ where
 
         let peers = peers.into_iter().flatten().collect();
         try_and_log!(responder.send(NodeResponse::GetPeerInfo(peers)));
+    }
+
+    /// Handles getaddednodeinfo requests, returning info about manually addedd peers.
+    fn handle_get_added_node_info(
+        &self,
+        node: Option<String>,
+        responder: oneshot::Sender<NodeResponse>,
+    ) {
+        let items: Vec<AddedNodeInfoItem> = self
+            .added_peers
+            .iter()
+            .filter_map(|added| {
+                let added_ip = LocalAddress::from(added.address.clone()).get_net_address();
+                let addr_str = format!("{}:{}", added_ip, added.port);
+
+                // If a specific node was requested, skip non-matching entries
+                if let Some(ref filter) = node {
+                    if &addr_str != filter && &added_ip.to_string() != filter {
+                        return None;
+                    }
+                }
+
+                // Check if this added peer is currently connected
+                let is_connected = self
+                    .peers
+                    .values()
+                    .any(|peer| peer.address == added_ip && peer.port == added.port);
+
+                let addresses = if is_connected {
+                    vec![AddedNodeAddress {
+                        address: addr_str.clone(),
+                        connected: "outbound".to_string(),
+                    }]
+                } else {
+                    vec![]
+                };
+
+                Some(AddedNodeInfoItem {
+                    addednode: addr_str,
+                    connected: is_connected,
+                    addresses,
+                })
+            })
+            .collect();
+
+        try_and_log!(responder.send(NodeResponse::GetAddedNodeInfo(items)));
     }
 
     /// Actually perform the user request
@@ -87,6 +136,11 @@ where
 
             UserRequest::GetPeerInfo => {
                 self.handle_get_peer_info(responder);
+                return;
+            }
+
+            UserRequest::GetAddedNodeInfo(node) => {
+                self.handle_get_added_node_info(node, responder);
                 return;
             }
 
