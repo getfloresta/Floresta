@@ -719,16 +719,19 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         network: Network,
         assume_valid: AssumeValidArg,
     ) -> Result<Self, BlockchainError> {
-        // 1. We peek at the height to see if data exists.
-        // This doesn't "consume" the store, so we still own it!
         if chainstore.load_height()?.is_some() {
+            // This will only show if you run with RUST_LOG=debug
             debug!("Successfully found existing data. Loading ChainState...");
-            // 2. Data exists: Move ownership to load_chain_state
             Self::load_chain_state(chainstore, network, assume_valid)
         } else {
             info!("No existing chain found. Initializing a new chain at height 0 (Genesis).");
-            // 2. No data: Move ownership to new()
-            Ok(Self::new(chainstore, network, assume_valid))
+            let chainstate = Self::new(chainstore, network, assume_valid);
+            
+            // --- ADD THIS LINE ---
+            // This creates the metadata file immediately so the next boot sees it
+            chainstate.flush()?; 
+            
+            Ok(chainstate)
         }
     }
 
