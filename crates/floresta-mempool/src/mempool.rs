@@ -248,8 +248,12 @@ impl Mempool {
         spent_utxos: &HashMap<OutPoint, UtxoData>,
     ) -> Result<(), MempoolError> {
         let fee = self.get_fee(transaction, spent_utxos)?;
-        let min_fee =
-            Amount::from_sat(self.policy.min_relay_fee_sat_per_vbyte * transaction.vsize() as u64);
+        let min_fee_sat = self
+            .policy
+            .min_relay_fee_sat_per_vbyte
+            .checked_mul(transaction.vsize() as u64)
+            .ok_or(MempoolError::FeeTooLow)?;
+        let min_fee = Amount::from_sat(min_fee_sat);
 
         if fee < min_fee {
             return Err(MempoolError::FeeTooLow);
@@ -361,6 +365,7 @@ impl Mempool {
                 || output.script_pubkey.is_p2sh()
                 || output.script_pubkey.is_p2wpkh()
                 || output.script_pubkey.is_p2wsh()
+                || output.script_pubkey.is_p2tr()
         }) {
             return Ok(());
         }
