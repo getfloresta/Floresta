@@ -11,6 +11,7 @@ use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
+use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::TxOut;
@@ -21,6 +22,8 @@ use floresta_common::get_spk_hash;
 use floresta_common::spsc::Channel;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_mempool::MempoolError;
+use floresta_mempool::UtxoData as MempoolUtxoData;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
@@ -244,6 +247,46 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         self.message_transmitter.clone()
     }
 
+    fn admission_utxo(txout: TxOut) -> MempoolUtxoData {
+        MempoolUtxoData {
+            txout,
+            is_coinbase: false,
+            creation_height: 0,
+            creation_time: 0,
+        }
+    }
+
+    async fn build_admission_context(
+        &self,
+        transaction: &Transaction,
+    ) -> HashMap<OutPoint, MempoolUtxoData> {
+        let mut spent_utxos = HashMap::with_capacity(transaction.input.len());
+
+        for input in &transaction.input {
+            let outpoint = input.previous_output;
+            if spent_utxos.contains_key(&outpoint) {
+                continue;
+            }
+
+            if let Some(txout) = self.address_cache.get_prevout(&outpoint) {
+                spent_utxos.insert(outpoint, Self::admission_utxo(txout));
+                continue;
+            }
+
+            if let Ok(Some(parent)) = self
+                .node_interface
+                .get_mempool_transaction(outpoint.txid)
+                .await
+            {
+                if let Some(txout) = parent.output.get(outpoint.vout as usize).cloned() {
+                    spent_utxos.insert(outpoint, Self::admission_utxo(txout));
+                }
+            }
+        }
+
+        spent_utxos
+    }
+
     /// Handle a request from a client. All methods are defined in the electrum
     /// protocol.
     async fn handle_client_request(
@@ -457,11 +500,12 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     Vec::from_hex(&tx).map_err(|_| super::error::Error::InvalidParams)?;
                 let tx: Transaction =
                     deserialize(&hex).map_err(|_| super::error::Error::InvalidParams)?;
+                let spent_utxos = self.build_admission_context(&tx).await;
 
                 let txid = tx.compute_txid();
                 if let Err(e) = self
                     .node_interface
-                    .broadcast_transaction(tx.clone())
+                    .broadcast_transaction(tx.clone(), spent_utxos)
                     .await?
                 {
                     error!("Could not broadcast transaction {txid} due to {e}");
@@ -543,8 +587,17 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         let unconfirmed = self.address_cache.find_unconfirmed().unwrap();
         for tx in unconfirmed {
             let txid = tx.compute_txid();
-            if let Ok(Err(e)) = self.node_interface.broadcast_transaction(tx.clone()).await {
-                error!("Could not rebroadcast transaction {txid} due to {e}");
+            let spent_utxos = self.build_admission_context(&tx).await;
+            if let Ok(Err(error)) = self
+                .node_interface
+                .broadcast_transaction(tx.clone(), spent_utxos)
+                .await
+            {
+                if matches!(error, MempoolError::AlreadyKnown) {
+                    debug!("Rebroadcasted transaction {txid}");
+                } else {
+                    error!("Could not rebroadcast transaction {txid} due to {error}");
+                }
             } else {
                 debug!("Rebroadcasted transaction {txid}");
             }
@@ -940,15 +993,24 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use bitcoin::absolute;
     use bitcoin::address::NetworkChecked;
     use bitcoin::block::Header as BlockHeader;
     use bitcoin::consensus::deserialize;
+    use bitcoin::consensus::encode::serialize_hex;
     use bitcoin::consensus::Decodable;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
     use bitcoin::Address;
+    use bitcoin::Amount;
     use bitcoin::Network;
+    use bitcoin::OutPoint;
+    use bitcoin::ScriptBuf;
+    use bitcoin::Sequence;
     use bitcoin::Transaction;
+    use bitcoin::TxIn;
+    use bitcoin::TxOut;
+    use bitcoin::Witness;
     use floresta_chain::AssumeValidArg;
     use floresta_chain::ChainState;
     use floresta_chain::FlatChainStore;
@@ -1017,6 +1079,31 @@ mod test {
 
         headers.remove(0);
         headers
+    }
+
+    fn get_test_unconfirmed_transaction() -> Transaction {
+        let (parent, _) = get_test_transaction();
+        let mut witness = Witness::new();
+        witness.push([1_u8; 71]);
+        witness.push([2_u8; 33]);
+
+        Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::from_consensus(0),
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: parent.compute_txid(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness,
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(parent.output[0].value.to_sat() - 500),
+                script_pubkey: parent.output[0].script_pubkey.clone(),
+            }],
+        }
     }
 
     fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
@@ -1381,7 +1468,9 @@ mod test {
     async fn test_transactions() {
         let port = start_electrum().await;
 
-        let unconfirmed_tx = Value::String("01000000010b7e3ac7e68944dc7a7115362391c3b7975d60f4fbe4af0ca924a172bfe7a7d9000000006b483045022100e0ff6984e5c2e16df6f309b759b75e04adf6930593b6043cd9134f87efb7e07c02206544a9f265f6041f0e3e2bd11a95ea75a112d3dc05647a9b01eca0d352feeb380121024f9c3deb05e81a3ddb17dadcf283fb132894aa70ab127395a03a3e9d382f13a3ffffffff022c92ae00000000001976a914ca9755ffb8f0e5aeca43478d8620e1a35b3baada88acc0894601000000001976a914b62ad08a3ffc469e9c0df75d1ceca49a88345fc888ac00000000".to_string());
+        let unconfirmed_tx = get_test_unconfirmed_transaction();
+        let expected_unconfirmed_txid = unconfirmed_tx.compute_txid().to_string();
+        let unconfirmed_tx = Value::String(serialize_hex(&unconfirmed_tx));
         let confirmed_tx = "020000000001017ca523c5e6df0c014e837279ab49be1676a9fe7571c3989aeba1e5d534f4054a0000000000fdffffff01d2410f00000000001600142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a02473044022071b8583ba1f10531b68cb5bd269fb0e75714c20c5a8bce49d8a2307d27a082df022069a978dac00dd9d5761aa48c7acc881617fa4d2573476b11685596b17d437595012103b193d06bd0533d053f959b50e3132861527e5a7a49ad59c5e80a265ff6a77605eece0100".to_string();
 
         // blockchain.transaction.broadcast
@@ -1413,7 +1502,7 @@ mod test {
 
         assert_eq!(
             send_request(broadcast_req, port).await.unwrap()["result"],
-            "197d099f6bc6c0b522cb04df4514622bb3d55094faf0af3474ab996e0b62b8ad".to_string()
+            expected_unconfirmed_txid
         );
 
         assert_eq!(

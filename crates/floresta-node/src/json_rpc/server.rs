@@ -23,6 +23,7 @@ use bitcoin::hex::DisplayHex;
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use bitcoin::Network;
+use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
@@ -32,6 +33,7 @@ use floresta_chain::ThreadSafeChain;
 use floresta_common::parse_descriptors;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_mempool::UtxoData as MempoolUtxoData;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
@@ -88,6 +90,42 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
+    fn admission_utxo(txout: TxOut) -> MempoolUtxoData {
+        MempoolUtxoData {
+            txout,
+            is_coinbase: false,
+            creation_height: 0,
+            creation_time: 0,
+        }
+    }
+
+    async fn build_admission_context(
+        &self,
+        transaction: &Transaction,
+    ) -> HashMap<OutPoint, MempoolUtxoData> {
+        let mut spent_utxos = HashMap::with_capacity(transaction.input.len());
+
+        for input in &transaction.input {
+            let outpoint = input.previous_output;
+            if spent_utxos.contains_key(&outpoint) {
+                continue;
+            }
+
+            if let Some(txout) = self.wallet.get_prevout(&outpoint) {
+                spent_utxos.insert(outpoint, Self::admission_utxo(txout));
+                continue;
+            }
+
+            if let Ok(Some(parent)) = self.node.get_mempool_transaction(outpoint.txid).await {
+                if let Some(txout) = parent.output.get(outpoint.vout as usize).cloned() {
+                    spent_utxos.insert(outpoint, Self::admission_utxo(txout));
+                }
+            }
+        }
+
+        spent_utxos
+    }
+
     fn get_transaction(&self, tx_id: Txid, verbosity: Option<bool>) -> Result<Value> {
         if verbosity == Some(true) {
             let tx = self
@@ -196,10 +234,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let tx_hex = Vec::from_hex(&tx).map_err(|_| JsonRpcError::InvalidHex)?;
         let tx: Transaction =
             deserialize(&tx_hex).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
+        let spent_utxos = self.build_admission_context(&tx).await;
 
         Ok(self
             .node
-            .broadcast_transaction(tx)
+            .broadcast_transaction(tx, spent_utxos)
             .await
             .map_err(|e| JsonRpcError::Node(e.to_string()))??)
     }

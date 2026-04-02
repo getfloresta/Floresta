@@ -5,14 +5,19 @@
 
 use core::net::IpAddr;
 use core::net::SocketAddr;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::time::Instant;
 
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::Txid;
-use floresta_mempool::mempool::AcceptToMempoolError;
+use floresta_mempool::MempoolError;
+use floresta_mempool::UtxoData;
 use rustreexo::proof::Proof;
 use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
@@ -42,7 +47,7 @@ pub enum AddNode {
     Onetry((IpAddr, u16)),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// A request that can be made to the node.
 ///
 /// While the node is running, consumers may want to request some useful data, like block data,
@@ -92,7 +97,34 @@ pub enum UserRequest {
     Ping,
 
     /// Adds a transaction to mempool and advertises it
-    SendTransaction(Transaction),
+    SendTransaction(Transaction, HashMap<OutPoint, UtxoData>),
+}
+
+impl Hash for UserRequest {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+
+        match self {
+            UserRequest::Config | UserRequest::GetPeerInfo | UserRequest::Ping => {}
+            UserRequest::Block(block_hash) | UserRequest::UtreexoProof(block_hash) => {
+                block_hash.hash(state);
+            }
+            UserRequest::MempoolTransaction(txid) => txid.hash(state),
+            UserRequest::Add((addr, port, v2transport))
+            | UserRequest::Onetry((addr, port, v2transport)) => {
+                addr.hash(state);
+                port.hash(state);
+                v2transport.hash(state);
+            }
+            UserRequest::Remove((addr, port)) | UserRequest::Disconnect((addr, port)) => {
+                addr.hash(state);
+                port.hash(state);
+            }
+            UserRequest::SendTransaction(transaction, _) => {
+                transaction.compute_txid().hash(state);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,7 +182,7 @@ pub enum NodeResponse {
     Ping(bool),
 
     /// Transaction broadcast
-    TransactionBroadcastResult(Result<Txid, AcceptToMempoolError>),
+    TransactionBroadcastResult(Result<Txid, MempoolError>),
 }
 
 #[derive(Debug, Clone)]
@@ -201,9 +233,10 @@ impl NodeInterface {
     pub async fn broadcast_transaction(
         &self,
         transaction: Transaction,
-    ) -> Result<Result<Txid, AcceptToMempoolError>, oneshot::error::RecvError> {
+        spent_utxos: HashMap<OutPoint, UtxoData>,
+    ) -> Result<Result<Txid, MempoolError>, oneshot::error::RecvError> {
         let val = self
-            .send_request(UserRequest::SendTransaction(transaction))
+            .send_request(UserRequest::SendTransaction(transaction, spent_utxos))
             .await?;
 
         extract_variant!(TransactionBroadcastResult, val)

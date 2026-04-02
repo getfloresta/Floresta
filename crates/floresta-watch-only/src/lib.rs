@@ -595,6 +595,12 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         Some(tx.tx.output[outpoint.vout as usize].clone())
     }
 
+    pub fn get_prevout(&self, outpoint: &OutPoint) -> Option<TxOut> {
+        let inner = self.inner.read().expect("poisoned lock");
+        let tx = inner.get_transaction(&outpoint.txid)?;
+        tx.tx.output.get(outpoint.vout as usize).cloned()
+    }
+
     pub fn n_cached_addresses(&self) -> usize {
         let inner = self.inner.read().expect("poisoned lock");
         inner.address_map.len()

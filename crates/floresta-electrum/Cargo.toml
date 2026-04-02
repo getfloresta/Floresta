@@ -28,6 +28,7 @@ tracing = { workspace = true }
 floresta-chain = { workspace = true, features = ["bitcoinkernel"] }
 floresta-compact-filters = { workspace = true }
 floresta-common = { workspace = true }
+floresta-mempool = { workspace = true }
 floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
 
@@ -38,7 +39,6 @@ zstd = { workspace = true }
 
 # Local dev-dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
-floresta-mempool = { workspace = true }
 
 [lints]
 workspace = true

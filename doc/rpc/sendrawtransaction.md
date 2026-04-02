@@ -30,6 +30,12 @@ floresta-cli sendrawtransaction 02000000000101d536437a10d4d22c471e5b471a12b899a0
 
 - `InvalidHex` - The hex string is malformed
 - `Decode` - The hex string could not be parsed into a transaction
+- `AlreadyKnown` - The transaction is already in the mempool
 - `ConflictingTransaction` - The transaction is conflicting with another transaction in the mempool
 - `DuplicatedInputs` - The transaction has duplicated inputs
+- `FeeTooLow` - The transaction does not meet the minimum relay feerate
+- `ExceedsMaxWeight` - The transaction exceeds the maximum standard relay weight
+- `ExceedsScriptSigSize` - The transaction exceeds the standard `scriptSig` size policy
+- `NonStandard` - The transaction is non-standard under relay policy
+- `MissingPrevoutContext` - The node could not resolve enough prevout metadata to evaluate relay policy
 - `Consensus` - The transaction failed consensus checks

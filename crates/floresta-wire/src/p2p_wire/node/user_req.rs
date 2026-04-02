@@ -5,6 +5,7 @@ use std::time::Instant;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use floresta_chain::ChainBackend;
+use floresta_mempool::MempoolError;
 use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::info;
@@ -154,14 +155,26 @@ where
                 return;
             }
 
-            UserRequest::SendTransaction(transaction) => {
+            UserRequest::SendTransaction(transaction, spent_utxos) => {
                 let txid = transaction.compute_txid();
                 let mut mempool = self.mempool.lock().await;
 
-                if let Err(e) = mempool.accept_to_mempool(transaction) {
-                    warn!("Could not broadcast transaction {txid} due to {e}");
-                    let _ = responder.send(NodeResponse::TransactionBroadcastResult(Err(e)));
-                    return;
+                match mempool.accept_to_mempool(transaction, spent_utxos) {
+                    Ok(()) => {}
+                    Err(MempoolError::AlreadyKnown) => {
+                        drop(mempool);
+                        self.broadcast_to_peers(NodeRequest::BroadcastTransaction(txid));
+                        let _ = responder.send(NodeResponse::TransactionBroadcastResult(Err(
+                            MempoolError::AlreadyKnown,
+                        )));
+                        return;
+                    }
+                    Err(error) => {
+                        warn!("Could not broadcast transaction {txid} due to {error}");
+                        let _ =
+                            responder.send(NodeResponse::TransactionBroadcastResult(Err(error)));
+                        return;
+                    }
                 }
 
                 drop(mempool);

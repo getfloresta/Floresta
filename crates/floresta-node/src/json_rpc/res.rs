@@ -9,7 +9,7 @@ use axum::response::IntoResponse;
 use corepc_types::v30::GetBlockVerboseOne;
 use floresta_chain::extensions::HeaderExtError;
 use floresta_common::impl_error_from;
-use floresta_mempool::mempool::AcceptToMempoolError;
+use floresta_mempool::MempoolError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -224,10 +224,10 @@ pub enum JsonRpcError {
     InvalidTimestamp,
 
     /// Something went wrong when attempting to publish a transaction to mempool
-    MempoolAccept(AcceptToMempoolError),
+    MempoolAccept(MempoolError),
 }
 
-impl_error_from!(JsonRpcError, AcceptToMempoolError, MempoolAccept);
+impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
 
 impl Display for JsonRpcError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

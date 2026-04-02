@@ -1136,6 +1136,7 @@ version = "0.5.0"
 dependencies = [
  "ahash",
  "bitcoin",
+ "criterion",
  "floresta-chain",
  "floresta-common",
  "rand",

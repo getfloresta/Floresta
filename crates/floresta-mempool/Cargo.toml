@@ -24,10 +24,15 @@ tracing = { workspace = true }
 floresta-chain = { workspace = true }
 
 [dev-dependencies]
+criterion = "0.7"
 floresta-common = { workspace = true }
 
 [features]
 default = []
+
+[[bench]]
+name = "mempool_policy_bench"
+harness = false
 
 [lints]
 workspace = true
