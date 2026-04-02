@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use floresta_watch_only::kv_database::KvDatabaseError;
+use floresta_watch_only::WatchOnlyError;
 use thiserror::Error;
 use tokio::sync::oneshot;
 
@@ -22,4 +24,10 @@ pub enum Error {
 
     #[error("Node isn't working")]
     NodeInterface(#[from] oneshot::error::RecvError),
+}
+
+impl From<WatchOnlyError<KvDatabaseError>> for Error {
+    fn from(e: WatchOnlyError<KvDatabaseError>) -> Self {
+        Error::Blockchain(Box::new(e))
+    }
 }
