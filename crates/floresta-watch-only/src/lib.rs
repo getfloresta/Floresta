@@ -49,6 +49,8 @@ pub enum WatchOnlyError<DatabaseError: Debug> {
     WalletNotInitialized,
     TransactionNotFound,
     DatabaseError(DatabaseError),
+    PoisonedLock,
+    AddressNotFound,
 }
 
 impl<DatabaseError: Debug> Display for WatchOnlyError<DatabaseError> {
@@ -62,6 +64,12 @@ impl<DatabaseError: Debug> Display for WatchOnlyError<DatabaseError> {
             }
             WatchOnlyError::DatabaseError(e) => {
                 write!(f, "Database error: {e:?}")
+            }
+            WatchOnlyError::PoisonedLock => {
+                write!(f, "Lock is poisoned")
+            }
+            WatchOnlyError::AddressNotFound => {
+                write!(f, "Address not found")
             }
         }
     }
@@ -586,152 +594,280 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         }
     }
 
-    pub fn get_utxo(&self, outpoint: &OutPoint) -> Option<TxOut> {
-        let inner = self.inner.read().expect("poisoned lock");
+    pub fn get_utxo(&self, outpoint: &OutPoint) -> Result<Option<TxOut>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         // a dirty way to check if the utxo is still unspent
-        let _ = inner.utxo_index.get(outpoint)?;
-        let tx = inner.get_transaction(&outpoint.txid)?;
+        let _ = inner
+            .utxo_index
+            .get(outpoint)
+            .ok_or(WatchOnlyError::TransactionNotFound)?;
+        let tx = inner
+            .get_transaction(&outpoint.txid)
+            .ok_or(WatchOnlyError::TransactionNotFound)?;
 
-        Some(tx.tx.output[outpoint.vout as usize].clone())
+        Ok(Some(tx.tx.output[outpoint.vout as usize].clone()))
     }
 
-    pub fn n_cached_addresses(&self) -> usize {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.address_map.len()
+    pub fn n_cached_addresses(&self) -> Result<usize, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.address_map.len())
     }
 
     /// Returns the balance of this address, debts (spends) are taken in account
-    pub fn get_address_balance(&self, script_hash: &Hash) -> Option<u64> {
-        let inner = self.inner.read().expect("poisoned lock");
+    pub fn get_address_balance(
+        &self,
+        script_hash: &Hash,
+    ) -> Result<Option<u64>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
 
-        Some(inner.address_map.get(script_hash)?.balance)
+        // Ok(Some(inner.address_map.get(script_hash)?.balance))
+        let entry = inner
+            .address_map
+            .get(script_hash)
+            .ok_or(WatchOnlyError::AddressNotFound)?;
+        Ok(Some(entry.balance))
     }
 
-    pub fn get_cached_addresses(&self) -> Vec<ScriptBuf> {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner
+    pub fn get_cached_addresses(&self) -> Result<Vec<ScriptBuf>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+
+        let scripts = inner
             .address_map
             .values()
             .map(|address| address.script.clone())
-            .collect()
+            .collect::<Vec<_>>();
+
+        Ok(scripts)
     }
 
-    pub fn bump_height(&self, height: u32) {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner
-            .database
-            .set_cache_height(height)
-            .expect("Database is not working");
+    pub fn bump_height(&self, height: u32) -> Result<(), WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+
+        inner.database.set_cache_height(height)?;
+
+        Ok(())
     }
 
-    pub fn get_cache_height(&self) -> u32 {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.database.get_cache_height().unwrap_or(0)
+    pub fn get_cache_height(&self) -> Result<u32, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.database.get_cache_height().unwrap_or(0))
     }
 
     /// Tells whether or not a descriptor is already cached
     pub fn is_cached(&self, desc: &String) -> Result<bool, WatchOnlyError<D::Error>> {
-        let inner = self.inner.read().expect("poisoned lock");
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         let known_descs = inner.database.descs_get()?;
         Ok(known_descs.contains(desc))
     }
 
     /// Tells whether an address is already cached
-    pub fn is_address_cached(&self, script_hash: &Hash) -> bool {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.address_map.contains_key(script_hash)
+    pub fn is_address_cached(&self, script_hash: &Hash) -> Result<bool, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.address_map.contains_key(script_hash))
     }
 
     pub fn push_descriptor(&self, descriptor: &str) -> Result<(), WatchOnlyError<D::Error>> {
-        let inner = self.inner.write().expect("poisoned lock");
+        let inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         Ok(inner.database.desc_save(descriptor)?)
     }
 
-    pub fn get_position(&self, txid: &Txid) -> Option<u32> {
-        let inner = self.inner.read().expect("poisoned lock");
-        Some(inner.get_transaction(txid)?.position)
+    pub fn get_position(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        let tx = inner
+            .get_transaction(txid)
+            .ok_or(WatchOnlyError::TransactionNotFound)?;
+        Ok(Some(tx.position))
     }
 
-    pub fn get_height(&self, txid: &Txid) -> Option<u32> {
-        let inner = self.inner.read().expect("poisoned lock");
-        Some(inner.get_transaction(txid)?.height)
+    pub fn get_height(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+
+        let tx = inner
+            .get_transaction(txid)
+            .ok_or(WatchOnlyError::TransactionNotFound)?;
+
+        Ok(Some(tx.height))
     }
 
-    pub fn get_cached_transaction(&self, txid: &Txid) -> Option<String> {
-        let inner = self.inner.read().expect("poisoned lock");
-        let tx = inner.get_transaction(txid)?;
-        Some(serialize_hex(&tx.tx))
+    pub fn get_cached_transaction(
+        &self,
+        txid: &Txid,
+    ) -> Result<Option<String>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        let tx = inner
+            .get_transaction(txid)
+            .ok_or(WatchOnlyError::TransactionNotFound)?;
+        Ok(Some(serialize_hex(&tx.tx)))
     }
 
     pub fn setup(&self) -> Result<(), WatchOnlyError<D::Error>> {
-        let inner = self.inner.read().expect("poisoned lock");
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         inner.setup()
     }
 
-    pub fn block_process(&self, block: &Block, height: u32) -> Vec<(Transaction, TxOut)> {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.block_process(block, height)
+    pub fn block_process(
+        &self,
+        block: &Block,
+        height: u32,
+    ) -> Result<Vec<(Transaction, TxOut)>, WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.block_process(block, height))
     }
 
-    pub fn get_address_utxos(&self, script_hash: &Hash) -> Option<Vec<(TxOut, OutPoint)>> {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.get_address_utxos(script_hash)
+    pub fn get_address_utxos(
+        &self,
+        script_hash: &Hash,
+    ) -> Result<Option<Vec<(TxOut, OutPoint)>>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.get_address_utxos(script_hash))
     }
 
-    pub fn get_transaction(&self, txid: &Txid) -> Option<CachedTransaction> {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.get_transaction(txid)
+    pub fn get_transaction(
+        &self,
+        txid: &Txid,
+    ) -> Result<Option<CachedTransaction>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.get_transaction(txid))
     }
 
-    pub fn get_address_history(&self, script_hash: &Hash) -> Option<Vec<CachedTransaction>> {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.get_address_history(script_hash)
+    pub fn get_address_history(
+        &self,
+        script_hash: &Hash,
+    ) -> Result<Option<Vec<CachedTransaction>>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.get_address_history(script_hash))
     }
 
     /// Returns the Merkle Proof for a given txid.
     ///
     /// Fails if a given Txid is an unconfirmed transaction.
-    pub fn get_merkle_proof(&self, txid: &Txid) -> Option<MerkleProof> {
-        let inner = self.inner.read().expect("poisoned lock");
-        inner.get_merkle_proof(txid)
+    pub fn get_merkle_proof(
+        &self,
+        txid: &Txid,
+    ) -> Result<Option<MerkleProof>, WatchOnlyError<D::Error>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.get_merkle_proof(txid))
     }
 
     pub fn derive_addresses(&self) -> Result<(), WatchOnlyError<D::Error>> {
-        let mut inner = self.inner.write().expect("poisoned lock");
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         inner.derive_addresses()
     }
 
     pub fn get_stats(&self) -> Result<Stats, WatchOnlyError<D::Error>> {
-        let inner = self.inner.read().expect("poisoned lock");
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         inner
             .database
             .get_stats()
             .map_err(WatchOnlyError::DatabaseError)
     }
 
-    pub fn maybe_derive_addresses(&self) {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.maybe_derive_addresses()
+    pub fn maybe_derive_addresses(&self) -> Result<(), WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+
+        Ok(inner.maybe_derive_addresses())
     }
 
     pub fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError<D::Error>> {
-        let inner = self.inner.read().expect("poisoned lock");
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         inner.find_unconfirmed()
     }
 
-    pub fn cache_address(&self, script_pk: ScriptBuf) {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.cache_address(script_pk)
+    pub fn cache_address(&self, script_pk: ScriptBuf) -> Result<(), WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.cache_address(script_pk))
     }
 
-    pub fn cache_mempool_transaction(&self, transaction: &Transaction) -> Vec<TxOut> {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.cache_mempool_transaction(transaction)
+    pub fn cache_mempool_transaction(
+        &self,
+        transaction: &Transaction,
+    ) -> Result<Vec<TxOut>, WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.cache_mempool_transaction(transaction))
     }
 
-    pub fn save_mempool_tx(&self, hash: Hash, transaction_to_cache: CachedTransaction) {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.save_mempool_tx(hash, transaction_to_cache)
+    pub fn save_mempool_tx(
+        &self,
+        hash: Hash,
+        transaction_to_cache: CachedTransaction,
+    ) -> Result<(), WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.save_mempool_tx(hash, transaction_to_cache))
     }
 
     pub fn save_non_mempool_tx(
@@ -742,20 +878,26 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         index: usize,
         hash: Hash,
         transaction_to_cache: CachedTransaction,
-    ) {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.save_non_mempool_tx(
+    ) -> Result<(), WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.save_non_mempool_tx(
             transaction,
             is_spend,
             value,
             index,
             hash,
             transaction_to_cache,
-        )
+        ))
     }
 
     pub fn get_descriptors(&self) -> Result<Vec<String>, WatchOnlyError<D::Error>> {
-        let inner = self.inner.read().expect("poisoned lock");
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
         inner
             .database
             .descs_get()
@@ -773,9 +915,12 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         index: usize,
         is_spend: bool,
         hash: sha256::Hash,
-    ) {
-        let mut inner = self.inner.write().expect("poisoned lock");
-        inner.cache_transaction(
+    ) -> Result<(), WatchOnlyError<D::Error>> {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|_| WatchOnlyError::PoisonedLock)?;
+        Ok(inner.cache_transaction(
             transaction,
             height,
             value,
@@ -784,7 +929,7 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
             index,
             is_spend,
             hash,
-        )
+        ))
     }
 }
 
