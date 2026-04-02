@@ -114,8 +114,7 @@ impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
 
 #[cfg(feature = "flat-chainstore")]
 impl ChainState<crate::pruned_utreexo::flat_chain_store::FlatChainStore> {
-    /// Helper to open a ChainState specifically using a FlatChainStoreConfig.
-    pub fn open(
+    pub fn from_config(
         config: crate::pruned_utreexo::flat_chain_store::FlatChainStoreConfig,
         network: Network,
         assume_valid: AssumeValidArg,
@@ -123,7 +122,8 @@ impl ChainState<crate::pruned_utreexo::flat_chain_store::FlatChainStore> {
         use crate::pruned_utreexo::flat_chain_store::FlatChainStore;
         
         let chainstore = FlatChainStore::new(config)?;
-        <ChainState<FlatChainStore>>::open(chainstore, network, assume_valid)
+        // This now works perfectly without needing Clone
+        Self::open(chainstore, network, assume_valid)
     }
 }
 
@@ -711,27 +711,24 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     /// 
     /// If the chain is not initialized (i.e., the database is empty), it automatically
     /// creates a new one starting from the genesis block.
+    /// Tries to load an existing `ChainState` from the given `chainstore`.
+    /// 
+    /// If the chain is not initialized, it automatically creates a new one.
     pub fn open(
-        chainstore: PersistedState,
+        mut chainstore: PersistedState,
         network: Network,
         assume_valid: AssumeValidArg,
-    ) -> Result<Self, BlockchainError>
-    where
-        PersistedState: Clone,
-    {
-        // 1. Try to load existing data
-        match Self::load_chain_state(chainstore.clone(), network, assume_valid) {
-            Ok(chainstate) => {
-                debug!("Successfully loaded existing ChainState.");
-                Ok(chainstate)
-            }
-            // 2. If it's a new install, the store will return ChainNotInitialized
-            Err(BlockchainError::ChainNotInitialized) => {
-                info!("No existing chain found. Initializing a new chain at height 0 (Genesis).");
-                Ok(Self::new(chainstore, network, assume_valid))
-            }
-            // 3. If there's a real error (like a disk failure), stop and report it
-            Err(e) => Err(e),
+    ) -> Result<Self, BlockchainError> {
+        // 1. We peek at the height to see if data exists.
+        // This doesn't "consume" the store, so we still own it!
+        if chainstore.load_height()?.is_some() {
+            debug!("Successfully found existing data. Loading ChainState...");
+            // 2. Data exists: Move ownership to load_chain_state
+            Self::load_chain_state(chainstore, network, assume_valid)
+        } else {
+            info!("No existing chain found. Initializing a new chain at height 0 (Genesis).");
+            // 2. No data: Move ownership to new()
+            Ok(Self::new(chainstore, network, assume_valid))
         }
     }
 
