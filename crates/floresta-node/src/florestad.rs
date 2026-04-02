@@ -706,15 +706,12 @@ impl Florestad {
         network: Network,
         assume_valid: AssumeValidArg,
     ) -> Result<ChainState<ChainStore>, FlorestadError> {
-        let db = Self::load_chain_store(data_dir.clone())?;
+        // 1. Get the database handle
+        let db = Self::load_chain_store(data_dir)?;
 
-        ChainState::<ChainStore>::load_chain_state(db, network, assume_valid).or_else(|e| match e {
-            BlockchainError::ChainNotInitialized => {
-                let db = Self::load_chain_store(data_dir)?;
-                Ok(ChainState::new(db, network, assume_valid))
-            }
-            anyerr => Err(FlorestadError::CouldNotLoadFlatChainStore(anyerr)),
-        })
+        // 2. Use our new 'open' method to handle load-or-create automatically
+        ChainState::open(db, network, assume_valid)
+            .map_err(FlorestadError::CouldNotLoadFlatChainStore)
     }
 
     fn load_wallet(data_dir: &String) -> Result<AddressCache<KvDatabase>, FlorestadError> {

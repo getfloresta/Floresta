@@ -112,6 +112,21 @@ impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
     }
 }
 
+#[cfg(feature = "flat-chainstore")]
+impl ChainState<crate::pruned_utreexo::flat_chain_store::FlatChainStore> {
+    /// Helper to open a ChainState specifically using a FlatChainStoreConfig.
+    pub fn open(
+        config: crate::pruned_utreexo::flat_chain_store::FlatChainStoreConfig,
+        network: Network,
+        assume_valid: AssumeValidArg,
+    ) -> Result<Self, BlockchainError> {
+        use crate::pruned_utreexo::flat_chain_store::FlatChainStore;
+        
+        let chainstore = FlatChainStore::new(config)?;
+        <ChainState<FlatChainStore>>::open(chainstore, network, assume_valid)
+    }
+}
+
 /// Internal state of the blockchain managed by `ChainState`.
 pub struct ChainStateInner<PersistedState: ChainStore> {
     /// The acc we use for validation.
@@ -689,6 +704,34 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             depth,
             validation_index,
             alternative_tips: Vec::new(),
+        }
+    }
+
+    /// Tries to load an existing `ChainState` from the given `chainstore`.
+    /// 
+    /// If the chain is not initialized (i.e., the database is empty), it automatically
+    /// creates a new one starting from the genesis block.
+    pub fn open(
+        chainstore: PersistedState,
+        network: Network,
+        assume_valid: AssumeValidArg,
+    ) -> Result<Self, BlockchainError>
+    where
+        PersistedState: Clone,
+    {
+        // 1. Try to load existing data
+        match Self::load_chain_state(chainstore.clone(), network, assume_valid) {
+            Ok(chainstate) => {
+                debug!("Successfully loaded existing ChainState.");
+                Ok(chainstate)
+            }
+            // 2. If it's a new install, the store will return ChainNotInitialized
+            Err(BlockchainError::ChainNotInitialized) => {
+                info!("No existing chain found. Initializing a new chain at height 0 (Genesis).");
+                Ok(Self::new(chainstore, network, assume_valid))
+            }
+            // 3. If there's a real error (like a disk failure), stop and report it
+            Err(e) => Err(e),
         }
     }
 
