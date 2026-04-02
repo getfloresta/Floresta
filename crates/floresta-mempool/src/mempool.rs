@@ -1113,47 +1113,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_fee_rate_boundary_sweep() {
-        let policy = MempoolPolicy {
-            min_relay_fee_sat_per_vbyte: 2,
-            ..MempoolPolicy::default()
-        };
+    use proptest::prelude::*;
 
-        for seed in 0..16_u8 {
-            let (tx, context) = standard_tx(seed + 80);
+    proptest! {
+        #[test]
+        fn prop_test_fee_rate_boundary(seed in 0u8..255, delta in -5..5i64) {
+            let policy = MempoolPolicy {
+                min_relay_fee_sat_per_vbyte: 2,
+                ..MempoolPolicy::default()
+            };
+
+            let (tx, context) = standard_tx(seed);
             let vsize = tx.vsize() as u64;
             let threshold = policy.min_relay_fee_sat_per_vbyte * vsize;
 
-            for delta in [-1_i64, 0, 1] {
-                let fee = (threshold as i64 + delta) as u64;
-                let mut tx = tx.clone();
-                tx.output[0].value = Amount::from_sat(100_000 - fee);
-                let mut mempool = Mempool::with_policy(10_000_000, policy.clone());
-                let accepted = mempool.accept_to_mempool(tx, context.clone()).is_ok();
-                assert_eq!(accepted, delta >= 0, "seed={seed}, delta={delta}");
-            }
+            let fee = std::cmp::max(0, threshold as i64 + delta) as u64;
+            let mut tx = tx.clone();
+            tx.output[0].value = Amount::from_sat(100_000 - fee);
+            let mut mempool = Mempool::with_policy(10_000_000, policy);
+            let accepted = mempool.accept_to_mempool(tx, context).is_ok();
+            assert_eq!(accepted, delta >= 0);
         }
-    }
 
-    #[test]
-    fn test_weight_boundary_sweep() {
-        for threshold in [300_u64, 320, 340, 360, 380] {
-            for script_sig_len in 10..30_usize {
-                let (tx, context) =
-                    make_weight_tunable_tx(script_sig_len as u8 + 100, script_sig_len);
-                let mut mempool = Mempool::with_policy(
-                    10_000_000,
-                    MempoolPolicy {
-                        min_relay_fee_sat_per_vbyte: 0,
-                        max_standard_tx_weight: threshold,
-                        max_standard_script_sig_size: usize::MAX / 2,
-                        ..MempoolPolicy::default()
-                    },
-                );
-                let accepted = mempool.accept_to_mempool(tx.clone(), context).is_ok();
-                assert_eq!(accepted, tx.weight().to_wu() <= threshold);
-            }
+        #[test]
+        fn prop_test_weight_boundary(threshold in 300u64..400, script_sig_len in 10usize..50) {
+            let (tx, context) =
+                make_weight_tunable_tx(100 + (script_sig_len % 100) as u8, script_sig_len);
+            let mut mempool = Mempool::with_policy(
+                10_000_000,
+                MempoolPolicy {
+                    min_relay_fee_sat_per_vbyte: 0,
+                    max_standard_tx_weight: threshold,
+                    max_standard_script_sig_size: usize::MAX / 2,
+                    ..MempoolPolicy::default()
+                },
+            );
+            let accepted = mempool.accept_to_mempool(tx.clone(), context).is_ok();
+            assert_eq!(accepted, tx.weight().to_wu() <= threshold);
         }
     }
 

@@ -26,6 +26,7 @@ floresta-chain = { workspace = true }
 [dev-dependencies]
 criterion = "0.7"
 floresta-common = { workspace = true }
+proptest = "1.0"
 
 [features]
 default = []
