@@ -116,6 +116,13 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 continue;
             }
 
+            if let Ok(Some(parent)) = self.chain.get_tx(&outpoint.txid) {
+                if let Some(txout) = parent.output.get(outpoint.vout as usize).cloned() {
+                    spent_utxos.insert(outpoint, Self::admission_utxo(txout));
+                    continue;
+                }
+            }
+
             if let Ok(Some(parent)) = self.node.get_mempool_transaction(outpoint.txid).await {
                 if let Some(txout) = parent.output.get(outpoint.vout as usize).cloned() {
                     spent_utxos.insert(outpoint, Self::admission_utxo(txout));

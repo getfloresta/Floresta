@@ -273,6 +273,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 continue;
             }
 
+            if let Ok(Some(parent)) = self.chain.get_tx(&outpoint.txid) {
+                if let Some(txout) = parent.output.get(outpoint.vout as usize).cloned() {
+                    spent_utxos.insert(outpoint, Self::admission_utxo(txout));
+                    continue;
+                }
+            }
+
             if let Ok(Some(parent)) = self
                 .node_interface
                 .get_mempool_transaction(outpoint.txid)
