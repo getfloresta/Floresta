@@ -719,26 +719,30 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         network: Network,
         assume_valid: AssumeValidArg,
     ) -> Result<Self, BlockchainError> {
-        // 1. Check if the Genesis block exists in our index (Height 0)
-        // This is much more reliable than checking the metadata file
+        // 1. Check if Genesis block exists in the index (Height 0)
+        // This confirms if there is ANY data on disk
         if chainstore.get_block_hash(0)?.is_some() {
-            debug!("Existing data detected in the index. Loading...");
             
-            // 2. Try to load. If metadata is missing/empty, load_chain_state 
-            // might return ChainNotInitialized. We handle that by reindexing.
-            match Self::load_chain_state(chainstore.clone(), network, assume_valid) {
-                Ok(state) => Ok(state),
-                Err(BlockchainError::ChainNotInitialized) => {
-                    info!("Metadata missing but data found. Recovering chain state...");
-                    let state = Self::new(chainstore, network, assume_valid);
-                    state.reindex_chain()?;
-                    Ok(state)
-                }
-                Err(e) => Err(e),
+            // 2. Check if the metadata (BestChain) exists
+            if chainstore.load_height()?.is_some() {
+                // Both data and metadata exist. We can load normally.
+                // We move ownership of chainstore into load_chain_state here.
+                Self::load_chain_state(chainstore, network, assume_valid)
+            } else {
+                // Data exists but metadata is missing (e.g. crash during header sync)
+                info!("Data found but metadata missing. Recovering chain state...");
+                
+                // Initialize a new state and then tell it to scan the files
+                let state = Self::new(chainstore, network, assume_valid);
+                state.reindex_chain()?;
+                Ok(state)
             }
         } else {
+            // 3. No data found at all. This is a fresh install.
             info!("No existing chain found. Initializing a new chain at height 0 (Genesis).");
             let state = Self::new(chainstore, network, assume_valid);
+            
+            // Flush immediately so the next boot sees height 0 instead of "None"
             state.flush()?; 
             Ok(state)
         }
