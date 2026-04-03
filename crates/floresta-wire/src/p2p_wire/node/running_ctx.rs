@@ -323,7 +323,7 @@ where
 
         if *self.kill_signal.read().await {
             self.shutdown();
-            stop_signal.send(()).unwrap();
+            let _ = stop_signal.send(());
             return;
         }
 
