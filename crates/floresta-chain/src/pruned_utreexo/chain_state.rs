@@ -738,6 +738,32 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(chainstate)
     }
 
+    /// Opens a chain state from an existing store, or initializes a new one from genesis if
+    /// the store is empty.
+    ///
+    /// This is the preferred constructor for `ChainState`. It correctly handles both first-run
+    /// and restart scenarios without requiring the caller to distinguish between the two:
+    ///
+    /// - If the store already contains chain data, it delegates to [`load_chain_state`].
+    /// - If the store is empty (`load_height` returns `None`), it delegates to [`new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is populated but the data cannot be loaded or is corrupt.
+    ///
+    /// [`load_chain_state`]: ChainState::load_chain_state
+    /// [`new`]: ChainState::new
+    pub fn open(
+        chainstore: PersistedState,
+        network: Network,
+        assume_valid: AssumeValidArg,
+    ) -> Result<ChainState<PersistedState>, BlockchainError> {
+        match chainstore.load_height()? {
+            Some(_) => Self::load_chain_state(chainstore, network, assume_valid),
+            None => Ok(Self::new(chainstore, network, assume_valid)),
+        }
+    }
+
     /// Checks whether our database got a file-level corruption, and if so, reindex.
     ///
     /// This protects us from fs corruption, like random bit-flips or power loss.
@@ -1782,5 +1808,52 @@ mod test {
             read_lock!(chain).best_block.best_block,
             headers[1].prev_blockhash
         );
+    }
+
+    #[test]
+    fn test_open_on_empty_store_initializes_from_genesis() {
+        let test_id = rand::random::<u64>();
+        let config = crate::FlatChainStoreConfig {
+            block_index_size: Some(32_768),
+            headers_file_size: Some(32_768),
+            fork_file_size: Some(10_000),
+            cache_size: Some(10),
+            file_permission: Some(0o660),
+            path: format!("./tmp-db/{test_id}/"),
+        };
+
+        let chainstore = crate::FlatChainStore::new(config).unwrap();
+        let chain = ChainState::open(chainstore, Network::Bitcoin, AssumeValidArg::Disabled)
+            .expect("open on empty store should succeed");
+
+        let (height, _) = chain.get_best_block().unwrap();
+        assert_eq!(height, 0, "new chain should start at genesis (height 0)");
+    }
+
+    #[test]
+    fn test_open_on_populated_store_loads_existing_state() {
+        let test_id = rand::random::<u64>();
+        let config = crate::FlatChainStoreConfig {
+            block_index_size: Some(32_768),
+            headers_file_size: Some(32_768),
+            fork_file_size: Some(10_000),
+            cache_size: Some(10),
+            file_permission: Some(0o660),
+            path: format!("./tmp-db/{test_id}/"),
+        };
+
+        // First open: initializes from genesis
+        let chain =
+            ChainState::open(crate::FlatChainStore::new(config.clone()).unwrap(), Network::Signet, AssumeValidArg::Disabled)
+                .expect("first open should succeed");
+        drop(chain);
+
+        // Second open on the same path: must load the existing state, not reset to genesis
+        let chain =
+            ChainState::open(crate::FlatChainStore::new(config).unwrap(), Network::Signet, AssumeValidArg::Disabled)
+                .expect("second open should succeed");
+
+        let (height, _) = chain.get_best_block().unwrap();
+        assert_eq!(height, 0, "reloaded chain should preserve height");
     }
 }
