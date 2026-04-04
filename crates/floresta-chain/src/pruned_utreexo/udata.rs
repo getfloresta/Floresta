@@ -204,6 +204,7 @@ pub mod proof_util {
     use bitcoin::WPubkeyHash;
     use bitcoin::WScriptHash;
     use floresta_common::impl_error_from;
+    use floresta_common::Height;
     use rustreexo::node_hash::BitcoinNodeHash;
     use sha2::Digest;
     use sha2::Sha512_256;
@@ -431,7 +432,7 @@ pub mod proof_util {
                     UtxoData {
                         txout: out.clone(),
                         is_coinbase: tx.is_coinbase(),
-                        creation_height: height,
+                        creation_height: height.into(),
                         creation_time: 0, // TODO add MTP(`height` - 1)
                     },
                 );
@@ -468,7 +469,7 @@ pub mod proof_util {
                     UtxoData {
                         txout: leaf.utxo,
                         is_coinbase,
-                        creation_height,
+                        creation_height: Height::from(creation_height),
                         creation_time: 0, // TODO add MTP(`creation_height` - 1)
                     },
                 );

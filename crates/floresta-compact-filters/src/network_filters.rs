@@ -34,7 +34,7 @@ impl<Storage: IterableFilterStore> NetworkFilters<Storage> {
         let start_height = start_height.map(|n| n as usize);
 
         for (height, filter) in self.filters.iter(start_height)? {
-            let hash = chain.get_block_hash(height).unwrap();
+            let hash = chain.get_block_hash(height.into()).unwrap();
 
             if filter.match_any(&hash, &mut iter.clone()).unwrap() {
                 blocks.push(hash);

@@ -29,6 +29,7 @@ use bitcoin::block::Header as BlockHeader;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use floresta_common::prelude::*;
+use floresta_common::Height;
 use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::stump::Stump;
 use tracing::info;
@@ -264,9 +265,10 @@ impl UpdatableChainstate for PartialChainState {
         proof: rustreexo::proof::Proof,
         inputs: HashMap<bitcoin::OutPoint, UtxoData>,
         del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
-    ) -> Result<u32, BlockchainError> {
+    ) -> Result<Height, BlockchainError> {
         self.inner_mut()
             .process_block(block, proof, inputs, del_hashes)
+            .map(Height::from)
     }
 
     fn get_root_hashes(&self) -> Vec<BitcoinNodeHash> {
@@ -300,8 +302,8 @@ impl UpdatableChainstate for PartialChainState {
 
     fn get_partial_chain(
         &self,
-        _initial_height: u32,
-        _final_height: u32,
+        _initial_height: Height,
+        _final_height: Height,
         _acc: Stump,
     ) -> Result<PartialChainState, BlockchainError> {
         unimplemented!("We are a partial chain")
@@ -335,11 +337,12 @@ impl BlockchainInterface for PartialChainState {
         self.inner().current_acc.clone()
     }
 
-    fn get_height(&self) -> Result<u32, Self::Error> {
-        Ok(self.inner().current_height)
+    fn get_height(&self) -> Result<Height, Self::Error> {
+        Ok(self.inner().current_height.into())
     }
 
-    fn get_block_hash(&self, height: u32) -> Result<bitcoin::BlockHash, BlockchainError> {
+    fn get_block_hash(&self, height: Height) -> Result<bitcoin::BlockHash, BlockchainError> {
+        let height: u32 = height.into();
         self.inner()
             .blocks
             .get(height as usize)
@@ -347,26 +350,27 @@ impl BlockchainInterface for PartialChainState {
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
-    fn get_best_block(&self) -> Result<(u32, bitcoin::BlockHash), Self::Error> {
+    fn get_best_block(&self) -> Result<(Height, bitcoin::BlockHash), Self::Error> {
         Ok((
-            self.inner().final_height,
-            self.get_block_hash(self.inner().final_height)?,
+            self.inner().final_height.into(),
+            self.get_block_hash(self.inner().final_height.into())?,
         ))
     }
 
     fn is_coinbase_mature(
         &self,
-        height: u32,
+        height: Height,
         _block: bitcoin::BlockHash,
     ) -> Result<bool, Self::Error> {
+        let height: u32 = height.into();
         let current_height = self.inner().current_height;
         let coinbase_maturity = self.inner().chain_params().coinbase_maturity;
 
         Ok(height + coinbase_maturity > current_height)
     }
 
-    fn get_validation_index(&self) -> Result<u32, Self::Error> {
-        Ok(self.inner().current_height)
+    fn get_validation_index(&self) -> Result<Height, Self::Error> {
+        Ok(self.inner().current_height.into())
     }
 
     fn is_in_ibd(&self) -> bool {
@@ -379,7 +383,7 @@ impl BlockchainInterface for PartialChainState {
         let mut height = self.inner().current_height;
 
         while height > 0 {
-            hashes.push(self.get_block_hash(height)?);
+            hashes.push(self.get_block_hash(height.into())?);
             if hashes.len() > 10 {
                 step *= 2;
             }
@@ -418,7 +422,7 @@ impl BlockchainInterface for PartialChainState {
         &self,
         _acc: Stump,
         _block: &Block,
-        _height: u32,
+        _height: Height,
         _proof: rustreexo::proof::Proof,
         _del_hashes: Vec<bitcoin::hashes::sha256::Hash>,
     ) -> Result<Stump, Self::Error> {
@@ -448,7 +452,7 @@ impl BlockchainInterface for PartialChainState {
         unimplemented!("partialChainState::estimate_fee")
     }
 
-    fn get_block_height(&self, _hash: &bitcoin::BlockHash) -> Result<Option<u32>, Self::Error> {
+    fn get_block_height(&self, _hash: &bitcoin::BlockHash) -> Result<Option<Height>, Self::Error> {
         unimplemented!("partialChainState::get_block_height")
     }
 }

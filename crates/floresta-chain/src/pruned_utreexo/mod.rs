@@ -30,6 +30,7 @@ use bitcoin::hashes::sha256;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::OutPoint;
+use floresta_common::Height;
 use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
@@ -46,13 +47,13 @@ pub trait BlockchainInterface {
     type Error: Error + Send + Sync + 'static;
 
     /// Returns the block with a given height in our current tip.
-    fn get_block_hash(&self, height: u32) -> Result<bitcoin::BlockHash, Self::Error>;
+    fn get_block_hash(&self, height: Height) -> Result<bitcoin::BlockHash, Self::Error>;
 
     /// Returns a bitcoin [`bitcoin::Transaction`] given its txid.
     fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Option<bitcoin::Transaction>, Self::Error>;
 
     /// Get the height of our best know chain.
-    fn get_height(&self) -> Result<u32, Self::Error>;
+    fn get_height(&self) -> Result<Height, Self::Error>;
 
     /// Returns fee estimation for inclusion in `target` blocks.
     fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error>;
@@ -61,7 +62,7 @@ pub trait BlockchainInterface {
     fn get_block(&self, hash: &BlockHash) -> Result<Block, Self::Error>;
 
     /// Returns the best known block
-    fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error>;
+    fn get_best_block(&self) -> Result<(Height, BlockHash), Self::Error>;
 
     /// Returns associated header for block with `hash`
     fn get_block_header(&self, hash: &BlockHash) -> Result<BlockHeader, Self::Error>;
@@ -77,7 +78,7 @@ pub trait BlockchainInterface {
     fn is_in_ibd(&self) -> bool;
 
     /// Checks if a coinbase is mature
-    fn is_coinbase_mature(&self, height: u32, block: BlockHash) -> Result<bool, Self::Error>;
+    fn is_coinbase_mature(&self, height: Height, block: BlockHash) -> Result<bool, Self::Error>;
 
     /// Returns a block locator
     fn get_block_locator(&self) -> Result<Vec<BlockHash>, Self::Error>;
@@ -88,17 +89,17 @@ pub trait BlockchainInterface {
     fn get_block_locator_for_tip(&self, tip: BlockHash) -> Result<Vec<BlockHash>, BlockchainError>;
 
     /// Returns the last block we validated
-    fn get_validation_index(&self) -> Result<u32, Self::Error>;
+    fn get_validation_index(&self) -> Result<Height, Self::Error>;
 
     /// Returns the height of a block, given it's hash
-    fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error>;
+    fn get_block_height(&self, hash: &BlockHash) -> Result<Option<Height>, Self::Error>;
 
     /// Applies a changeset to an accumulator and returns the resulting one
     fn update_acc(
         &self,
         acc: Stump,
         block: &Block,
-        height: u32,
+        height: Height,
         proof: Proof,
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error>;
@@ -140,7 +141,7 @@ pub trait UpdatableChainstate {
         proof: Proof,
         inputs: HashMap<OutPoint, UtxoData>,
         del_hashes: Vec<sha256::Hash>,
-    ) -> Result<u32, BlockchainError>;
+    ) -> Result<Height, BlockchainError>;
 
     fn switch_chain(&self, new_tip: BlockHash) -> Result<(), BlockchainError>;
     /// Accepts a new header to our chain. This method is called before connect_block, and
@@ -175,8 +176,8 @@ pub trait UpdatableChainstate {
     /// provide a [Stump] for that block.
     fn get_partial_chain(
         &self,
-        initial_height: u32,
-        final_height: u32,
+        initial_height: Height,
+        final_height: Height,
         acc: Stump,
     ) -> Result<PartialChainState, BlockchainError>;
     /// Marks a chain as fully-valid
@@ -193,7 +194,7 @@ pub trait UpdatableChainstate {
 /// time the given event happens. This is use to notify new blocks to the Electrum server.
 /// In the future, it can be expanded to send more data, like transactions.
 pub enum Notification {
-    NewBlock((Block, u32)),
+    NewBlock((Block, Height)),
 }
 
 impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
@@ -215,7 +216,7 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
         proof: Proof,
         inputs: HashMap<OutPoint, UtxoData>,
         del_hashes: Vec<sha256::Hash>,
-    ) -> Result<u32, BlockchainError> {
+    ) -> Result<Height, BlockchainError> {
         T::connect_block(self, block, proof, inputs, del_hashes)
     }
 
@@ -233,8 +234,8 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
 
     fn get_partial_chain(
         &self,
-        initial_height: u32,
-        final_height: u32,
+        initial_height: Height,
+        final_height: Height,
         acc: Stump,
     ) -> Result<PartialChainState, BlockchainError> {
         T::get_partial_chain(self, initial_height, final_height, acc)
@@ -284,7 +285,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::is_in_ibd(self)
     }
 
-    fn get_height(&self) -> Result<u32, Self::Error> {
+    fn get_height(&self) -> Result<Height, Self::Error> {
         T::get_height(self)
     }
 
@@ -292,11 +293,11 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::estimate_fee(self, target)
     }
 
-    fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
+    fn get_block_hash(&self, height: Height) -> Result<BlockHash, Self::Error> {
         T::get_block_hash(self, height)
     }
 
-    fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error> {
+    fn get_best_block(&self) -> Result<(Height, BlockHash), Self::Error> {
         T::get_best_block(self)
     }
 
@@ -304,7 +305,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::get_block_header(self, hash)
     }
 
-    fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
+    fn get_block_height(&self, hash: &BlockHash) -> Result<Option<Height>, Self::Error> {
         T::get_block_height(self, hash)
     }
 
@@ -312,11 +313,11 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::get_block_locator(self)
     }
 
-    fn is_coinbase_mature(&self, height: u32, block: BlockHash) -> Result<bool, Self::Error> {
+    fn is_coinbase_mature(&self, height: Height, block: BlockHash) -> Result<bool, Self::Error> {
         T::is_coinbase_mature(self, height, block)
     }
 
-    fn get_validation_index(&self) -> Result<u32, Self::Error> {
+    fn get_validation_index(&self) -> Result<Height, Self::Error> {
         T::get_validation_index(self)
     }
 
@@ -328,7 +329,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         &self,
         acc: Stump,
         block: &Block,
-        height: u32,
+        height: Height,
         proof: Proof,
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error> {
@@ -358,6 +359,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 /// This module defines an [UtxoData] struct, helpful for transaction validation
 pub mod utxo_data {
     use bitcoin::TxOut;
+    use floresta_common::Height;
 
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
     #[cfg_attr(
@@ -371,7 +373,7 @@ pub mod utxo_data {
         /// Whether this output was created by a coinbase transaction.
         pub is_coinbase: bool,
         /// The block height at which the UTXO was confirmed.
-        pub creation_height: u32,
+        pub creation_height: Height,
         /// The creation time of the UTXO, defined by BIP 68 as the median time past (MTP) of the
         /// block preceding the confirming block.
         pub creation_time: u32,

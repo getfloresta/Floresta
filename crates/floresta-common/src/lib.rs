@@ -35,6 +35,95 @@ pub use ema::Ema;
 use prelude::*;
 pub use spsc::Channel;
 
+#[repr(transparent)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Height(u32);
+
+impl Height {
+    pub const ZERO: Self = Self(0);
+
+    pub const fn new(height: u32) -> Self {
+        Self(height)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub const fn saturating_sub(self, rhs: u32) -> Self {
+        Self(self.0.saturating_sub(rhs))
+    }
+
+    pub const fn checked_add(self, rhs: u32) -> Option<Self> {
+        match self.0.checked_add(rhs) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+}
+
+impl From<u32> for Height {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Height> for u32 {
+    fn from(value: Height) -> Self {
+        value.0
+    }
+}
+
+impl core::fmt::Display for Height {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl core::ops::Add<u32> for Height {
+    type Output = Self;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl core::ops::Sub<u32> for Height {
+    type Output = Self;
+
+    fn sub(self, rhs: u32) -> Self::Output {
+        Self(self.0 - rhs)
+    }
+}
+
+impl core::ops::AddAssign<u32> for Height {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
+    }
+}
+
+impl core::ops::SubAssign<u32> for Height {
+    fn sub_assign(&mut self, rhs: u32) {
+        self.0 -= rhs;
+    }
+}
+
+impl PartialEq<u32> for Height {
+    fn eq(&self, other: &u32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialOrd<u32> for Height {
+    fn partial_cmp(&self, other: &u32) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
 /// Computes the SHA-256 digest of the byte slice data and returns a [Hash] from `bitcoin_hashes`.
 ///
 /// [Hash]: https://docs.rs/bitcoin_hashes/latest/bitcoin_hashes/sha256/struct.Hash.html

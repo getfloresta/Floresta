@@ -188,7 +188,7 @@ impl Consensus {
             let txout = &utxo.txout;
 
             // A coinbase output created at height n can only be spent at height >= n + 100
-            if utxo.is_coinbase && (height < utxo.creation_height + 100) {
+            if utxo.is_coinbase && (height < u32::from(utxo.creation_height + 100)) {
                 return Err(tx_err!(txid, CoinbaseNotMatured))?;
             }
 

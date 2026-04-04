@@ -119,7 +119,7 @@ impl HeaderExt for Header {
 
             // Get the block hash and header at the start of the epoch
             let epoch_block_hash = chain
-                .get_block_hash(epoch_start_height)
+                .get_block_hash(epoch_start_height.into())
                 .map_err(|e| HeaderExtError::Chain(Box::new(e)))?;
             let epoch_block_header = chain
                 .get_block_header(&epoch_block_hash)
@@ -141,7 +141,7 @@ impl HeaderExt for Header {
         let height = self.get_height(chain)?;
 
         // If obtaining the next block hash fails, treat it as "no next block" and return Ok(None)
-        match chain.get_block_hash(height + 1) {
+        match chain.get_block_hash((height + 1).into()) {
             Ok(opt_hash) => Ok(Some(opt_hash)),
             Err(_) => Ok(None),
         }
@@ -168,7 +168,7 @@ impl HeaderExt for Header {
             .get_height()
             .map_err(|e| HeaderExtError::Chain(Box::new(e)))?;
 
-        Ok(chain_height - height + 1)
+        Ok(u32::from(chain_height - height + 1))
     }
 
     fn get_difficulty(&self) -> f64 {
@@ -182,7 +182,7 @@ impl HeaderExt for Header {
             Err(e) => return Err(HeaderExtError::Chain(Box::new(e))),
         };
 
-        Ok(height)
+        Ok(u32::from(height))
     }
 
     fn get_target_hex(&self) -> String {

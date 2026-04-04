@@ -25,6 +25,7 @@ pub mod extensions;
 
 pub mod pruned_utreexo;
 pub(crate) use floresta_common::prelude;
+pub use floresta_common::Height;
 pub use pruned_utreexo::chain_state::*;
 pub use pruned_utreexo::chainparams::*;
 pub use pruned_utreexo::chainstore::*;

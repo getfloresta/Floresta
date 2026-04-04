@@ -39,6 +39,7 @@ use bitcoin::Transaction;
 use bitcoin::Txid;
 use bitcoin::Work;
 use floresta_common::Channel;
+use floresta_common::Height;
 #[cfg(feature = "metrics")]
 use metrics;
 use rustreexo::node_hash::BitcoinNodeHash;
@@ -76,12 +77,12 @@ pub trait BlockConsumer: Sync + Send + 'static {
     fn on_block(
         &self,
         block: &Block,
-        height: u32,
+        height: Height,
         spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     );
 }
 
-impl BlockConsumer for Channel<(Block, u32)> {
+impl BlockConsumer for Channel<(Block, Height)> {
     fn wants_spent_utxos(&self) -> bool {
         false
     }
@@ -89,14 +90,14 @@ impl BlockConsumer for Channel<(Block, u32)> {
     fn on_block(
         &self,
         block: &Block,
-        height: u32,
+        height: Height,
         _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     ) {
         self.send((block.to_owned(), height));
     }
 }
 
-impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
+impl BlockConsumer for Channel<(Block, Height, HashMap<OutPoint, UtxoData>)> {
     fn wants_spent_utxos(&self) -> bool {
         true
     }
@@ -104,7 +105,7 @@ impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
     fn on_block(
         &self,
         block: &Block,
-        height: u32,
+        height: Height,
         spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     ) {
         let spent_utxos = spent_utxos.expect("Safe to unwrap because wants_spent_utxos()");
@@ -169,7 +170,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         if let DiskBlockHeader::HeadersOnly(_, height) = potential_tip {
             let best_height = self.get_best_block()?.0;
 
-            if *height > best_height {
+            if *height > u32::from(best_height) {
                 warn!("Found block with height {height}, while the current best chain is at {best_height}. Reindexing.");
                 self.reindex_chain()?;
             }
@@ -383,7 +384,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .get_block_height(&fork_point.block_hash())?
             .ok_or(BlockchainError::BlockNotPresent)?;
 
-        let acc = self.get_roots_for_block(height)?.unwrap_or_default();
+        let acc = self.get_roots_for_block(height.into())?.unwrap_or_default();
         let mut inner = write_lock!(self);
         inner.acc = acc;
 
@@ -514,7 +515,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
-    fn notify(&self, block: &Block, height: u32, inputs: Option<&HashMap<OutPoint, UtxoData>>) {
+    fn notify(&self, block: &Block, height: Height, inputs: Option<&HashMap<OutPoint, UtxoData>>) {
         let inner = self.inner.read();
         for client in &inner.subscribers {
             if client.wants_spent_utxos() {
@@ -603,7 +604,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         // what is the most recent accumulator we have
         let validation_index_height = self
             .get_block_height(&best_chain.validation_index)?
-            .unwrap_or(0);
+            .unwrap_or(Height::ZERO);
 
         debug!(
             "Re-indexing chain, validation index height: {}, best block: {}, depth: {}",
@@ -614,7 +615,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         // Find the last height <= validation_index_height that has an accumulator
         let mut found = None;
 
-        for h in (1..=validation_index_height).rev() {
+        for h in (1..=u32::from(validation_index_height)).rev() {
             if let Some(acc) = self.get_roots_for_block(h)? {
                 found = Some((h, acc));
                 break;
@@ -624,7 +625,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         if let Some((last_acc_height, acc)) = found {
             // If the last acc height is lower than the validation index height, roll back our
             // database state
-            for height in (last_acc_height + 1)..=validation_index_height {
+            for height in (last_acc_height + 1)..=u32::from(validation_index_height) {
                 let header = self.get_header_by_height(height)?;
                 self.update_header(&DiskBlockHeader::HeadersOnly(*header, height))?;
             }
@@ -762,7 +763,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         // make sure our index is right for the latest block
         let best_disk_height = self.get_disk_block_header(&best_hash)?.try_height()?;
 
-        if best_height != best_disk_height {
+        if u32::from(best_height) != best_disk_height {
             warn!(
                 "Best height {best_height} != disk header height {best_disk_height}. Reindexing."
             );
@@ -978,11 +979,11 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         &self,
         acc: Stump,
         block: &Block,
-        height: u32,
+        height: Height,
         proof: Proof,
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error> {
-        Consensus::update_acc(&acc, block, height, proof, del_hashes)
+        Consensus::update_acc(&acc, block, height.into(), proof, del_hashes)
     }
 
     fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {
@@ -1049,7 +1050,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         }
 
         // genesis
-        hashes.push(self.get_block_hash(0)?);
+        hashes.push(self.get_block_hash(Height::ZERO)?);
         Ok(hashes)
     }
 
@@ -1057,15 +1058,15 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         self.inner.read().ibd
     }
 
-    fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
+    fn get_block_height(&self, hash: &BlockHash) -> Result<Option<Height>, Self::Error> {
         self.get_disk_block_header(hash)
-            .map(|header| header.height())
+            .map(|header| header.height().map(Height::from))
     }
 
-    fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
+    fn get_block_hash(&self, height: Height) -> Result<BlockHash, Self::Error> {
         read_lock!(self)
             .chainstore
-            .get_block_hash(height)?
+            .get_block_hash(height.into())?
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
@@ -1073,9 +1074,9 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         unimplemented!("This chainstate doesn't hold any tx")
     }
 
-    fn get_height(&self) -> Result<u32, Self::Error> {
+    fn get_height(&self) -> Result<Height, Self::Error> {
         let inner = read_lock!(self);
-        Ok(inner.best_block.depth)
+        Ok(inner.best_block.depth.into())
     }
 
     fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error> {
@@ -1093,9 +1094,9 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         unimplemented!("This chainstate doesn't hold full blocks")
     }
 
-    fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error> {
+    fn get_best_block(&self) -> Result<(Height, BlockHash), Self::Error> {
         let inner = read_lock!(self);
-        Ok((inner.best_block.depth, inner.best_block.best_block))
+        Ok((inner.best_block.depth.into(), inner.best_block.best_block))
     }
 
     fn get_block_header(&self, hash: &BlockHash) -> Result<BlockHeader, Self::Error> {
@@ -1127,7 +1128,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
                 break;
             }
         }
-        indexes.push(0);
+        indexes.push(Height::ZERO);
         let hashes = indexes
             .iter()
             .flat_map(|idx| self.get_block_hash(*idx))
@@ -1136,23 +1137,23 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         Ok(hashes)
     }
 
-    fn get_validation_index(&self) -> Result<u32, Self::Error> {
+    fn get_validation_index(&self) -> Result<Height, Self::Error> {
         let inner = self.inner.read();
         let validation = inner.best_block.validation_index;
         let header = self.get_disk_block_header(&validation)?;
         // The last validated disk header can only be FullyValid
         if let DiskBlockHeader::FullyValid(_, height) = header {
-            return Ok(height);
+            return Ok(height.into());
         }
 
         Err(BlockchainError::BadValidationIndex)
     }
 
-    fn is_coinbase_mature(&self, height: u32, block: BlockHash) -> Result<bool, Self::Error> {
+    fn is_coinbase_mature(&self, height: Height, block: BlockHash) -> Result<bool, Self::Error> {
         let chain_params = self.chain_params();
         let current_height = self.get_disk_block_header(&block)?.try_height()?;
 
-        Ok(height + chain_params.coinbase_maturity <= current_height)
+        Ok((height + chain_params.coinbase_maturity) <= current_height)
     }
 }
 
@@ -1202,11 +1203,11 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
 
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError> {
         let height = self.get_disk_block_header(&block)?.try_height()?;
-        let current_height = self.get_height()?;
+        let current_height: u32 = self.get_height()?.into();
 
         // Mark all blocks after this one as invalid
         for h in height..=current_height {
-            let hash = self.get_block_hash(h)?;
+            let hash = self.get_block_hash(h.into())?;
             let header = self.get_block_header(&hash)?;
             let new_header = DiskBlockHeader::InvalidChain(header);
             self.update_header(&new_header)?;
@@ -1232,7 +1233,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         proof: Proof,
         inputs: HashMap<OutPoint, UtxoData>,
         del_hashes: Vec<sha256::Hash>,
-    ) -> Result<u32, BlockchainError> {
+    ) -> Result<Height, BlockchainError> {
         let header = self.get_disk_block_header(&block.block_hash())?;
         let height = match header {
             DiskBlockHeader::FullyValid(_, height) => {
@@ -1242,7 +1243,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
                 // it, this is a logical error, and we will have spurious errors, specially with
                 // invalid proof. They don't mean the block is invalid, just that we are using the
                 // wrong accumulator, since we are not processing the right block.
-                if height != validation_index {
+                if height != u32::from(validation_index) {
                     return Err(BlockValidationErrors::BlockDoesntExtendTip)?;
                 }
 
@@ -1270,7 +1271,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
                 // the next one after the validation index. If not, we would be trying to
                 // connect a block where our accumulator isn't the right one. So the proof will
                 // always be invalid.
-                if height != validation_index + 1 {
+                if height != u32::from(validation_index + 1) {
                     return Err(BlockValidationErrors::BlockDoesntExtendTip)?;
                 }
 
@@ -1299,15 +1300,17 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         );
 
         #[cfg(feature = "metrics")]
-        metrics::get_metrics().block_height.set(height.into());
+        metrics::get_metrics()
+            .block_height
+            .set(u32::from(height).into());
 
         if !self.is_in_ibd() || height % 100_000 == 0 {
             self.flush()?;
         }
 
         // Notify others we have a new block
-        self.notify(block, height, inputs_for_notifications.as_ref());
-        Ok(height)
+        self.notify(block, height.into(), inputs_for_notifications.as_ref());
+        Ok(height.into())
     }
 
     fn handle_transaction(&self) -> Result<(), BlockchainError> {
@@ -1352,10 +1355,12 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             let height = best_block.0 + 1;
             debug!("Header builds on top of our best chain");
 
-            write_lock!(self).best_block.new_block(block_hash, height);
-            let disk_header = DiskBlockHeader::HeadersOnly(header, height);
+            write_lock!(self)
+                .best_block
+                .new_block(block_hash, height.into());
+            let disk_header = DiskBlockHeader::HeadersOnly(header, height.into());
 
-            self.update_header_and_index(&disk_header, block_hash, height)?;
+            self.update_header_and_index(&disk_header, block_hash, height.into())?;
         } else {
             debug!("Header not in the best chain");
 
@@ -1372,14 +1377,16 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
 
     fn get_partial_chain(
         &self,
-        initial_height: u32,
-        final_height: u32,
+        initial_height: Height,
+        final_height: Height,
         acc: Stump,
     ) -> Result<super::partial_chain::PartialChainState, BlockchainError> {
+        let initial_height: u32 = initial_height.into();
+        let final_height: u32 = final_height.into();
         let blocks = (0..=final_height)
             .map(|height| {
                 let hash = self
-                    .get_block_hash(height)
+                    .get_block_hash(height.into())
                     .expect("Block should be present");
                 *self
                     .get_disk_block_header(&hash)
