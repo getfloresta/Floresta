@@ -209,9 +209,19 @@ pub enum Methods {
         blockhash: Option<BlockHash>,
     },
 
-    /// Returns the transaction, assuming it is cached by our watch only wallet
-    #[command(name = "gettransaction")]
-    GetTransaction { txid: Txid, verbose: Option<bool> },
+    #[doc = include_str!("../../../doc/rpc/gettransaction.md")]
+    #[command(
+        name = "gettransaction",
+        about = "Returns detailed information about a wallet transaction cached by the watch-only wallet",
+        long_about = Some(include_str!("../../../doc/rpc/gettransaction.md")),
+        disable_help_subcommand = true
+    )]
+    GetTransaction {
+        /// The transaction id
+        txid: Txid,
+        /// Whether to return verbose output
+        verbose: Option<bool>,
+    },
 
     #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
     #[command(
