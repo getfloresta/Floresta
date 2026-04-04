@@ -452,14 +452,28 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     /// If we get a header that doesn't build on top of our best chain, it may cause a reorganization.
     /// We check this here.
     fn maybe_reorg(&self, branch_tip: BlockHeader) -> Result<(), BlockchainError> {
-        let current_tip = self.get_block_header(&self.get_best_block()?.1)?;
+        let current_tip_hash = {
+            let inner = read_lock!(self);
+            inner.best_block.best_block
+        };
+        
+        let current_tip = self.get_block_header(&current_tip_hash)?;
         self.check_branch(&branch_tip)?;
 
         let current_work = self.get_branch_work(&current_tip)?;
         let new_work = self.get_branch_work(&branch_tip)?;
         // If the new branch has more work, it becomes the new best chain
         if new_work > current_work {
-            self.reorg(branch_tip)?;
+            let should_reorg = {
+                let inner = read_lock!(self);
+                inner.best_block.best_block == current_tip_hash
+            };
+            
+            if should_reorg {
+                self.reorg(branch_tip)?;
+            } else {
+                debug!("Best block changed during reorg decision, deferring reorg");
+            }
             return Ok(());
         }
         // If the new branch has less work, we just store it as an alternative branch
