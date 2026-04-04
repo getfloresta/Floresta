@@ -230,7 +230,7 @@ where
         let good_peers_count = self.connected_peers();
         if good_peers_count > T::MAX_OUTGOING_PEERS {
             // We allow utreexo, extra and manual peers to bypass our connection limits
-            let is_utreexo_peer = matches!(version.kind, ConnectionKind::Regular(services) if services.has(service_flags::UTREEXO.into()));
+            let is_utreexo_peer = matches!(version.kind, ConnectionKind::OutboundFullRelay(services) if services.has(service_flags::UTREEXO.into()));
             let is_manual_peer = version.kind == ConnectionKind::Manual;
             let is_extra = version.kind == ConnectionKind::Extra;
 
@@ -286,10 +286,13 @@ where
             peer_data.transport_protocol = version.transport_protocol;
 
             // If this peer doesn't have basic services, we disconnect it
-            if let ConnectionKind::Regular(needs) = version.kind {
+            if let ConnectionKind::OutboundFullRelay(needs)
+            | ConnectionKind::BlockRelayOnly(needs) = version.kind
+            {
                 if !Self::is_peer_good(peer_data, needs) {
                     info!(
-                        "Disconnecting peer {peer} for not having the required services. has={} needs={}", peer_data.services, needs
+                        "Disconnecting peer {peer} for not having the required services. has={} needs={}",
+                        peer_data.services, needs
                     );
                     peer_data.channel.send(NodeRequest::Shutdown)?;
                     self.address_man.update_set_state(

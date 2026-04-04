@@ -51,6 +51,10 @@ impl NodeContext for SyncNode {
     const REQUEST_TIMEOUT: u64 = 60 * 2; // 2 minutes
     const MAX_INFLIGHT_REQUESTS: usize = 100; // double the default
 
+    // During IBD we only need block data, no tx relay
+    const MAX_FULL_RELAY_PEERS: usize = 0;
+    const MAX_BLOCKS_ONLY_PEERS: usize = 10;
+
     // A more conservative value than the default of 1 second, since we'll have many peer messages
     const MAINTENANCE_TICK: Duration = Duration::from_secs(5);
 }

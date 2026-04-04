@@ -570,12 +570,13 @@ where
     /// This function checks how many time has passed since our last tip update, if it's
     /// been more than 15 minutes, try to update it.
     fn check_for_stale_tip(&mut self) -> Result<(), WireError> {
-        warn!("Potential stale tip detected, trying extra peers");
+        warn!("Potential stale tip detected, will try using extra outbound peer");
 
         // this catches an edge-case where all our utreexo peers are gone, and the GetData
         // times-out. That yields an error, but doesn't ask the block again. Our last_block_request
         // will be pointing to a block that will never arrive, so we basically deadlock.
-        self.last_block_request = self.chain.get_validation_index().unwrap();
+        self.last_block_request = self.chain.get_validation_index()?;
+
         // update this or we'll get this warning every second after 15 minutes without a block,
         // until we get a new block.
         self.last_tip_update = Instant::now();
@@ -681,7 +682,11 @@ where
                         );
                         self.inflight.remove(&InflightRequests::Headers);
 
-                        let peer_info = self.peers.get(&peer).cloned().expect("Peer not found");
+                        let peer_info = match self.peers.get(&peer).cloned() {
+                            Some(peer) => peer,
+                            None => return Err(WireError::PeerNotFound),
+                        };
+
                         let is_extra = matches!(peer_info.kind, ConnectionKind::Extra);
 
                         if is_extra {
@@ -691,25 +696,56 @@ where
                                 return Ok(());
                             }
 
-                            // this peer got us a new block, we should disconnect one of our regular peers
-                            // and keep this one.
-                            let peer_to_disconnect = self
+                            // this peer got us a new block, we should disconnect one
+                            // of our OutboundFullRelay/BlockRelayOnly peers
+                            let full_relay_count = self
                                 .peers
                                 .iter()
-                                // Don't disconnect manual connections
-                                .filter(|(_, info)| info.is_regular_peer())
+                                .filter(|(_, info)| {
+                                    matches!(info.kind, ConnectionKind::OutboundFullRelay(_))
+                                })
+                                .count();
+
+                            let wants_full =
+                                full_relay_count < RunningNode::MAX_FULL_RELAY_PEERS;
+
+                            match self
+                                .peers
+                                .iter()
+                                .filter(|(_, info)| {
+                                    if wants_full {
+                                        matches!(info.kind, ConnectionKind::OutboundFullRelay(_))
+                                    } else {
+                                        matches!(info.kind, ConnectionKind::BlockRelayOnly(_))
+                                    }
+                                })
                                 .min_by_key(|(k, _)| self.get_peer_score(**k))
-                                .map(|(peer, _)| *peer);
+                                .map(|(peer, _)| *peer)
+                            {
+                                Some(peer_to_disconnect) => {
+                                    self.send_to_peer(peer_to_disconnect, NodeRequest::Shutdown)?;
 
-                            // disconnect the peer with the lowest score
-                            if let Some(peer) = peer_to_disconnect {
-                                self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                                    self.peers.entry(peer).and_modify(|info| {
+                                        info.kind = if wants_full {
+                                            ConnectionKind::OutboundFullRelay(peer_info.services)
+                                        } else {
+                                            ConnectionKind::BlockRelayOnly(peer_info.services)
+                                        }
+                                    });
+                                }
+                                None => {
+                                    // No peer of the target type to displace; promote anyway
+                                    // since the Extra peer already holds a connection slot.
+                                    warn!("No peer to displace for extra peer promotion, promoting in place");
+                                    self.peers.entry(peer).and_modify(|info| {
+                                        info.kind = if wants_full {
+                                            ConnectionKind::OutboundFullRelay(peer_info.services)
+                                        } else {
+                                            ConnectionKind::BlockRelayOnly(peer_info.services)
+                                        }
+                                    });
+                                }
                             }
-
-                            // update the peer info
-                            self.peers.entry(peer).and_modify(|info| {
-                                info.kind = ConnectionKind::Regular(peer_info.services);
-                            });
                         }
 
                         for header in headers.iter() {

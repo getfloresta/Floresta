@@ -138,14 +138,23 @@ pub(crate) enum InflightRequests {
 ///
 /// Core's counterpart: <https://github.com/bitcoin/bitcoin/blob/bf9ef4f0433551e850a11c2da8baae0ec6439a99/src/node/connection_types.h#L18>.
 pub enum ConnectionKind {
+    /// A regular outbound connection that relays transactions and blocks.
+    OutboundFullRelay(ServiceFlags),
+
+    /// An outbound connection that only relays blocks, no transactions.
+    BlockRelayOnly(ServiceFlags),
+
+    /// A connection manually requested by the user, exempt from banning and service requirements.
+    Manual,
+
     /// A feeler connection is a short-lived connection used to check whether this peer is alive.
     ///
     /// After handshake, we ask for addresses and when we receive an answer we just disconnect,
     /// marking this peer as alive in our address manager.
     Feeler,
 
-    /// A regular peer, used to send requests to and learn about transactions and blocks.
-    Regular(ServiceFlags),
+    /// A short-lived connection used to solicit addresses from peers.
+    AddrFetch,
 
     /// An extra peer specially created if our tip hasn't moved for too long.
     ///
@@ -153,11 +162,6 @@ pub enum ConnectionKind {
     /// last processed block, we use this to make sure we are not in a partitioned subnet,
     /// unable to learn about new blocks.
     Extra,
-
-    /// A connection that was manually requested by our user. This type of peer won't be banned on
-    /// misbehaving, and won't respect the [`ServiceFlags`] requirements when creating a
-    /// connection.
-    Manual,
 }
 
 impl Serialize for ConnectionKind {
@@ -166,10 +170,13 @@ impl Serialize for ConnectionKind {
         S: serde::Serializer,
     {
         match self {
-            ConnectionKind::Feeler => serializer.serialize_str("feeler"),
-            ConnectionKind::Regular(_) => serializer.serialize_str("regular"),
-            ConnectionKind::Extra => serializer.serialize_str("extra"),
+            ConnectionKind::OutboundFullRelay(_) => serializer.serialize_str("outbound-full-relay"),
+            ConnectionKind::BlockRelayOnly(_) | ConnectionKind::Extra => {
+                serializer.serialize_str("block-relay-only")
+            }
             ConnectionKind::Manual => serializer.serialize_str("manual"),
+            ConnectionKind::Feeler => serializer.serialize_str("feeler"),
+            ConnectionKind::AddrFetch => serializer.serialize_str("addr-fetch"),
         }
     }
 }
@@ -233,9 +240,12 @@ impl LocalPeerView {
         matches!(self.kind, ConnectionKind::Manual)
     }
 
-    /// Whether this is a regular peer
+    /// Whether this is a regular outbound peer
     pub(crate) const fn is_regular_peer(&self) -> bool {
-        matches!(self.kind, ConnectionKind::Regular(_))
+        matches!(
+            self.kind,
+            ConnectionKind::OutboundFullRelay(_) | ConnectionKind::BlockRelayOnly(_)
+        )
     }
 
     // Connections expected to remain open if the peer doesn't die

@@ -90,6 +90,9 @@ pub enum WireError {
 
     /// Couldn't find the leaf data for a block
     LeafDataNotFound,
+
+    /// Exceeded the max number of outbound peers
+    OutboundPeersExceeded,
 }
 
 impl Display for WireError {
@@ -134,6 +137,9 @@ impl Display for WireError {
                 "We tried to work on a block that we don't have a proof for yet"
             ),
             WireError::LeafDataNotFound => write!(f, "Couldn't find the leaf data for a block"),
+            WireError::OutboundPeersExceeded => {
+                write!(f, "Exceeded the max number of outbound peers")
+            }
         }
     }
 }
