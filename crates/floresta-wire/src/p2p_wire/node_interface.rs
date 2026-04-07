@@ -18,6 +18,7 @@ use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
+use super::address_man::ReachableNetworks;
 use super::node::ConnectionKind;
 use super::node::NodeNotification;
 use super::node::PeerStatus;
@@ -93,6 +94,65 @@ pub enum UserRequest {
 
     /// Adds a transaction to mempool and advertises it
     SendTransaction(Transaction),
+
+    /// Return information about all manually added nodes.
+    GetAddedNodeInfo,
+
+    /// Return known peer addresses from the address manager.
+    GetNodeAddresses(u32, Option<ReachableNetworks>),
+
+    /// Add a peer address to the address manager.
+    /// Fields: (address string, port, tried)
+    AddPeerAddress((String, u16, bool)),
+
+    /// Return address manager statistics.
+    GetAddrManInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Per-network address manager statistics.
+pub struct AddrManNetworkInfo {
+    /// Total number of addresses for this network.
+    pub total: usize,
+    /// Number of new (untried) addresses.
+    pub new: usize,
+    /// Number of tried addresses.
+    pub tried: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Address manager statistics broken down by network.
+pub struct AddrManInfo {
+    pub all_networks: AddrManNetworkInfo,
+    pub ipv4: AddrManNetworkInfo,
+    pub ipv6: AddrManNetworkInfo,
+    pub onion: AddrManNetworkInfo,
+    pub i2p: AddrManNetworkInfo,
+    pub cjdns: AddrManNetworkInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// A known peer address from the address manager.
+pub struct NodeAddress {
+    /// Last time this address was seen (unix timestamp).
+    pub time: u64,
+    /// Services offered by this peer.
+    pub services: u64,
+    /// The IP address of this peer.
+    pub address: String,
+    /// The port of this peer.
+    pub port: u16,
+    /// The network the address belongs to (e.g. "ipv4", "ipv6", "onion", "i2p", "cjdns").
+    pub network: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Information about a manually added node (via `addnode`).
+pub struct AddedNodeInfo {
+    /// The address of the added node in "ip:port" format.
+    pub addednode: String,
+    /// Whether we are currently connected to this node.
+    pub connected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +211,18 @@ pub enum NodeResponse {
 
     /// Transaction broadcast
     TransactionBroadcastResult(Result<Txid, AcceptToMempoolError>),
+
+    /// Information about all manually added nodes.
+    GetAddedNodeInfo(Vec<AddedNodeInfo>),
+
+    /// Known peer addresses from the address manager.
+    GetNodeAddresses(Vec<NodeAddress>),
+
+    /// Whether the peer address was successfully added.
+    AddPeerAddress(bool),
+
+    /// Address manager statistics.
+    GetAddrManInfo(AddrManInfo),
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +385,49 @@ impl NodeInterface {
         let val = self.send_request(UserRequest::Ping).await?;
 
         extract_variant!(Ping, val)
+    }
+
+    /// Returns information about all manually added nodes.
+    pub async fn get_added_node_info(
+        &self,
+    ) -> Result<Vec<AddedNodeInfo>, oneshot::error::RecvError> {
+        let val = self.send_request(UserRequest::GetAddedNodeInfo).await?;
+
+        extract_variant!(GetAddedNodeInfo, val)
+    }
+
+    /// Returns known peer addresses from the address manager.
+    pub async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<Vec<NodeAddress>, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::GetNodeAddresses(count, network))
+            .await?;
+
+        extract_variant!(GetNodeAddresses, val)
+    }
+
+    /// Adds a peer address to the address manager.
+    pub async fn add_peer_address(
+        &self,
+        address: String,
+        port: u16,
+        tried: bool,
+    ) -> Result<bool, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::AddPeerAddress((address, port, tried)))
+            .await?;
+
+        extract_variant!(AddPeerAddress, val)
+    }
+
+    /// Returns address manager statistics broken down by network.
+    pub async fn get_addrman_info(&self) -> Result<AddrManInfo, oneshot::error::RecvError> {
+        let val = self.send_request(UserRequest::GetAddrManInfo).await?;
+
+        extract_variant!(GetAddrManInfo, val)
     }
 }
 

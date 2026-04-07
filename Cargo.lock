@@ -1214,6 +1214,7 @@ dependencies = [
  "floresta-common",
  "floresta-compact-filters",
  "floresta-mempool",
+ "hex",
  "metrics",
  "rand",
  "rustls",

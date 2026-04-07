@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::net::IpAddr;
+use core::net::Ipv4Addr;
+use core::net::Ipv6Addr;
 use core::net::SocketAddr;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -13,6 +15,7 @@ use bitcoin::p2p::ServiceFlags;
 use bitcoin::Transaction;
 use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
+use hex;
 use rand::distributions::Distribution;
 use rand::distributions::WeightedIndex;
 use rand::prelude::SliceRandom;
@@ -29,11 +32,16 @@ use super::PeerStatus;
 use super::UtreexoNode;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
+use crate::address_man::ReachableNetworks;
 use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
 use crate::node::try_and_log;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
+use crate::node_interface::AddedNodeInfo;
+use crate::node_interface::AddrManInfo;
+use crate::node_interface::AddrManNetworkInfo;
+use crate::node_interface::NodeAddress;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::PeerInfo;
 use crate::node_interface::UserRequest;
@@ -827,6 +835,148 @@ where
             kind: peer.kind,
             transport_protocol: peer.transport_protocol,
         })
+    }
+
+    pub(crate) fn handle_get_added_node_info(&self) -> Vec<AddedNodeInfo> {
+        self.added_peers
+            .iter()
+            .map(|added| {
+                let added_addr = match &added.address {
+                    AddrV2::Ipv4(ip) => IpAddr::V4(*ip),
+                    AddrV2::Ipv6(ip) => IpAddr::V6(*ip),
+                    _ => IpAddr::V4(core::net::Ipv4Addr::UNSPECIFIED),
+                };
+
+                let connected = self.peers.values().any(|peer| {
+                    peer.address == added_addr
+                        && peer.port == added.port
+                        && peer.state == PeerStatus::Ready
+                });
+
+                AddedNodeInfo {
+                    addednode: format!("{}:{}", added_addr, added.port),
+                    connected,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn handle_get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Vec<NodeAddress> {
+        let addresses = self.address_man.get_addresses_to_send();
+        // count=0 means return all known addresses, matching Bitcoin Core behavior
+        let count = if count == 0 {
+            addresses.len()
+        } else {
+            (count as usize).min(addresses.len())
+        };
+
+        addresses
+            .into_iter()
+            .filter(|(addr, _, _, _)| match &network {
+                None => true,
+                Some(ReachableNetworks::IPv4) => matches!(addr, AddrV2::Ipv4(_)),
+                Some(ReachableNetworks::IPv6) => matches!(addr, AddrV2::Ipv6(_)),
+                Some(ReachableNetworks::TorV3) => matches!(addr, AddrV2::TorV3(_)),
+                Some(ReachableNetworks::I2P) => matches!(addr, AddrV2::I2p(_)),
+                Some(ReachableNetworks::Cjdns) => matches!(addr, AddrV2::Cjdns(_)),
+            })
+            .take(count)
+            .filter_map(|(addr, time, services, port)| {
+                let (address, network) = match &addr {
+                    AddrV2::Ipv4(ip) => (ip.to_string(), "ipv4"),
+                    AddrV2::Ipv6(ip) => (ip.to_string(), "ipv6"),
+                    AddrV2::Cjdns(ip) => (ip.to_string(), "cjdns"),
+                    AddrV2::TorV3(key) => (hex::encode(key), "onion"),
+                    AddrV2::I2p(key) => (hex::encode(key), "i2p"),
+                    _ => return None,
+                };
+
+                Some(NodeAddress {
+                    time,
+                    services: services.to_u64(),
+                    address,
+                    port,
+                    network: network.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn handle_get_addrman_info(&self) -> AddrManInfo {
+        let stats = self.address_man.get_addrman_info();
+
+        let to_info = |s: crate::p2p_wire::address_man::NetworkStats| AddrManNetworkInfo {
+            total: s.total,
+            new: s.new,
+            tried: s.tried,
+        };
+
+        let all_networks = AddrManNetworkInfo {
+            total: stats.ipv4.total
+                + stats.ipv6.total
+                + stats.onion.total
+                + stats.i2p.total
+                + stats.cjdns.total,
+            new: stats.ipv4.new
+                + stats.ipv6.new
+                + stats.onion.new
+                + stats.i2p.new
+                + stats.cjdns.new,
+            tried: stats.ipv4.tried
+                + stats.ipv6.tried
+                + stats.onion.tried
+                + stats.i2p.tried
+                + stats.cjdns.tried,
+        };
+
+        AddrManInfo {
+            all_networks,
+            ipv4: to_info(stats.ipv4),
+            ipv6: to_info(stats.ipv6),
+            onion: to_info(stats.onion),
+            i2p: to_info(stats.i2p),
+            cjdns: to_info(stats.cjdns),
+        }
+    }
+
+    pub(crate) fn handle_add_peer_address(
+        &mut self,
+        address: String,
+        port: u16,
+        tried: bool,
+    ) -> bool {
+        let addr = if let Ok(ipv4) = address.parse::<Ipv4Addr>() {
+            AddrV2::Ipv4(ipv4)
+        } else if let Ok(ipv6) = address.parse::<Ipv6Addr>() {
+            AddrV2::Ipv6(ipv6)
+        } else {
+            return false;
+        };
+
+        let state = if tried {
+            AddressState::Tried(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            )
+        } else {
+            AddressState::NeverTried
+        };
+
+        let services = ServiceFlags::WITNESS | ServiceFlags::NETWORK_LIMITED;
+        let id = rand::random::<usize>();
+        let local_addr = LocalAddress::new(addr, 0, state, services, port, id);
+
+        let count_before = self.address_man.address_count();
+        self.address_man.push_addresses(&[local_addr]);
+        let count_after = self.address_man.address_count();
+
+        count_after > count_before
     }
 
     // === ADDNODE ===

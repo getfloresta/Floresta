@@ -6,6 +6,10 @@ use core::net::IpAddr;
 use core::net::SocketAddr;
 
 use bitcoin::Network;
+use floresta_wire::address_man::ReachableNetworks;
+use floresta_wire::node_interface::AddedNodeInfo;
+use floresta_wire::node_interface::AddrManInfo;
+use floresta_wire::node_interface::NodeAddress;
 use floresta_wire::node_interface::PeerInfo;
 use serde_json::json;
 use serde_json::Value;
@@ -117,5 +121,45 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_peer_info()
             .await
             .map_err(|_| JsonRpcError::Node("Failed to get peer information".to_string()))
+    }
+
+    pub(crate) async fn get_added_node_info(&self) -> Result<Vec<AddedNodeInfo>> {
+        self.node
+            .get_added_node_info()
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))
+    }
+
+    pub(crate) async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<Vec<NodeAddress>> {
+        self.node
+            .get_node_addresses(count, network)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))
+    }
+
+    pub(crate) async fn get_addrman_info(&self) -> Result<AddrManInfo> {
+        self.node
+            .get_addrman_info()
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))
+    }
+
+    pub(crate) async fn add_peer_address(
+        &self,
+        address: String,
+        port: u16,
+        tried: bool,
+    ) -> Result<Value> {
+        let success = self
+            .node
+            .add_peer_address(address, port, tried)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        Ok(json!({ "success": success }))
     }
 }
