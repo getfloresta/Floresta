@@ -54,10 +54,10 @@ use crate::p2p_wire::transport::ReadTransport;
 
 /// If we send a ping, and our peer takes more than PING_TIMEOUT to
 /// reply, disconnect.
-const PING_TIMEOUT: u64 = 30;
+const PING_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// If the last message we've got was more than XX, send out a ping
-const SEND_PING_TIMEOUT: u64 = 60;
+/// If the last message we've got was more than 60, send out a ping
+const SEND_PING_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The command string for the "utreexo proof" message
 const UTREEXO_PROOF_CMD_STRING: &str = "uproof";
@@ -65,10 +65,16 @@ const UTREEXO_PROOF_CMD_STRING: &str = "uproof";
 /// The command string for the "get utreexo proof" message
 const GET_UTREEXO_PROOF_CMD: &str = "getuproof";
 
+/// How many block announcements per inv a peer can send
+const MAX_BLOCKS_PER_INV: u32 = 500;
+
 /// To avoid being eclipsed with an address spam attack, we limit
 /// the rate of addrv2 messages a peer can send us to one every
 /// 10 seconds.
-const ADDRV2_MESSAGE_INTERVAL_SECS: u64 = 10;
+const ADDRV2_MESSAGE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long a node must wait to send another inv
+const INV_MESSAGE_INTERVAL: Duration = Duration::from_secs(30); // 30 seconds
 
 /// How many messages/sec a peer is allowed to send.
 ///
@@ -125,6 +131,7 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     start_time: Instant,
     last_message: Instant,
     last_addrv2: Instant,
+    last_inv: Instant,
     current_best_block: i32,
     last_ping: Option<Instant>,
     id: u32,
@@ -304,13 +311,13 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
             // If we send a ping and our peer doesn't respond in time, disconnect
             if let Some(when) = self.last_ping {
-                if when.elapsed().as_secs() > PING_TIMEOUT {
+                if when.elapsed() > PING_TIMEOUT {
                     return Err(PeerError::PingTimeout);
                 }
             }
 
             // Send a ping to check if this peer is still good
-            let last_message = self.last_message.elapsed().as_secs();
+            let last_message = self.last_message.elapsed();
             if last_message > SEND_PING_TIMEOUT {
                 if self.last_ping.is_some() {
                     continue;
@@ -439,6 +446,15 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         match self.state {
             State::Connected => match message {
                 NetworkMessage::Inv(inv) => {
+                    let mut block_inv_elements = 0;
+
+                    // Silently drop
+                    if self.last_inv.elapsed() < INV_MESSAGE_INTERVAL {
+                        return Ok(());
+                    }
+
+                    self.last_inv = Instant::now();
+
                     for inv_entry in inv {
                         match inv_entry {
                             Inventory::Error => {}
@@ -446,6 +462,11 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                             Inventory::Block(block_hash)
                             | Inventory::WitnessBlock(block_hash)
                             | Inventory::CompactBlock(block_hash) => {
+                                block_inv_elements += 1;
+                                if block_inv_elements >= MAX_BLOCKS_PER_INV {
+                                    return Err(PeerError::MessageTooBig);
+                                }
+
                                 self.send_to_node(PeerMessages::NewBlock(block_hash), time);
                             }
                             _ => {}
@@ -476,10 +497,10 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
                     // Rate limit addrv2 messages
                     let now = Instant::now();
-                    let elapsed = now.duration_since(self.last_addrv2).as_secs();
+                    let elapsed = now.duration_since(self.last_addrv2);
                     self.last_addrv2 = Instant::now();
 
-                    if elapsed < ADDRV2_MESSAGE_INTERVAL_SECS {
+                    if elapsed < ADDRV2_MESSAGE_INTERVAL {
                         debug!(
                             "Peer {} sent addrv2 messages too frequently, ignoring",
                             self.id
@@ -664,7 +685,8 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             mempool,
             last_ping: None,
             last_message: Instant::now(),
-            last_addrv2: Instant::now() - Duration::from_secs(ADDRV2_MESSAGE_INTERVAL_SECS),
+            last_inv: Instant::now() - INV_MESSAGE_INTERVAL,
+            last_addrv2: Instant::now() - ADDRV2_MESSAGE_INTERVAL,
             node_tx,
             services: ServiceFlags::NONE,
             messages: 0,
@@ -925,6 +947,7 @@ mod tests {
             blocks_only: true,
             last_addrv2: Instant::now(),
             last_message: Instant::now(),
+            last_inv: Instant::now(),
             send_headers: true,
             wants_addrv2: true,
             node_requests,
