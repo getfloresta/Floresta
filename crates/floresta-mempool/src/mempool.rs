@@ -89,7 +89,7 @@ pub enum AcceptToMempoolError {
     // instead of reusing BlockchainError.
     Consensus(BlockchainError),
 
-    /// A validation error happened while mempool checking a transaction
+    /// A validation error happened while mempool checking a transaction.
     MempoolErr(MempoolError),
 }
 
