@@ -2,6 +2,7 @@
 
 use core::net::SocketAddr;
 use std::collections::HashMap;
+use std::result;
 use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
@@ -10,7 +11,7 @@ use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::Method;
-use axum::http::Response;
+use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Json;
@@ -44,22 +45,26 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::JsonRpcError;
+use super::res::jsonrpc_interface::JsonRpcError;
 use super::res::RawTxJson;
-use super::res::RpcError;
 use super::res::ScriptPubKeyJson;
 use super::res::ScriptSigJson;
 use super::res::TxInJson;
 use super::res::TxOutJson;
-use crate::json_rpc::request::arg_parser::get_bool;
-use crate::json_rpc::request::arg_parser::get_hash;
-use crate::json_rpc::request::arg_parser::get_hashes_array;
-use crate::json_rpc::request::arg_parser::get_numeric;
-use crate::json_rpc::request::arg_parser::get_optional_field;
-use crate::json_rpc::request::arg_parser::get_string;
+use crate::json_rpc::request::arg_parser::get_at;
+use crate::json_rpc::request::arg_parser::get_with_default;
+use crate::json_rpc::request::arg_parser::try_into_optional;
 use crate::json_rpc::request::RpcRequest;
+use crate::json_rpc::res::jsonrpc_interface::Response;
 use crate::json_rpc::res::RescanConfidence;
 
+/// Expect message for `serde_json` serialization of types that implement `Serialize`.
+pub(super) const SERIALIZATION_EXPECT: &str = "types used in RPC responses implement Serialize";
+
+/// Expect message for HTTP response builder with hardcoded valid headers.
+pub(super) const HTTP_RESPONSE_EXPECT: &str = "HTTP response built from valid hardcoded headers";
+
+/// The server holds this to tell which rpc method is awaiting to be processed and when the request were made.
 pub(super) struct InflightRpc {
     pub method: String,
     pub when: Instant,
@@ -88,18 +93,23 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_transaction(&self, tx_id: Txid, verbosity: Option<bool>) -> Result<Value> {
-        if verbosity == Some(true) {
+    fn get_transaction(&self, tx_id: Txid, verbosity: bool) -> Result<Value> {
+        if verbosity {
             let tx = self
                 .wallet
                 .get_transaction(&tx_id)
-                .ok_or(JsonRpcError::TxNotFound);
-            return tx.map(|tx| serde_json::to_value(self.make_raw_transaction(tx)).unwrap());
+                .ok_or(JsonRpcError::TxNotFound)?;
+            let raw = self.make_raw_transaction(tx)?;
+            return Ok(serde_json::to_value(raw).expect(SERIALIZATION_EXPECT));
         }
 
         self.wallet
             .get_transaction(&tx_id)
-            .and_then(|tx| serde_json::to_value(self.make_raw_transaction(tx)).ok())
+            .and_then(|tx| {
+                self.make_raw_transaction(tx)
+                    .ok()
+                    .and_then(|v| serde_json::to_value(v).ok())
+            })
             .ok_or(JsonRpcError::TxNotFound)
     }
 
@@ -107,28 +117,29 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let desc = slice::from_ref(&descriptor);
         let mut parsed = parse_descriptors(desc)?;
 
-        // It's ok to unwrap because we know there is at least one element in the vector
-        let addresses = parsed.pop().unwrap();
+        let addresses = parsed
+            .pop()
+            .expect("parse_descriptors always returns at least one element");
         let addresses = (0..100)
             .map(|index| {
                 let address = addresses
                     .at_derivation_index(index)
-                    .unwrap()
+                    .map_err(|e| JsonRpcError::InvalidParameterType(e.to_string()))?
                     .script_pubkey();
                 self.wallet.cache_address(address.clone());
-                address
+                Ok(address)
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         debug!("Rescanning with block filters for addresses: {addresses:?}");
 
         let addresses = self.wallet.get_cached_addresses();
         let wallet = self.wallet.clone();
-        if self.block_filter_storage.is_none() {
-            return Err(JsonRpcError::InInitialBlockDownload);
-        };
-
-        let cfilters = self.block_filter_storage.as_ref().unwrap().clone();
+        let cfilters = self
+            .block_filter_storage
+            .as_ref()
+            .ok_or(JsonRpcError::NoBlockFilters)?
+            .clone();
         let node = self.node.clone();
         let chain = self.chain.clone();
 
@@ -144,10 +155,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     fn rescan_blockchain(
         &self,
-        start: Option<u32>,
-        stop: Option<u32>,
+        start: u32,
+        stop: u32,
         use_timestamp: bool,
-        confidence: Option<RescanConfidence>,
+        confidence: RescanConfidence,
     ) -> Result<bool> {
         let (start_height, stop_height) =
             self.get_rescan_interval(use_timestamp, start, stop, confidence)?;
@@ -170,11 +181,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         let wallet = self.wallet.clone();
 
-        if self.block_filter_storage.is_none() {
-            return Err(JsonRpcError::NoBlockFilters);
-        };
-
-        let cfilters = self.block_filter_storage.as_ref().unwrap().clone();
+        let cfilters = self
+            .block_filter_storage
+            .as_ref()
+            .ok_or(JsonRpcError::NoBlockFilters)?
+            .clone();
 
         let node = self.node.clone();
 
@@ -208,7 +219,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 async fn handle_json_rpc_request(
     req: RpcRequest,
     state: Arc<RpcImpl<impl RpcChain>>,
-) -> Result<serde_json::Value> {
+) -> Result<Value> {
     let RpcRequest {
         jsonrpc,
         method,
@@ -230,18 +241,104 @@ async fn handle_json_rpc_request(
         },
     );
 
+    // Methods that don't require params
     match method.as_str() {
-        // blockchain
         "getbestblockhash" => {
-            let hash = state.get_best_block_hash()?;
-            Ok(serde_json::to_value(hash).unwrap())
+            return state
+                .get_best_block_hash()
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "getblockchaininfo" => {
+            return state
+                .get_blockchain_info()
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "getblockcount" => {
+            return state
+                .get_block_count()
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "getpeerinfo" => {
+            return state
+                .get_peer_info()
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "getroots" => {
+            return state
+                .get_roots()
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "getrpcinfo" => {
+            return state
+                .get_rpc_info()
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "listdescriptors" => {
+            return state
+                .list_descriptors()
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "ping" => {
+            state.ping().await?;
+            return Ok(serde_json::json!(null));
+        }
+        "stop" => {
+            return state
+                .stop()
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+        "uptime" => return Ok(serde_json::to_value(state.uptime()).expect(SERIALIZATION_EXPECT)),
+        _ => {}
+    }
+
+    // Methods that do require parameters.
+    //
+    // Here we use `unwrap_or_default()` because there is methods with only optionals
+    // parameters.
+    // Therefore, even if the request is parsed and the `params` field was omitted it's nice to
+    // turn it to be Some(Value) so the job of gathering inputs for calling the inner
+    // rpc method goes to the getters under request.rs.
+    let params = params.unwrap_or_default();
+
+    match method.as_str() {
+        "addnode" => {
+            let node = get_at(&params, 0, "node")?;
+            let command = get_at(&params, 1, "command")?;
+            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
+
+            state
+                .add_node(node, command, v2transport)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+
+        "disconnectnode" => {
+            let node_address = get_at(&params, 0, "node_address")?;
+
+            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
+
+            state
+                .disconnect_node(node_address, node_id)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+
+        "findtxout" => {
+            let txid = get_at(&params, 0, "txid")?;
+            let vout = get_at(&params, 1, "vout")?;
+            let script: String = get_at(&params, 2, "script")?;
+            let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
+            let height = get_at(&params, 3, "height")?;
+
+            state.clone().find_tx_out(txid, vout, script, height).await
         }
 
         "getblock" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
-            // Default value in case of missing parameter is 1
-            let verbosity: u8 =
-                get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(1);
+            let hash = get_at(&params, 0, "block_hash")?;
+            let verbosity = get_with_default(&params, 1, "verbosity", 1)?;
 
             state
                 .get_block(hash, verbosity)
@@ -249,16 +346,8 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
         }
 
-        "getblockchaininfo" => state
-            .get_blockchain_info()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        "getblockcount" => state
-            .get_block_count()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
         "getblockfrompeer" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
+            let hash = get_at(&params, 0, "block_hash")?;
 
             state.get_block(hash, 0).await?;
 
@@ -266,33 +355,49 @@ async fn handle_json_rpc_request(
         }
 
         "getblockhash" => {
-            let height = get_numeric(&params, 0, "block_height")?;
+            let height = get_at(&params, 0, "block_height")?;
             state
                 .get_block_hash(height)
-                .map(|h| serde_json::to_value(h).unwrap())
+                .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT))
         }
 
         "getblockheader" => {
-            let hash = get_hash(&params, 0, "block_hash")?;
+            let hash = get_at(&params, 0, "block_hash")?;
             state
                 .get_block_header(hash)
-                .map(|h| serde_json::to_value(h).unwrap())
+                .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT))
+        }
+
+        "getmemoryinfo" => {
+            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
+
+            state
+                .get_memory_info(&mode)
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
+        }
+
+        "getrawtransaction" => {
+            let txid = get_at(&params, 0, "txid")?;
+            let verbosity = get_with_default(&params, 1, "verbosity", false)?;
+
+            state
+                .get_transaction(txid, verbosity)
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
         }
 
         "gettxout" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let vout = get_numeric(&params, 1, "vout")?;
-            let include_mempool =
-                get_optional_field(&params, 2, "include_mempool", get_bool)?.unwrap_or(false);
+            let txid = get_at(&params, 0, "txid")?;
+            let vout = get_at(&params, 1, "vout")?;
+            let include_mempool = get_with_default(&params, 2, "include_mempool", false)?;
 
             state
                 .get_tx_out(txid, vout, include_mempool)
-                .map(|v| serde_json::to_value(v).unwrap())
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
         }
 
         "gettxoutproof" => {
-            let txids = get_hashes_array(&params, 0, "txids")?;
-            let block_hash = get_optional_field(&params, 1, "block_hash", get_hash)?;
+            let txids: Vec<Txid> = get_at(&params, 0, "txids")?;
+            let block_hash = try_into_optional(get_at(&params, 1, "block_hash"))?;
 
             Ok(serde_json::to_value(
                 state
@@ -304,277 +409,77 @@ async fn handle_json_rpc_request(
             .expect("GetTxOutProof implements serde"))
         }
 
-        "getrawtransaction" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
-
-            state
-                .get_transaction(txid, verbosity)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "getroots" => state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
-
-        "findtxout" => {
-            let txid = get_hash(&params, 0, "txid")?;
-            let vout = get_numeric(&params, 1, "vout")?;
-            let script = get_string(&params, 2, "script")?;
-            let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_numeric(&params, 3, "height")?;
-
-            let state = state.clone();
-            state.find_tx_out(txid, vout, script, height).await
-        }
-
-        // control
-        "getmemoryinfo" => {
-            let mode =
-                get_optional_field(&params, 0, "mode", get_string)?.unwrap_or("stats".into());
-
-            state
-                .get_memory_info(&mode)
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "getrpcinfo" => state
-            .get_rpc_info()
-            .await
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        // help
-        // logging
-        "stop" => state.stop().await.map(|v| serde_json::to_value(v).unwrap()),
-
-        "uptime" => {
-            let uptime = state.uptime();
-            Ok(serde_json::to_value(uptime).unwrap())
-        }
-
-        // network
-        "getpeerinfo" => state
-            .get_peer_info()
-            .await
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        "addnode" => {
-            let node = get_string(&params, 0, "node")?;
-            let command = get_string(&params, 1, "command")?;
-            let v2transport =
-                get_optional_field(&params, 2, "V2transport", get_bool)?.unwrap_or(false);
-
-            state
-                .add_node(node, command, v2transport)
-                .await
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "disconnectnode" => {
-            let node_address = get_string(&params, 0, "node_address")?;
-            let node_id = get_optional_field(&params, 1, "node_id", get_numeric)?;
-
-            state
-                .disconnect_node(node_address, node_id)
-                .await
-                .map(|v| serde_json::to_value(v).unwrap())
-        }
-
-        "ping" => {
-            state.ping().await?;
-
-            Ok(serde_json::json!(null))
-        }
-
-        // wallet
         "loaddescriptor" => {
-            let descriptor = get_string(&params, 0, "descriptor")?;
+            let descriptor = get_at(&params, 0, "descriptor")?;
 
             state
                 .load_descriptor(descriptor)
-                .map(|v| serde_json::to_value(v).unwrap())
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
         }
 
         "rescanblockchain" => {
-            let start_height = get_optional_field(&params, 0, "start_height", get_numeric)?;
-            let stop_height = get_optional_field(&params, 1, "stop_height", get_numeric)?;
-            let use_timestamp =
-                get_optional_field(&params, 2, "use_timestamp", get_bool)?.unwrap_or(false);
-            let confidence_str = get_optional_field(&params, 3, "confidence", get_string)?
-                .unwrap_or("medium".into());
-
-            let confidence = match confidence_str.as_str() {
-                "low" => RescanConfidence::Low,
-                "medium" => RescanConfidence::Medium,
-                "high" => RescanConfidence::High,
-                "exact" => RescanConfidence::Exact,
-                _ => return Err(JsonRpcError::InvalidRescanVal),
-            };
+            let start_height = get_with_default(&params, 0, "start_height", 0)?;
+            let stop_height = get_with_default(&params, 1, "stop_height", 0)?;
+            let use_timestamp = get_with_default(&params, 2, "use_timestamp", false)?;
+            let confidence = get_with_default(&params, 3, "confidence", RescanConfidence::Medium)?;
 
             state
-                .rescan_blockchain(start_height, stop_height, use_timestamp, Some(confidence))
-                .map(|v| serde_json::to_value(v).unwrap())
+                .rescan_blockchain(start_height, stop_height, use_timestamp, confidence)
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
         }
 
         "sendrawtransaction" => {
-            let tx = get_string(&params, 0, "hex")?;
+            let tx = get_at(&params, 0, "hex")?;
             state
                 .send_raw_transaction(tx)
                 .await
-                .map(|v| serde_json::to_value(v).unwrap())
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT))
         }
 
-        "listdescriptors" => state
-            .list_descriptors()
-            .map(|v| serde_json::to_value(v).unwrap()),
-
-        _ => {
-            let error = JsonRpcError::MethodNotFound;
-            Err(error)
-        }
-    }
-}
-
-fn get_http_error_code(err: &JsonRpcError) -> u16 {
-    match err {
-        // you messed up
-        JsonRpcError::InvalidHex
-        | JsonRpcError::InvalidAddress
-        | JsonRpcError::InvalidScript
-        | JsonRpcError::InvalidRequest
-        | JsonRpcError::InvalidDescriptor(_)
-        | JsonRpcError::InvalidVerbosityLevel
-        | JsonRpcError::Decode(_)
-        | JsonRpcError::NoBlockFilters
-        | JsonRpcError::InvalidMemInfoMode
-        | JsonRpcError::InvalidAddnodeCommand
-        | JsonRpcError::InvalidDisconnectNodeCommand
-        | JsonRpcError::PeerNotFound
-        | JsonRpcError::InvalidTimestamp
-        | JsonRpcError::InvalidRescanVal
-        | JsonRpcError::NoAddressesToRescan
-        | JsonRpcError::InvalidParameterType(_)
-        | JsonRpcError::MissingParameter(_)
-        | JsonRpcError::ChainWorkOverflow
-        | JsonRpcError::MempoolAccept(_)
-        | JsonRpcError::Wallet(_) => 400,
-
-        // idunnolol
-        JsonRpcError::MethodNotFound | JsonRpcError::BlockNotFound | JsonRpcError::TxNotFound => {
-            404
-        }
-
-        // we messed up, sowwy
-        JsonRpcError::InInitialBlockDownload
-        | JsonRpcError::Node(_)
-        | JsonRpcError::Chain
-        | JsonRpcError::Filters(_) => 503,
-    }
-}
-
-fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
-    match err {
-        // Parse Error
-        JsonRpcError::Decode(_) | JsonRpcError::InvalidParameterType(_) => -32700,
-
-        // Invalid Request
-        JsonRpcError::InvalidHex
-        | JsonRpcError::MissingParameter(_)
-        | JsonRpcError::InvalidAddress
-        | JsonRpcError::InvalidScript
-        | JsonRpcError::MethodNotFound
-        | JsonRpcError::InvalidRequest
-        | JsonRpcError::InvalidDescriptor(_)
-        | JsonRpcError::InvalidVerbosityLevel
-        | JsonRpcError::TxNotFound
-        | JsonRpcError::BlockNotFound
-        | JsonRpcError::InvalidTimestamp
-        | JsonRpcError::InvalidMemInfoMode
-        | JsonRpcError::InvalidAddnodeCommand
-        | JsonRpcError::InvalidDisconnectNodeCommand
-        | JsonRpcError::PeerNotFound
-        | JsonRpcError::InvalidRescanVal
-        | JsonRpcError::NoAddressesToRescan
-        | JsonRpcError::ChainWorkOverflow
-        | JsonRpcError::Wallet(_)
-        | JsonRpcError::MempoolAccept(_) => -32600,
-
-        // server error
-        JsonRpcError::InInitialBlockDownload
-        | JsonRpcError::Node(_)
-        | JsonRpcError::Chain
-        | JsonRpcError::NoBlockFilters
-        | JsonRpcError::Filters(_) => -32603,
+        _ => Err(JsonRpcError::MethodNotFound),
     }
 }
 
 async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
     body: Bytes,
-) -> Response<Body> {
-    let req: RpcRequest = match serde_json::from_slice(&body) {
-        Ok(req) => req,
-        Err(e) => {
-            let error = RpcError {
-                code: -32700,
-                message: format!("Parse error: {e}"),
-                data: None,
-            };
-            let body = json!({
-                "error": error,
-                "id": Value::Null,
-            });
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap();
-        }
+) -> HttpResponse<Body> {
+    let Ok(req): result::Result<RpcRequest, _> = serde_json::from_slice(&body) else {
+        let error = JsonRpcError::InvalidRequest;
+        let body = Response::error(error.rpc_error(), Value::Null);
+        return HttpResponse::builder()
+            .status(error.http_code())
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&body).expect(SERIALIZATION_EXPECT),
+            ))
+            .expect(HTTP_RESPONSE_EXPECT);
     };
 
     debug!("Received JSON-RPC request: {req:?}");
 
     let id = req.id.clone();
-    let res = handle_json_rpc_request(req, state.clone()).await;
+    let method_res = handle_json_rpc_request(req, state.clone()).await;
 
     state.inflight.write().await.remove(&id);
 
-    match res {
-        Ok(res) => {
-            let body = serde_json::json!({
-                "result": res,
-                "id": id,
-            });
+    let response = HttpResponse::builder()
+        .status(match &method_res {
+            Err(e) => e.http_code(),
+            Ok(_) => StatusCode::OK,
+        })
+        .header("Content-Type", "application/json");
 
-            axum::http::Response::builder()
-                .status(axum::http::StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
-        }
+    let body = Response::from_result(method_res, id);
 
-        Err(e) => {
-            let http_error_code = get_http_error_code(&e);
-            let json_rpc_error_code = get_json_rpc_error_code(&e);
-            let error = RpcError {
-                code: json_rpc_error_code,
-                message: e.to_string(),
-                data: None,
-            };
-
-            let body = serde_json::json!({
-                "error": error,
-                "id": id,
-            });
-
-            axum::http::Response::builder()
-                .status(axum::http::StatusCode::from_u16(http_error_code).unwrap())
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
-        }
-    }
+    response
+        .body(Body::from(
+            serde_json::to_vec(&body).expect(SERIALIZATION_EXPECT),
+        ))
+        .expect(HTTP_RESPONSE_EXPECT)
 }
 
-async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<serde_json::Value> {
+async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<Value> {
     Json(json!({
         "error": "Cannot get on this route",
     }))
@@ -597,7 +502,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 stop_height,
                 chain.clone(),
             )
-            .unwrap();
+            .map_err(|e| JsonRpcError::Filters(e.to_string()))?;
 
         info!("rescan filter hits: {blocks:?}");
 
@@ -605,8 +510,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             if let Ok(Some(block)) = node.get_block(block).await {
                 let height = chain
                     .get_block_height(&block.block_hash())
-                    .unwrap()
-                    .unwrap();
+                    .map_err(|_| JsonRpcError::Chain)?
+                    .ok_or(JsonRpcError::BlockNotFound)?;
 
                 wallet.block_process(&block, height);
             }
@@ -660,9 +565,12 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 asm: output.script_pubkey.to_asm_string(),
                 hex: output.script_pubkey.to_hex_string(),
                 req_sigs: 0, // This field is deprecated
+                // `Address::from_script` can fail for nonstandard scripts. Bitcoin Core
+                // omits the `address` field entirely when `ExtractDestination` fails:
+                // https://github.com/bitcoin/bitcoin/blob/f50d53c84736f8ada8419346c4d1734d5a6686d4/src/core_io.cpp#L424
                 address: Address::from_script(&output.script_pubkey, self.network)
-                    .map(|a| a.to_string())
-                    .unwrap(),
+                    .ok()
+                    .map(|a| a.to_string()),
                 type_: Self::get_script_type(output.script_pubkey)
                     .unwrap_or("nonstandard")
                     .to_string(),
@@ -670,7 +578,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         }
     }
 
-    fn make_raw_transaction(&self, tx: CachedTransaction) -> RawTxJson {
+    fn make_raw_transaction(&self, tx: CachedTransaction) -> Result<RawTxJson> {
         let raw_tx = tx.tx;
         let in_active_chain = tx.height != 0;
         let hex = serialize_hex(&raw_tx);
@@ -679,14 +587,14 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .chain
             .get_block_hash(tx.height)
             .unwrap_or(BlockHash::all_zeros());
-        let tip = self.chain.get_height().unwrap();
+        let tip = self.chain.get_height().map_err(|_| JsonRpcError::Chain)?;
         let confirmations = if in_active_chain {
             tip - tx.height + 1
         } else {
             0
         };
 
-        RawTxJson {
+        Ok(RawTxJson {
             in_active_chain,
             hex,
             txid,
@@ -719,7 +627,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 .get_block_header(&block_hash)
                 .map(|h| h.time)
                 .unwrap_or(0),
-        }
+        })
     }
 
     // TODO(@luisschwab): get rid of this once
@@ -748,7 +656,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
                 .parse()
-                .unwrap()
+                .expect("hardcoded address is valid")
         });
 
         let listener = match tokio::net::TcpListener::bind(address).await {

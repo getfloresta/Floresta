@@ -8,19 +8,19 @@ Define a base class for making RPC calls to a
 """
 
 import json
+import re
 import socket
 import time
-import re
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
-from abc import ABC, abstractmethod
 
 from requests import post
 from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
-from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
+from test_framework.rpc.exceptions import JSONRPCError
 
 
 # pylint: disable=too-many-public-methods
@@ -102,26 +102,38 @@ class BaseRPC(ABC):
 
         return logmsg
 
-    def build_request(self, method: str, params: List[Any]) -> Dict[str, Any]:
+    def _build_request_kwargs(self, timeout: int = TIMEOUT) -> Dict[str, Any]:
+        """
+        Build the common request kwargs (url, headers, auth, timeout).
+        """
+        kwargs = {
+            "url": self.address,
+            "headers": {"content-type": "application/json"},
+            "timeout": timeout,
+        }
+
+        if self._config.user is not None and self._config.password is not None:
+            kwargs["auth"] = HTTPBasicAuth(self._config.user, self._config.password)
+
+        return kwargs
+
+    def build_request(
+        self, method: str, params: List[Any] | None, request_id: str = "test"
+    ) -> Dict[str, Any]:
         """
         Build the request dictionary for the RPC call.
         """
-        request = {
-            "url": f"{self.address}",
-            "headers": {"content-type": "application/json"},
-            "data": json.dumps(
-                {
-                    "jsonrpc": self._jsonrpc_version,
-                    "id": "0",
-                    "method": method,
-                    "params": params,
-                }
-            ),
-            "timeout": self.TIMEOUT,
+        request = self._build_request_kwargs()
+        payload = {
+            "jsonrpc": self._jsonrpc_version,
+            "id": request_id,
+            "method": method,
         }
-        if self._config.user is not None and self._config.password is not None:
-            request["auth"] = HTTPBasicAuth(self._config.user, self._config.password)
 
+        if params is not None:
+            payload["params"] = params
+
+        request["data"] = json.dumps(payload)
         return request
 
     # pylint: disable=unused-argument,dangerous-default-value
@@ -135,25 +147,19 @@ class BaseRPC(ABC):
         and params. The params should be a list of arguments to the
         method. The method should be a string with the name of the
         method to be called.
-
         The method will return the result of the request or raise
         a JSONRPCError if the request failed.
         """
-        request = self.build_request(method, params)
-
         # Now make the POST request to the RPC server
         logmsg = BaseRPC.build_log_message(
-            request["url"], method, params, self._config.user, self._config.password
+            self.address, method, params, self._config.user, self._config.password
         )
-
         self.log(logmsg)
-        response = post(**request)
-
+        response = self.noraise_request(method, params)
         # If response isnt 200, raise an HTTPError
-        if response.status_code != 200:
+        if response.get("status_code") != 200:
             raise HTTPError
-
-        result = response.json()
+        result = response.get("body", {})
         # Error could be None or a str
         # If in the future this change,
         # cast the resulted error to str
@@ -164,9 +170,27 @@ class BaseRPC(ABC):
                 code=result["error"]["code"],
                 message=result["error"]["message"],
             )
-
         self.log(result["result"])
         return result["result"]
+
+    def noraise_raw_request(self, payload: dict):
+        """
+        Send a raw JSON-RPC request (as a dict) to the node.
+        Does NOT raise on non-200 so callers can inspect both HTTP status and JSON body.
+        """
+        kwargs = self._build_request_kwargs()
+        kwargs["data"] = json.dumps(payload)
+        return self._send_request(kwargs)
+
+    def noraise_request(self, method: str, params=None, request_id: str = "test"):
+        """Send a standard JSON-RPC request and return the parsed response (no raise)."""
+        body = self.build_request(method, params, request_id)
+        return self._send_request(body)
+
+    def _send_request(self, body: dict):
+        """Send a JSON-RPC request and return the parsed response."""
+        res = post(**body)
+        return {"status_code": res.status_code, "body": res.json()}
 
     def is_socket_listening(self) -> bool:
         """Check if the socket is listening for connections on the specified port."""
