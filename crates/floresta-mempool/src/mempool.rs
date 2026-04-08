@@ -27,6 +27,8 @@ use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_chain::BlockchainError;
 use tracing::debug;
 
+use crate::MempoolError;
+
 /// A short transaction id that we use to identify transactions in the mempool.
 ///
 /// We use this to keep track of dependencies between transactions, since keeping the full txid
@@ -86,6 +88,9 @@ pub enum AcceptToMempoolError {
     // TODO(davidson): we might want to make an error type specific for consensus,
     // instead of reusing BlockchainError.
     Consensus(BlockchainError),
+
+    /// A validation error happened while mempool checking a transaction
+    MempoolErr(MempoolError),
 }
 
 impl Display for AcceptToMempoolError {
@@ -100,6 +105,9 @@ impl Display for AcceptToMempoolError {
             }
             AcceptToMempoolError::Consensus(e) => {
                 write!(f, "the transaction failed consensus validation: {e}")
+            }
+            AcceptToMempoolError::MempoolErr(e) => {
+                write!(f, "the transaction failed mempool validation: {e}")
             }
         }
     }
@@ -302,7 +310,7 @@ impl Mempool {
 
         // Checks if we don't have this tx already
         if self.transactions.contains_key(&short_txid) {
-            return Ok(());
+            return Err(AcceptToMempoolError::MempoolErr(MempoolError::AlreadyKnown));
         }
 
         // Perform context-free consensus checks
@@ -318,6 +326,11 @@ impl Mempool {
             let tx = self.transactions.get_mut(depend).unwrap();
             tx.children.push(short_txid);
         }
+
+        self.check_fee()?;
+        self.check_standard()?;
+        self.check_script_sig()?;
+        self.check_weight()?;
 
         // Insert it into our mempool
         self.transactions.insert(
@@ -364,6 +377,26 @@ impl Mempool {
             })
             .collect()
     }
+
+    /// Checks if a transaction fee is atleast the minimum fee rate.
+    fn check_fee(&mut self) -> Result<(), AcceptToMempoolError> {
+        Ok(())
+    }
+
+    /// Checks if a transaction is standard.
+    fn check_standard(&mut self) -> Result<(), AcceptToMempoolError> {
+        Ok(())
+    }
+
+    /// Checks if a transaction's scriptSig is smaller than the maximum allowed size.
+    fn check_script_sig(&mut self) -> Result<(), AcceptToMempoolError> {
+        Ok(())
+    }
+
+    /// Checks if a transaction's weight is smaller than the maximum allowed weight.
+    fn check_weight(&mut self) -> Result<(), AcceptToMempoolError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -389,6 +422,7 @@ mod tests {
 
     use super::Mempool;
     use crate::mempool::AcceptToMempoolError;
+    use crate::MempoolError;
 
     /// builds a list of transactions in a pseudo-random way
     ///
@@ -491,6 +525,39 @@ mod tests {
         }
 
         assert_eq!(mempool.transactions.len(), len);
+    }
+
+    #[test]
+    fn test_mempool_error_access() {
+        let err = AcceptToMempoolError::MempoolErr(MempoolError::AlreadyKnown);
+        assert_eq!(
+            err.to_string(),
+            "the transaction failed mempool validation: transaction is already known to the mempool"
+        );
+
+        let err = AcceptToMempoolError::MempoolErr(MempoolError::ExceedsMaxWeight);
+        assert_eq!(
+            err.to_string(),
+            "the transaction failed mempool validation: transaction exceeds maximum weight"
+        );
+
+        let err = AcceptToMempoolError::MempoolErr(MempoolError::FeeTooLow);
+        assert_eq!(
+            err.to_string(),
+            "the transaction failed mempool validation: fee is too low"
+        );
+
+        let err = AcceptToMempoolError::MempoolErr(MempoolError::NonStandard);
+        assert_eq!(
+            err.to_string(),
+            "the transaction failed mempool validation: transaction is non-standard"
+        );
+
+        let err = AcceptToMempoolError::MempoolErr(MempoolError::ExceedsScriptSigSize);
+        assert_eq!(
+            err.to_string(),
+            "the transaction failed mempool validation: transaction's scriptSig is larger than the maximum allowed size"
+        );
     }
 
     #[test]

@@ -24,6 +24,37 @@
     html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
 )]
 
+use std::error::Error;
+use std::fmt;
+
 pub mod mempool;
 
 pub use mempool::Mempool;
+
+#[derive(Debug)]
+pub enum MempoolError {
+    FeeTooLow,
+    ExceedsMaxWeight,
+    NonStandard,
+    ExceedsScriptSigSize,
+    AlreadyKnown,
+}
+
+impl fmt::Display for MempoolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MempoolError::FeeTooLow => write!(f, "fee is too low"),
+            MempoolError::ExceedsMaxWeight => write!(f, "transaction exceeds maximum weight"),
+            MempoolError::NonStandard => write!(f, "transaction is non-standard"),
+            MempoolError::ExceedsScriptSigSize => {
+                write!(
+                    f,
+                    "transaction's scriptSig is larger than the maximum allowed size"
+                )
+            }
+            MempoolError::AlreadyKnown => write!(f, "transaction is already known to the mempool"),
+        }
+    }
+}
+
+impl Error for MempoolError {}
