@@ -27,6 +27,7 @@ pub mod kv_database;
 pub mod memory_database;
 pub mod merkle;
 pub mod provider;
+pub mod repository;
 
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
@@ -1012,7 +1013,8 @@ mod test {
     }
 }
 
-#[cfg(all(test, feature = "bdk-provider"))]
+#[allow(clippy::non_minimal_cfg)]
+#[cfg(all(test, any(feature = "bdk-provider", feature = "sqlite")))]
 pub mod utils {
 
     use bitcoin::hashes::sha256d;
