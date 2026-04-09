@@ -26,6 +26,7 @@ pub mod kv_database;
 #[cfg(any(test, feature = "memory-database"))]
 pub mod memory_database;
 pub mod merkle;
+pub mod provider;
 
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
@@ -1008,5 +1009,85 @@ mod test {
 
         assert_eq!(address.transactions.len(), 2);
         assert_eq!(address.utxos.len(), 1);
+    }
+}
+
+#[cfg(all(test, feature = "bdk-provider"))]
+pub mod utils {
+
+    use bitcoin::hashes::sha256d;
+    use bitcoin::hashes::Hash as HashTrait;
+    use bitcoin::Amount;
+    use bitcoin::OutPoint;
+    use bitcoin::Transaction;
+    use bitcoin::TxOut;
+    use bitcoin::Txid;
+
+    #[cfg(feature = "bdk-provider")]
+    pub(crate) fn create_transaction_with_txo(txo: TxOut) -> Transaction {
+        let mut tx = create_test_transaction();
+        tx.output.push(txo);
+
+        tx
+    }
+
+    pub(crate) fn create_test_transaction() -> Transaction {
+        create_test_transaction_with_seed(42) // default seed
+    }
+
+    pub(crate) fn create_test_transaction_with_seed(seed: u64) -> Transaction {
+        // Generate deterministic inputs based on seed
+        let mut inputs = vec![];
+        let num_inputs = (seed % 4) as usize;
+
+        for i in 0..num_inputs {
+            // Create a deterministic "fake" txid
+            let mut hash_bytes = [0u8; 32];
+            let input_seed = seed.wrapping_mul(31).wrapping_add(i as u64);
+
+            for (j, item) in hash_bytes.iter_mut().enumerate().take(8) {
+                *item = (input_seed >> (j * 8)) as u8;
+            }
+
+            for (j, item) in hash_bytes.iter_mut().enumerate().skip(8).take(8) {
+                *item = ((seed >> ((j - 8) * 8)) as u8).wrapping_add(i as u8);
+            }
+
+            let hash = sha256d::Hash::from_slice(&hash_bytes).unwrap();
+            let txid = Txid::from_raw_hash(hash);
+
+            let outpoint = OutPoint {
+                txid,
+                vout: (seed.wrapping_add(i as u64) % 2) as u32,
+            };
+
+            inputs.push(bitcoin::TxIn {
+                previous_output: outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: bitcoin::Witness::new(),
+            });
+        }
+
+        // Generate deterministic outputs (MINIMUM 1)
+        let mut outputs = vec![];
+        let num_outputs = ((seed >> 8) % 3) + 1; // Guarantees at least 1
+
+        for i in 0..num_outputs {
+            let amount_sat = (seed.wrapping_mul(1000).wrapping_add(i)) % 100000 + 1;
+            let amount = Amount::from_sat(amount_sat);
+
+            outputs.push(TxOut {
+                value: amount,
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            });
+        }
+
+        Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::locktime::absolute::LockTime::ZERO,
+            input: inputs,
+            output: outputs,
+        }
     }
 }

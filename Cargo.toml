@@ -38,7 +38,7 @@ default-members = [
 ]
 
 [workspace.package]
-rust-version = "1.81.0" # MSRV declaration
+rust-version = "1.85.0" # MSRV declaration
 readme = "README.md"
 
 # Version Convention: Use major.minor only (e.g., "1.9" not "1.9.1")
