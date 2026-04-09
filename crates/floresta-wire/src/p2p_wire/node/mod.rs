@@ -44,6 +44,7 @@ use tracing::info;
 
 use super::address_man::AddressMan;
 use super::address_man::LocalAddress;
+use super::ban_man::BanMan;
 use super::block_proof::Bitmap;
 use super::error::WireError;
 use super::node_context::NodeContext;
@@ -187,7 +188,7 @@ pub struct LocalPeerView {
     pub(crate) state: PeerStatus,
 
     /// An id identifying this peer's address in our address manager
-    pub(crate) address_id: u32,
+    pub(crate) _address_id: u32,
 
     /// A channel used to send requests to this peer
     pub(crate) channel: UnboundedSender<NodeRequest>,
@@ -259,6 +260,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) peer_by_service: HashMap<ServiceFlags, Vec<u32>>,
     pub(crate) max_banscore: u32,
     pub(crate) address_man: AddressMan,
+    pub(crate) ban_man: BanMan,
     pub(crate) added_peers: Vec<AddedPeerInfo>,
 
     // 3. Internal Communication
@@ -372,6 +374,7 @@ where
                 node_rx,
                 node_tx,
                 address_man,
+                ban_man: BanMan::new(),
                 last_tip_update: Instant::now(),
                 last_connection: Instant::now(),
                 last_peer_db_dump: Instant::now(),

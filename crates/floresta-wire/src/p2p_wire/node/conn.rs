@@ -106,6 +106,11 @@ where
             return Err(WireError::NoAddressesAvailable);
         };
 
+        let net_address = peer_address.get_net_address();
+        if self.ban_man.is_banned(net_address) {
+            return Err(WireError::PeerBanned(net_address));
+        }
+
         debug!("Attempting connection with address={peer_address:?} kind={conn_kind:?}",);
 
         let now = SystemTime::now()
@@ -232,7 +237,7 @@ where
                 services: ServiceFlags::NONE,
                 _last_message: Instant::now(),
                 kind,
-                address_id: peer_id as u32,
+                _address_id: peer_id as u32,
                 height: 0,
                 banscore: 0,
                 // Will be downgraded to V1 if the V2 handshake fails, and we allow fallback
