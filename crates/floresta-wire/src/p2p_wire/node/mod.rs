@@ -331,7 +331,6 @@ impl<T, Chain: ChainBackend> DerefMut for UtreexoNode<Chain, T> {
 pub enum PeerStatus {
     Awaiting,
     Ready,
-    Banned,
 }
 
 impl<T, Chain> UtreexoNode<Chain, T>

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Centralized ban management for misbehaving peers.
+//!
+//! Tracks banned IP addresses with per-entry expiry, and persists them to
+//! `bans.json` under the node's data directory so bans survive restarts.
+
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::Path;
@@ -6,7 +13,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 /// Default ban duration in seconds
-const DEFAULT_BAN_DURATION: Duration = Duration::from_secs(60 * 60 * 24);
+const DEFAULT_BAN_DURATION: Duration = Duration::from_secs(60 * 60 * 24); // 24 hours
 
 /// Absolute Unix timestamp in seconds.
 type BanExpiry = u64;
@@ -80,8 +87,7 @@ impl BanMan {
     ///
     /// The file is created if it doesn't exist, and overwritten if it does.
     pub fn dump_bans(&self, datadir: impl AsRef<Path>) -> std::io::Result<()> {
-        let bans: Result<String, serde_json::Error> = serde_json::to_string(&self.banned);
-        if let Ok(bans) = bans {
+        if let Ok(bans) = serde_json::to_string(&self.banned) {
             std::fs::write(datadir.as_ref().join("bans.json"), bans)?;
         }
         Ok(())
