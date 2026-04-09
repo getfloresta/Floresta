@@ -97,12 +97,12 @@ where
         let mut blocks = Vec::with_capacity(SyncNode::BLOCKS_PER_GETDATA);
         for _ in 0..SyncNode::BLOCKS_PER_GETDATA {
             let next_block = self.last_block_request + 1;
-            let validation_index = self.chain.get_validation_index().unwrap();
+            let validation_index: u32 = self.chain.get_validation_index().unwrap().into();
             if next_block <= validation_index {
                 self.last_block_request = validation_index;
             }
 
-            let next_block = self.chain.get_block_hash(next_block);
+            let next_block = self.chain.get_block_hash(next_block.into());
             match next_block {
                 Ok(next_block) => {
                     blocks.push(next_block);
@@ -121,7 +121,7 @@ where
     }
 
     fn ask_for_missed_blocks(&mut self) -> Result<(), WireError> {
-        let next_request = self.chain.get_validation_index()? + 1;
+        let next_request: u32 = (self.chain.get_validation_index()? + 1).into();
         let last_block_requested = self.last_block_request;
 
         // we accumulate the hashes of all blocks in [next_request, last_block_requested] here
@@ -129,7 +129,7 @@ where
         let mut range_blocks = Vec::new();
 
         for request_height in next_request..=last_block_requested {
-            let block_hash = self.chain.get_block_hash(request_height)?;
+            let block_hash = self.chain.get_block_hash(request_height.into())?;
             range_blocks.push(block_hash);
         }
 
@@ -181,7 +181,7 @@ where
     ///     - If were low on inflights, requests new blocks to validate.
     pub async fn run(mut self, done_cb: impl FnOnce(&Chain)) -> Self {
         info!("Starting sync node...");
-        self.last_block_request = self.chain.get_validation_index().unwrap();
+        self.last_block_request = self.chain.get_validation_index().unwrap().into();
 
         let mut ticker = time::interval(SyncNode::MAINTENANCE_TICK);
         // If we fall behind, don't "catch up" by running maintenance repeatedly

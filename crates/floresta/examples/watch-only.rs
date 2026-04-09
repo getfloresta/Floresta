@@ -50,7 +50,7 @@ fn main() {
     // regtest network. Each coinbase some of the addresses derived above.
     for block in BLOCKS.iter() {
         let block = Vec::from_hex(block).unwrap();
-        let _ = wallet.block_process(&deserialize(&block).unwrap(), 1);
+        let _ = wallet.block_process(&deserialize(&block).unwrap(), 1.into());
     }
     // We can now query the wallet for information about the addresses we added. For example,
     // we can get the history of the second address, the balance, and the UTXOs. To fetch the

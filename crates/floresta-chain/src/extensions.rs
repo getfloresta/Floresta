@@ -292,6 +292,7 @@ mod tests {
     use super::*;
     use crate::BlockConsumer;
     use crate::BlockchainError;
+    use crate::Height;
     use crate::UtxoData;
 
     #[derive(Debug)]
@@ -339,20 +340,20 @@ mod tests {
                 .ok_or(MockBlockchainError::NotFound)
         }
 
-        fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
+        fn get_block_hash(&self, height: Height) -> Result<BlockHash, Self::Error> {
             self.heights
                 .iter()
-                .find(|(_, &h)| h == height)
+                .find(|(_, &h)| h == u32::from(height))
                 .map(|(hash, _)| *hash)
                 .ok_or(MockBlockchainError::NotFound)
         }
 
-        fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
-            Ok(self.heights.get(hash).cloned())
+        fn get_block_height(&self, hash: &BlockHash) -> Result<Option<Height>, Self::Error> {
+            Ok(self.heights.get(hash).cloned().map(Height::from))
         }
 
-        fn get_height(&self) -> Result<u32, Self::Error> {
-            Ok(self.chain_height)
+        fn get_height(&self) -> Result<Height, Self::Error> {
+            Ok(self.chain_height.into())
         }
 
         fn get_tx(&self, _: &Txid) -> Result<Option<Transaction>, Self::Error> {
@@ -367,7 +368,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error> {
+        fn get_best_block(&self) -> Result<(Height, BlockHash), Self::Error> {
             unimplemented!()
         }
 
@@ -379,7 +380,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn is_coinbase_mature(&self, _: u32, _: BlockHash) -> Result<bool, Self::Error> {
+        fn is_coinbase_mature(&self, _: Height, _: BlockHash) -> Result<bool, Self::Error> {
             unimplemented!()
         }
 
@@ -394,7 +395,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_validation_index(&self) -> Result<u32, Self::Error> {
+        fn get_validation_index(&self) -> Result<Height, Self::Error> {
             unimplemented!()
         }
 
@@ -402,7 +403,7 @@ mod tests {
             &self,
             _: Stump,
             _: &Block,
-            _: u32,
+            _: Height,
             _: Proof,
             _: Vec<Sha256Hash>,
         ) -> Result<Stump, Self::Error> {

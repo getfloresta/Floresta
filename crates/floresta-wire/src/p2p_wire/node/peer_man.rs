@@ -678,7 +678,7 @@ where
 
             InflightRequests::UtreexoState(_) => {
                 let peer = self.send_to_fast_peer(
-                    NodeRequest::GetUtreexoState((self.chain.get_block_hash(0).unwrap(), 0)),
+                    NodeRequest::GetUtreexoState((self.chain.get_block_hash(0.into()).unwrap(), 0)),
                     service_flags::UTREEXO.into(),
                 )?;
                 self.inflight
@@ -690,7 +690,7 @@ where
                     return Ok(());
                 }
                 let peer = self.send_to_fast_peer(
-                    NodeRequest::GetFilter((self.chain.get_block_hash(0).unwrap(), 0)),
+                    NodeRequest::GetFilter((self.chain.get_block_hash(0.into()).unwrap(), 0)),
                     ServiceFlags::COMPACT_FILTERS,
                 )?;
 

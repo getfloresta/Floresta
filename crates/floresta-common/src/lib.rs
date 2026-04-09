@@ -37,6 +37,7 @@ pub use spsc::Channel;
 
 #[repr(transparent)]
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Height(u32);
 
 impl Height {
@@ -63,6 +64,14 @@ impl Height {
             Some(value) => Some(Self(value)),
             None => None,
         }
+    }
+
+    pub const fn abs_diff(self, rhs: u32) -> u32 {
+        self.0.abs_diff(rhs)
+    }
+
+    pub const fn to_le_bytes(self) -> [u8; 4] {
+        self.0.to_le_bytes()
     }
 }
 

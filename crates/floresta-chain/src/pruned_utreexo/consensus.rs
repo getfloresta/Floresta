@@ -732,7 +732,7 @@ mod tests {
                 UtxoData {
                     txout: coinbase_tx.output[0].clone(),
                     is_coinbase: true,
-                    creation_height,
+                    creation_height: creation_height.into(),
                     creation_time: 0, // Use a dummy time
                 },
             );
@@ -815,7 +815,7 @@ mod tests {
             UtxoData {
                 txout: txout!(18000000, output_script),
                 is_coinbase: false,
-                creation_height: 0,
+                creation_height: 0.into(),
                 creation_time: 0,
             },
         );
@@ -876,7 +876,7 @@ mod tests {
                     script_pubkey: ScriptBuf::new(),
                 },
                 is_coinbase: false,
-                creation_height: 0,
+                creation_height: 0.into(),
                 creation_time: 0,
             },
         );
@@ -910,7 +910,7 @@ mod tests {
             UtxoData {
                 txout,
                 is_coinbase: false,
-                creation_height: 0,
+                creation_height: 0.into(),
                 creation_time: 0,
             },
         );
@@ -986,7 +986,7 @@ mod tests {
             UtxoData {
                 txout: txout!(0, true_script()),
                 is_coinbase: false,
-                creation_height: 0,
+                creation_height: 0.into(),
                 creation_time: 0,
             },
         );
@@ -1006,7 +1006,7 @@ mod tests {
             UtxoData {
                 txout: oversized_out,
                 is_coinbase: false,
-                creation_height: 0,
+                creation_height: 0.into(),
                 creation_time: 0,
             },
         );

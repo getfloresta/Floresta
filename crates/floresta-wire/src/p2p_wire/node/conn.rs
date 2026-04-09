@@ -188,7 +188,8 @@ where
                     self.chain
                         .get_best_block()
                         .expect("infallible in ChainState")
-                        .0,
+                        .0
+                        .into(),
                     allow_v1_fallback,
                 ),
             ));
@@ -207,7 +208,8 @@ where
                     self.chain
                         .get_best_block()
                         .expect("infallible in ChainState")
-                        .0,
+                        .0
+                        .into(),
                     allow_v1_fallback,
                 ),
             ));

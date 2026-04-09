@@ -66,7 +66,7 @@ impl BlockConsumer for ZMQServer {
     fn on_block(
         &self,
         block: &bitcoin::Block,
-        _height: u32,
+        _height: floresta_chain::Height,
         _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     ) {
         let block = serialize(&block);

@@ -20,6 +20,7 @@ use floresta_chain::BlockchainInterface;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
+use floresta_chain::Height;
 use floresta_chain::UtxoData;
 
 const DATA_DIR: &str = "./tmp-db";
@@ -47,7 +48,7 @@ impl BlockConsumer for FeeRateIndexer {
     fn on_block(
         &self,
         block: &Block,
-        _height: u32,
+        _height: Height,
         spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     ) {
         // Calculate minimum fee rate, ignoring coinbase transaction

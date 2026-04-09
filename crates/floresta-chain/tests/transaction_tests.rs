@@ -70,7 +70,7 @@ mod parse {
                     script_pubkey: parse_script(&prev.spk).unwrap(),
                 },
                 is_coinbase,
-                creation_height: 0,
+                creation_height: 0.into(),
                 creation_time: 0,
             };
 

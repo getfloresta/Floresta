@@ -677,9 +677,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let txid = serialize_hex(&raw_tx.compute_txid());
         let block_hash = self
             .chain
-            .get_block_hash(tx.height)
+            .get_block_hash(tx.height.into())
             .unwrap_or(BlockHash::all_zeros());
-        let tip = self.chain.get_height().unwrap();
+        let tip: u32 = self.chain.get_height().unwrap().into();
         let confirmations = if in_active_chain {
             tip - tx.height + 1
         } else {

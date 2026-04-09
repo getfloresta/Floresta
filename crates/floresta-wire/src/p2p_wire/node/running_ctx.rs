@@ -204,20 +204,21 @@ where
 
                 (
                     self.chain
-                        .get_partial_chain(tip, end, acc)
+                        .get_partial_chain(tip.into(), end.into(), acc)
                         .expect("Failed to get partial chain"),
                     end,
                 )
             }
             Err(_) => {
                 // if the file doesn't exist or got corrupted, start from genesis
-                let end = self
+                let end: u32 = self
                     .chain
                     .get_validation_index()
-                    .expect("can get the validation index");
+                    .expect("can get the validation index")
+                    .into();
                 (
                     self.chain
-                        .get_partial_chain(0, end, Stump::default())
+                        .get_partial_chain(0.into(), end.into(), Stump::default())
                         .unwrap(),
                     end,
                 )
@@ -252,7 +253,7 @@ where
                     let tip = chain.get_height().unwrap();
                     let mut ser_acc = Vec::new();
                     acc.serialize(&mut ser_acc).unwrap();
-                    ser_acc.extend_from_slice(&tip.to_le_bytes());
+                    ser_acc.extend_from_slice(&u32::from(tip).to_le_bytes());
                     ser_acc.extend_from_slice(&end.to_le_bytes());
                     std::fs::write(datadir + "/.sync_node_state", ser_acc)
                         .expect("Failed to write sync node state");
@@ -327,19 +328,19 @@ where
             return;
         }
 
-        self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
+        self.last_block_request = self.chain.get_validation_index().unwrap_or(0.into()).into();
         if let Some(ref cfilters) = self.block_filters {
             self.last_filter = self
                 .chain
-                .get_block_hash(cfilters.get_height().unwrap_or(1))
+                .get_block_hash(cfilters.get_height().unwrap_or(1).into())
                 .unwrap();
         }
 
-        self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
+        self.last_block_request = self.chain.get_validation_index().unwrap_or(0.into()).into();
         if let Some(ref cfilters) = self.block_filters {
             self.last_filter = self
                 .chain
-                .get_block_hash(cfilters.get_height().unwrap_or(1))
+                .get_block_hash(cfilters.get_height().unwrap_or(1).into())
                 .unwrap();
         }
 
@@ -476,7 +477,7 @@ where
         };
 
         let mut height = filters.get_height()?;
-        let best_height = self.chain.get_height()?;
+        let best_height: u32 = self.chain.get_height()?.into();
 
         if height == 0 {
             let user_height = self.config.filter_start_height.unwrap_or(1);
@@ -502,7 +503,7 @@ where
             height + 500
         };
 
-        let stop_hash = self.chain.get_block_hash(stop)?;
+        let stop_hash = self.chain.get_block_hash(stop.into())?;
         self.last_filter = stop_hash;
 
         let peer = self.send_to_fast_peer(
@@ -517,15 +518,15 @@ where
     }
 
     fn ask_missed_block(&mut self) -> Result<(), WireError> {
-        let tip = self.chain.get_height().unwrap();
-        let next = self.chain.get_validation_index().unwrap();
+        let tip: u32 = self.chain.get_height().unwrap().into();
+        let next: u32 = self.chain.get_validation_index().unwrap().into();
         if tip == next {
             return Ok(());
         }
 
         let mut blocks = Vec::new();
         for i in (next + 1)..=tip {
-            let hash = self.chain.get_block_hash(i)?;
+            let hash = self.chain.get_block_hash(i.into())?;
             // already requested
             if self.inflight.contains_key(&InflightRequests::Blocks(hash)) {
                 continue;
@@ -575,7 +576,7 @@ where
         // this catches an edge-case where all our utreexo peers are gone, and the GetData
         // times-out. That yields an error, but doesn't ask the block again. Our last_block_request
         // will be pointing to a block that will never arrive, so we basically deadlock.
-        self.last_block_request = self.chain.get_validation_index().unwrap();
+        self.last_block_request = self.chain.get_validation_index().unwrap().into();
         // update this or we'll get this warning every second after 15 minutes without a block,
         // until we get a new block.
         self.last_tip_update = Instant::now();
@@ -748,6 +749,7 @@ where
                                 warn!("Filter for block {hash} received, but we don't have it");
                                 return Ok(());
                             };
+                            let this_height: u32 = this_height.into();
 
                             if current_height + 1 != this_height {
                                 self.context.inflight_filters.insert(this_height, filter);
@@ -765,7 +767,7 @@ where
                             }
 
                             filters.save_height(current_height)?;
-                            let current_hash = self.chain.get_block_hash(current_height)?;
+                            let current_hash = self.chain.get_block_hash(current_height.into())?;
                             if self.last_filter == current_hash
                                 && self.context.inflight_filters.is_empty()
                             {

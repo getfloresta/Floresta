@@ -257,7 +257,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let height = get_arg!(request, u64, 0);
                 let hash = self
                     .chain
-                    .get_block_hash(height as u32)
+                    .get_block_hash((height as u32).into())
                     .map_err(|_| super::error::Error::InvalidParams)?;
                 let header = self
                     .chain
@@ -274,7 +274,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 for height in start_height..(start_height + count) {
                     let hash = self
                         .chain
-                        .get_block_hash(height as u32)
+                        .get_block_hash((height as u32).into())
                         .map_err(|_| super::error::Error::InvalidParams)?;
 
                     let header = self
@@ -301,7 +301,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     .get_block_header(&hash)
                     .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
                 let result = json!({
-                    "height": height,
+                    "height": u32::from(height),
                     "hex": serialize_hex(&header)
                 });
                 json_rpc_res!(request, result)
@@ -513,7 +513,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "server.features" => {
                 let genesis_hash = self
                     .chain
-                    .get_block_hash(0)
+                    .get_block_hash(0.into())
                     .expect("Genesis block should be present");
                 let res = json!(
                     {
@@ -559,7 +559,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
         loop {
             for (block, height) in blocks.recv() {
-                self.handle_block(block, height);
+                self.handle_block(block, height.into());
             }
 
             // handles client requests
@@ -665,7 +665,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 .flatten()
                 .unwrap();
 
-            self.handle_block(block, height);
+            self.handle_block(block, height.into());
         }
 
         Ok(())
@@ -717,7 +717,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
         }
 
-        let transactions = self.address_cache.block_process(&block, height);
+        let transactions = self.address_cache.block_process(&block, height.into());
 
         self.wallet_notify(&transactions);
     }

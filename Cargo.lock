@@ -1083,6 +1083,7 @@ dependencies = [
  "bitcoin",
  "hashbrown",
  "miniscript",
+ "serde",
  "sha2",
  "spin",
 ]

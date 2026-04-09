@@ -34,7 +34,7 @@ use crate::json_rpc::res::RescanConfidence;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
-        let is_genesis = self.chain.get_block_hash(0).unwrap().eq(&hash);
+        let is_genesis = self.chain.get_block_hash(0.into()).unwrap().eq(&hash);
 
         if is_genesis {
             return Ok(genesis_block(self.network));
@@ -53,7 +53,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .wallet
             .get_height(txid)
             .ok_or(JsonRpcError::TxNotFound)?;
-        let blockhash = self.chain.get_block_hash(height).unwrap();
+        let blockhash = self.chain.get_block_hash(height.into()).unwrap();
         self.chain
             .get_block(&blockhash)
             .map_err(|_| JsonRpcError::BlockNotFound)
@@ -84,6 +84,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .chain
             .get_best_block()
             .map_err(|_| JsonRpcError::Chain)?;
+        let tip: u32 = tip.into();
 
         if stop > tip {
             return Err(JsonRpcError::InvalidRescanVal);
@@ -120,6 +121,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .chain
             .get_best_block()
             .map_err(|_| JsonRpcError::BlockNotFound)?;
+        let tip_height: u32 = tip_height.into();
 
         let tip_time = get_block_time(self, tip_height)?;
 
@@ -245,7 +247,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getblockchaininfo
     pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes, JsonRpcError> {
         let (height, hash) = self.chain.get_best_block().unwrap();
-        let validated = self.chain.get_validation_index().unwrap();
+        let height: u32 = height.into();
+        let validated: u32 = self.chain.get_validation_index().unwrap().into();
         let ibd = self.chain.is_in_ibd();
         let latest_header = self.chain.get_block_header(&hash).unwrap();
         let latest_work = latest_header
@@ -262,7 +265,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .map(|r| r.to_string())
             .collect();
 
-        let validated_blocks = self.chain.get_validation_index().unwrap();
+        let validated_blocks: u32 = self.chain.get_validation_index().unwrap().into();
 
         let validated_percentage = if height != 0 {
             validated_blocks as f32 / height as f32
@@ -288,7 +291,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getblockcount
     pub(super) fn get_block_count(&self) -> Result<u32, JsonRpcError> {
-        Ok(self.chain.get_height().unwrap())
+        Ok(self.chain.get_height().unwrap().into())
     }
 
     // getblockfilter
@@ -297,7 +300,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getblockhash
     pub(super) fn get_block_hash(&self, height: u32) -> Result<BlockHash, JsonRpcError> {
         self.chain
-            .get_block_hash(height)
+            .get_block_hash(height.into())
             .map_err(|_| JsonRpcError::BlockNotFound)
     }
 
@@ -488,6 +491,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 let Ok((bestblock_height, bestblock_hash)) = self.chain.get_best_block() else {
                     return Err(JsonRpcError::BlockNotFound);
                 };
+                let bestblock_height: u32 = bestblock_height.into();
 
                 let script = txout.script_pubkey.as_script();
                 let network = self.chain.get_params().network;

@@ -1300,9 +1300,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         );
 
         #[cfg(feature = "metrics")]
-        metrics::get_metrics()
-            .block_height
-            .set(u32::from(height).into());
+        metrics::get_metrics().block_height.set(height.into());
 
         if !self.is_in_ibd() || height % 100_000 == 0 {
             self.flush()?;
@@ -1581,7 +1579,7 @@ mod test {
         assert_eq!(
             chain.get_best_block().unwrap(),
             (
-                10_236,
+                10_236u32.into(),
                 bhash!("000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161")
             ),
         );
@@ -1589,7 +1587,7 @@ mod test {
 
         // Check all headers that we have
         for i in 0..=10_236 {
-            let hash = chain.get_block_hash(i).unwrap();
+            let hash = chain.get_block_hash(i.into()).unwrap();
             let header = chain.get_disk_block_header(&hash).unwrap();
 
             match header {
@@ -1613,7 +1611,7 @@ mod test {
 
         // Check that we don't have more headers (nor indexed hashes)
         for i in 10_237..11_000 {
-            match chain.get_block_hash(i) {
+            match chain.get_block_hash(i.into()) {
                 Err(BlockchainError::BlockNotPresent) => {}
                 _ => panic!("Should not have found a hash for height {i}"),
             }
@@ -1696,7 +1694,7 @@ mod test {
         }
 
         let expected = (
-            10,
+            10u32.into(),
             bhash!("6e9c49a19038f7db8d13f6c2e70566385536ea11975528b557799e08a014e784"),
         );
 
@@ -1708,7 +1706,7 @@ mod test {
         }
 
         let expected = (
-            16,
+            16u32.into(),
             bhash!("4572ac401b94915dde6c4957b706abdb13b5824b000cad7f6065ebd9aea6dad1"),
         );
 
@@ -1726,13 +1724,16 @@ mod test {
                 .unwrap();
         }
 
-        for i in 1..=chain.get_height().unwrap() {
-            let hash = chain.get_block_hash(i).unwrap();
+        for i in 1..=u32::from(chain.get_height().unwrap()) {
+            let hash = chain.get_block_hash(i.into()).unwrap();
             let header = chain.get_disk_block_header(&hash).unwrap();
             let header_by_height = chain.get_header_by_height(i).unwrap();
 
             assert_eq!(header, header_by_height);
-            assert_eq!(header.prev_blockhash, chain.get_block_hash(i - 1).unwrap());
+            assert_eq!(
+                header.prev_blockhash,
+                chain.get_block_hash((i - 1).into()).unwrap()
+            );
 
             if let DiskBlockHeader::FullyValid(..) = header {
                 continue;
@@ -1781,7 +1782,10 @@ mod test {
             .invalidate_block(headers[random_height].prev_blockhash)
             .unwrap();
 
-        assert_eq!(chain.get_height().unwrap() as usize, random_height - 1);
+        assert_eq!(
+            u32::from(chain.get_height().unwrap()) as usize,
+            random_height - 1
+        );
 
         // update_tip
         chain.update_tip(headers[1].prev_blockhash, 1);

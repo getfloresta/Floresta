@@ -244,7 +244,7 @@ where
             }
 
             let start = Instant::now();
-            self.process_block(next_block, next_block_hash)?;
+            self.process_block(next_block.into(), next_block_hash)?;
 
             let elapsed = start.elapsed().as_secs_f64();
             self.block_sync_avg.add(elapsed);
@@ -282,7 +282,7 @@ where
 
         let (del_hashes, inputs) =
             proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {
-                self.chain.get_block_hash(h)
+                self.chain.get_block_hash(h.into())
             })?;
 
         if let Err(chain_err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
@@ -386,7 +386,8 @@ where
             // We've tried to connect a block that doesn't extend the tip.
             BlockValidationErrors::BlockExtendsAnOrphanChain
             | BlockValidationErrors::BlockDoesntExtendTip => {
-                self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
+                self.last_block_request =
+                    self.chain.get_validation_index().unwrap_or(0.into()).into();
 
                 // This is our mistake, don't punish any peer
                 None

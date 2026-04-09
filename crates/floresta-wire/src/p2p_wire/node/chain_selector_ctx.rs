@@ -279,7 +279,8 @@ where
         peer1: PeerId,
         peer2: PeerId,
     ) -> Result<PeerCheck, WireError> {
-        let (mut height, mut hash) = self.chain.get_best_block()?;
+        let (best_height, mut hash) = self.chain.get_best_block()?;
+        let mut height: u32 = best_height.into();
         let mut prev_height = 0;
         // we first narrow down the possible fork point to a couple of blocks, looking
         // for all blocks in a linear search would be too slow
@@ -314,7 +315,7 @@ where
                 height -= interval / 2;
             }
 
-            hash = self.chain.get_block_hash(height).unwrap();
+            hash = self.chain.get_block_hash(height.into()).unwrap();
         }
         info!("Fork point is around height={height} hash={hash}");
         // at the end, this variable should hold the last block where they agreed
@@ -372,9 +373,9 @@ where
                 // if they disagree on this current block, we need to look in the previous one
                 height -= 1;
             }
-            hash = self.chain.get_block_hash(height)?;
+            hash = self.chain.get_block_hash(height.into())?;
         }
-        hash = self.chain.get_block_hash(fork)?;
+        hash = self.chain.get_block_hash(fork.into())?;
 
         let acc = self
             .grab_both_peers_version(peer1, peer2, hash, fork)
@@ -387,7 +388,7 @@ where
             (None, None) => return Ok(PeerCheck::BothUnresponsivePeers),
         };
 
-        hash = self.chain.get_block_hash(fork + 1)?;
+        hash = self.chain.get_block_hash((fork + 1).into())?;
 
         // now we know where the fork is, we need to check who is lying
         let (peer1_acc, peer2_acc) = self
@@ -402,7 +403,7 @@ where
             (None, None) => return Ok(PeerCheck::BothUnresponsivePeers),
         };
 
-        let block_hash = self.chain.get_block_hash(fork + 1)?;
+        let block_hash = self.chain.get_block_hash((fork + 1).into())?;
 
         let inflight_block = match self.get_block_and_proof(peer1, block_hash).await {
             Err(WireError::PeerTimeout) => return Ok(PeerCheck::UnresponsivePeer(peer1)),
@@ -521,12 +522,12 @@ where
         height: u32,
     ) -> Result<Stump, WireError> {
         let (del_hashes, _) = proof_util::process_proof(leaf_data, &block.txdata, height, |h| {
-            self.chain.get_block_hash(h)
+            self.chain.get_block_hash(h.into())
         })?;
 
         Ok(self
             .chain
-            .update_acc(acc, block, height, proof, del_hashes)?)
+            .update_acc(acc, block, height.into(), proof, del_hashes)?)
     }
 
     /// Finds the accumulator for one block
@@ -624,7 +625,9 @@ where
                 if let Some(assume_utreexo) = self.common.config.assume_utreexo.as_ref() {
                     self.context.state = ChainSelectorState::Done;
                     // already assumed the chain
-                    if self.chain.get_validation_index().unwrap() >= assume_utreexo.height {
+                    if u32::from(self.chain.get_validation_index().unwrap())
+                        >= assume_utreexo.height
+                    {
                         return Ok(());
                     }
                     info!(
@@ -658,7 +661,11 @@ where
 
     async fn is_our_chain_invalid(&mut self, other_tip: BlockHash) -> Result<(), WireError> {
         let fork = self.chain.get_fork_point(other_tip)?;
-        let fork_height = self.chain.get_block_height(&fork)?.unwrap_or(0);
+        let fork_height = self
+            .chain
+            .get_block_height(&fork)?
+            .map(u32::from)
+            .unwrap_or(0);
 
         let peers = self
             .peer_by_service
@@ -676,7 +683,7 @@ where
 
         let (del_hashes, inputs) =
             proof_util::process_proof(&leaf_data, &block.block.txdata, fork_height, |h| {
-                self.chain.get_block_hash(h)
+                self.chain.get_block_hash(h.into())
             })?;
 
         let acc = self.find_accumulator_for_block(fork_height, fork).await?;
@@ -718,7 +725,7 @@ where
         if (validation_index + 100) < height {
             let mut tips = self.chain.get_chain_tips()?;
             let (height, hash) = self.chain.get_best_block()?;
-            let acc = self.find_accumulator_for_block(height, hash).await?;
+            let acc = self.find_accumulator_for_block(height.into(), hash).await?;
 
             // only one tip, our peers are following the same chain
             if tips.len() == 1 {
