@@ -43,6 +43,7 @@ use tower_http::cors::CorsLayer;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::trace;
 
 use super::res::JsonRpcError;
 use super::res::RawTxJson;
@@ -522,6 +523,9 @@ async fn json_rpc_request(
                 "error": error,
                 "id": Value::Null,
             });
+
+            trace!("rpc parse error: {body}");
+
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header("Content-Type", "application/json")
@@ -544,6 +548,8 @@ async fn json_rpc_request(
                 "id": id,
             });
 
+            trace!("RPC response {id}: {body}");
+
             axum::http::Response::builder()
                 .status(axum::http::StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -564,6 +570,8 @@ async fn json_rpc_request(
                 "error": error,
                 "id": id,
             });
+
+            trace!("RPC error {id}: {body}");
 
             axum::http::Response::builder()
                 .status(axum::http::StatusCode::from_u16(http_error_code).unwrap())
