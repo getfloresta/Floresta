@@ -26,8 +26,11 @@ pub mod kv_database;
 #[cfg(any(test, feature = "memory-database"))]
 pub mod memory_database;
 pub mod merkle;
+mod metadata;
+pub mod models;
 pub mod provider;
 pub mod repository;
+pub mod service;
 
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;

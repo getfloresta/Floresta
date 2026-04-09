@@ -1,4 +1,4 @@
-#![cfg(feature = "bdk-provider")]
+#![cfg(any(feature = "bdk-provider", feature = "sqlite"))]
 
 use std::fs::create_dir_all;
 
