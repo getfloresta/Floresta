@@ -184,7 +184,6 @@ pub fn create_peer(
         port: 8333,
         kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
         banscore: 0,
-        address_id: 0,
         _last_message: Instant::now(),
         transport_protocol: TransportProtocol::V2,
     }

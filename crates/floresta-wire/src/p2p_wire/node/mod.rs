@@ -187,9 +187,6 @@ pub struct LocalPeerView {
     /// The state in which this peer is, e.g., awaiting handshake, ready, banned, etc.
     pub(crate) state: PeerStatus,
 
-    /// An id identifying this peer's address in our address manager
-    pub(crate) _address_id: u32,
-
     /// A channel used to send requests to this peer
     pub(crate) channel: UnboundedSender<NodeRequest>,
 
@@ -327,7 +324,6 @@ impl<T, Chain: ChainBackend> DerefMut for UtreexoNode<Chain, T> {
 pub enum PeerStatus {
     Awaiting,
     Ready,
-    Banned,
 }
 
 impl<T, Chain> UtreexoNode<Chain, T>
