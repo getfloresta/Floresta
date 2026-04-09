@@ -30,7 +30,6 @@ use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::block_proof::Bitmap;
-use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_handle::NodeResponse;
@@ -204,16 +203,6 @@ where
         Ok(())
     }
 
-    // === PEER LIFECYCLE ===
-
-    fn is_peer_good(peer: &LocalPeerView, needs: ServiceFlags) -> bool {
-        if peer.state == PeerStatus::Banned {
-            return false;
-        }
-
-        peer.services.has(needs)
-    }
-
     pub(crate) fn handle_peer_ready(
         &mut self,
         peer: u32,
@@ -283,15 +272,22 @@ where
             version.id, version.user_agent, version.blocks, version.services
         );
 
+        // Check ban status before taking a mutable borrow on peers
+        let peer_ip = self
+            .peers
+            .get(&peer)
+            .and_then(|p| p.address.get_net_address());
+        let is_banned = peer_ip.is_some_and(|ip| self.ban_man.is_banned(ip));
+
         if let Some(peer_data) = self.common.peers.get_mut(&peer) {
             peer_data.services = version.services;
             peer_data.user_agent.clone_from(&version.user_agent);
             peer_data.height = version.blocks;
             peer_data.transport_protocol = version.transport_protocol;
 
-            // If this peer doesn't have basic services, we disconnect it
+            // If this peer is banned or doesn't have basic services, we disconnect it
             if let ConnectionKind::Regular(needs) = version.kind {
-                if !Self::is_peer_good(peer_data, needs) {
+                if is_banned || !peer_data.services.has(needs) {
                     info!(
                         "Disconnecting peer {peer} for not having the required services. has={} needs={}",
                         peer_data.services, needs
@@ -492,10 +488,6 @@ where
                     self.address_man
                         .update_set_state(idx, AddressState::Failed(now));
                 }
-                PeerStatus::Banned => {
-                    self.address_man
-                        .update_set_state(idx, AddressState::Banned(RunningNode::BAN_TIME));
-                }
             }
         }
 
@@ -569,8 +561,14 @@ where
                 return Ok(());
             }
 
-            // `handle_disconnection` will mark the address as banned when `Peer` object return
-            peer.state = PeerStatus::Banned;
+            let peer_addr = &peer.address;
+            if let Some(ip) = peer_addr.get_net_address() {
+                self.ban_man.add_ban(ip, None);
+                if let Err(e) = self.ban_man.dump_bans(&self.datadir) {
+                    warn!("Failed to persist ban for {ip}: {e:?}");
+                }
+                self.address_man.unmark_good_by_ip(ip);
+            }
         }
 
         self.send_to_peer(peer, NodeRequest::Shutdown)?;
@@ -752,6 +750,8 @@ where
     }
 
     pub(crate) fn save_peers(&self) -> Result<(), WireError> {
+        self.ban_man.dump_bans(&self.datadir)?;
+
         self.address_man
             .dump_peers(&self.datadir)
             .map_err(WireError::Io)
