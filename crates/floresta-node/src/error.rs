@@ -95,6 +95,9 @@ pub enum FlorestadError {
     /// Failed to create a chain provider.
     CouldNotCreateChainProvider(String),
 
+    /// Invalid JSON-RPC auth configuration.
+    InvalidRpcAuthConfig,
+
     /// Failed to create an Electrum server.
     CouldNotCreateElectrumServer(Box<dyn error::Error>),
 
@@ -194,6 +197,12 @@ impl Display for FlorestadError {
 
             FlorestadError::CouldNotCreateChainProvider(err) => {
                 write!(f, "Could not create chain provider: {err}")
+            }
+            FlorestadError::InvalidRpcAuthConfig => {
+                write!(
+                    f,
+                    "invalid RPC auth config: set both --rpc-user and --rpc-password or neither"
+                )
             }
             FlorestadError::CouldNotCreateElectrumServer(err) => {
                 write!(f, "Could not create Electrum server: {err}")

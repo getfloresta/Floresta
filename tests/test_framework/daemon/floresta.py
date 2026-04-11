@@ -39,9 +39,19 @@ class FlorestaDaemon(BaseDaemon):
         Return the RPC configuration flags for the node.
         """
         address = f"{config.host}:{config.port}"
-        return [
+        rpc_settings = [
             f"--rpc-address={address}",
         ]
+
+        if config.user is not None and config.password is not None:
+            rpc_settings.extend(
+                [
+                    f"--rpc-user={config.user}",
+                    f"--rpc-password={config.password}",
+                ]
+            )
+
+        return rpc_settings
 
     def get_cmd_p2p(self, config: ConfigP2P) -> List[str]:
         """

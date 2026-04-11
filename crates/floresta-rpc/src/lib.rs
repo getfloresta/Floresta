@@ -42,6 +42,7 @@ mod tests {
     use rcgen::CertifiedKey;
 
     use crate::jsonrpc_client::Client;
+    use crate::jsonrpc_client::JsonRPCConfig;
     use crate::rpc::FlorestaRPC;
     use crate::rpc_types::GetBlockRes;
 
@@ -101,13 +102,19 @@ mod tests {
             .args(["-n", "regtest"])
             .args(["--data-dir", &dirname])
             .args(["--rpc-address", &format!("127.0.0.1:{port}")])
+            .args(["--rpc-user", "test"])
+            .args(["--rpc-password", "test"])
             .args(["--electrum-address", "127.0.0.1:0"])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap_or_else(|e| panic!("Couldn't launch florestad at {florestad_path}: {e}"));
 
-        let client = Client::new(format!("http://127.0.0.1:{port}"));
+        let client = Client::new_with_config(JsonRPCConfig {
+            url: format!("http://127.0.0.1:{port}"),
+            user: Some("test".to_string()),
+            pass: Some("test".to_string()),
+        });
 
         let mut retries = 10;
         loop {
@@ -251,5 +258,18 @@ mod tests {
             Txid::from_str("1fb5734a07ce65c509311ebc03f136904f8b39a130ca3adff93200fc7ecde6fe")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn test_unauthorized() {
+        let (_proc, _client) = start_florestad();
+        let port = get_available_port();
+        let unauthorized = Client::new_with_config(JsonRPCConfig {
+            url: format!("http://127.0.0.1:{port}"),
+            user: Some("wrong".to_string()),
+            pass: Some("credentials".to_string()),
+        });
+
+        assert!(unauthorized.get_block_count().is_err())
     }
 }

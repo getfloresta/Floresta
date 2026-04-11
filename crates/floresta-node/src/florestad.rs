@@ -163,6 +163,14 @@ pub struct Config {
     /// The address our json-rpc should listen to
     pub json_rpc_address: Option<String>,
 
+    #[cfg(feature = "json-rpc")]
+    /// The username required to access JSON-RPC.
+    pub rpc_user: Option<String>,
+
+    #[cfg(feature = "json-rpc")]
+    /// The password required to access JSON-RPC.
+    pub rpc_password: Option<String>,
+
     /// Whether we should write logs to `stdout`.
     pub log_to_stdout: bool,
 
@@ -238,6 +246,10 @@ impl Config {
             connect: None,
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
+            #[cfg(feature = "json-rpc")]
+            rpc_user: None,
+            #[cfg(feature = "json-rpc")]
+            rpc_password: None,
             log_to_stdout: false,
             log_to_file: false,
             assume_utreexo: false,
@@ -360,6 +372,12 @@ impl Florestad {
     pub async fn start(&self) -> Result<(), FlorestadError> {
         let data_dir = &self.config.data_dir;
 
+        #[cfg(feature = "json-rpc")]
+        match (&self.config.rpc_user, &self.config.rpc_password) {
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => return Err(FlorestadError::InvalidRpcAuthConfig),
+        }
+
         // Check that the directory exists and is writable
         Florestad::validate_data_dir(data_dir)?;
 
@@ -478,6 +496,8 @@ impl Florestad {
                     .as_ref()
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
+                self.config.rpc_user.clone(),
+                self.config.rpc_password.clone(),
                 format!("{data_dir}/debug.log"),
             ));
 

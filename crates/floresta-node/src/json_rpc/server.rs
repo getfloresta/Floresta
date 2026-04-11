@@ -9,12 +9,17 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::WWW_AUTHENTICATE;
+use axum::http::HeaderMap;
 use axum::http::Method;
 use axum::http::Response;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Json;
 use axum::Router;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::hex::FromHex;
@@ -83,6 +88,8 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    pub(super) rpc_user: Option<String>,
+    pub(super) rpc_password: Option<String>,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -513,8 +520,31 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
 
 async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    if let Err(()) = check_rpc_auth(
+        &headers,
+        state.rpc_user.as_deref(),
+        state.rpc_password.as_deref(),
+    ) {
+        let error = RpcError {
+            code: -32600,
+            message: "Unauthorized".to_string(),
+            data: None,
+        };
+        let body = json!({
+            "error": error,
+            "id": Value::Null,
+        });
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("Content-Type", "application/json")
+            .header(WWW_AUTHENTICATE, "Basic realm=\"Floresta RPC\"")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+    }
+
     let req: RpcRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
         Err(e) => {
@@ -575,6 +605,34 @@ async fn json_rpc_request(
                 .header("Content-Type", "application/json")
                 .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap()
+        }
+    }
+}
+
+fn check_rpc_auth(
+    headers: &HeaderMap,
+    user: Option<&str>,
+    password: Option<&str>,
+) -> std::result::Result<(), ()> {
+    match (user, password) {
+        (None, None) => Ok(()),
+        (Some(_), None) | (None, Some(_)) => Err(()),
+        (Some(user), Some(password)) => {
+            let auth_header = headers
+                .get(AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or(())?;
+
+            let basic = auth_header.strip_prefix("Basic ").ok_or(())?;
+            let auth_bytes = BASE64_STANDARD.decode(basic).map_err(|_| ())?;
+            let auth = String::from_utf8(auth_bytes).map_err(|_| ())?;
+            let (given_user, given_pass) = auth.split_once(':').ok_or(())?;
+
+            if given_user == user && given_pass == password {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
     }
 }
@@ -748,6 +806,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         network: Network,
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
+        rpc_user: Option<String>,
+        rpc_password: Option<String>,
         log_path: String,
     ) {
         let address = address.unwrap_or_else(|| {
@@ -789,6 +849,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                rpc_user,
+                rpc_password,
             }));
 
         axum::serve(listener, router)

@@ -90,6 +90,20 @@ and you can get the cli parameters by running
 floresta-cli help <command>
 ```
 
+## JSON-RPC Authentication
+
+You can require username/password authentication for JSON-RPC requests:
+
+```bash
+florestad --rpc-user alice --rpc-password secret
+```
+
+When authentication is enabled, RPC clients must use matching credentials:
+
+```bash
+floresta-cli --rpc-user alice --rpc-password secret getblockchaininfo
+```
+
 ## Wallet
 
 Floresta comes with a watch-only wallet that you can use to track your transactions. You just need to provide the wallet

@@ -2,7 +2,6 @@
 
 use bitcoin::BlockHash;
 use bitcoin::Network;
-#[cfg(unix)]
 use clap::CommandFactory;
 use clap::Parser;
 use floresta_node::AssumeValidArg;
@@ -103,6 +102,14 @@ pub struct Cli {
     /// The address where our json-rpc server should listen to, in the format `<address>[:<port>]`
     pub rpc_address: Option<String>,
 
+    #[arg(long, value_name = "USERNAME")]
+    /// The username required to authenticate JSON-RPC requests.
+    pub rpc_user: Option<String>,
+
+    #[arg(long, value_name = "PASSWORD")]
+    /// The password required to authenticate JSON-RPC requests.
+    pub rpc_password: Option<String>,
+
     #[arg(long, value_name = "HEIGHT")]
     /// Download block filters starting at this height. Negative numbers are relative to the current tip.
     pub filters_start_height: Option<i32>,
@@ -199,6 +206,15 @@ impl Cli {
                 .error(
                     clap::error::ErrorKind::MissingRequiredArgument,
                     "--pid-file requires that --daemon be set",
+                )
+                .exit();
+        }
+
+        if self.rpc_user.is_some() != self.rpc_password.is_some() {
+            Cli::command()
+                .error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    "--rpc-user and --rpc-password must be set together",
                 )
                 .exit();
         }

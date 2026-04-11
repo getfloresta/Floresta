@@ -46,6 +46,7 @@ readme = "README.md"
 # For exact versions when needed, use "=1.9.1"
 [workspace.dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tracing", "tokio"] }
+base64 = "0.22"
 bitcoin = { version = "0.32", default-features = false }
 clap = { version = "4.5", default-features = false, features = ["derive", "std"] }
 corepc-types = "0.11"
