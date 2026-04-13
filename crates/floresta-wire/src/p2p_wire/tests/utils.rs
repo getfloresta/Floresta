@@ -26,6 +26,7 @@ use floresta_common::service_flags;
 use floresta_common::Ema;
 use floresta_mempool::Mempool;
 use rand::rngs::OsRng;
+use rand::seq::SliceRandom;
 use rand::RngCore;
 use serde::Deserialize;
 use serde::Serialize;
@@ -39,6 +40,8 @@ use tokio::time::timeout;
 use zstd;
 
 use crate::address_man::AddressMan;
+use crate::node::running_ctx::RunningNode;
+use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node::ConnectionKind;
 use crate::node::InflightRequests;
@@ -47,6 +50,7 @@ use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::PeerStatus;
 use crate::node::UtreexoNode;
+use crate::node_context::NodeContext;
 use crate::p2p_wire::block_proof::UtreexoProof;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
@@ -159,15 +163,18 @@ impl SimulatedPeer {
     }
 }
 
-pub fn create_peer(
-    headers: Vec<Header>,
-    blocks: HashMap<BlockHash, Block>,
-    accs: HashMap<BlockHash, Vec<u8>>,
+pub fn spawn_peer(
+    peer_data: PeerData,
     node_sender: UnboundedSender<NodeNotification>,
-    sender: UnboundedSender<NodeRequest>,
-    node_rcv: UnboundedReceiver<NodeRequest>,
     peer_id: u32,
 ) -> LocalPeerView {
+    let (sender, node_rcv) = unbounded_channel();
+    let PeerData {
+        headers,
+        blocks,
+        accs,
+    } = peer_data;
+
     let mut peer = SimulatedPeer::new(headers, blocks, accs, node_sender, node_rcv, peer_id);
     task::spawn(async move {
         peer.run().await;
@@ -244,6 +251,20 @@ pub fn signet_headers() -> Vec<Header> {
     headers
 }
 
+pub fn mainnet_headers() -> Vec<Header> {
+    let mut headers: Vec<Header> = Vec::new();
+
+    let file = include_bytes!("../../../../floresta-chain/testdata/headers.zst");
+    let uncompressed: Vec<u8> = zstd::decode_all(std::io::Cursor::new(file)).unwrap();
+    let mut buffer = uncompressed.as_slice();
+
+    while let Ok(header) = Header::consensus_decode(&mut buffer) {
+        headers.push(header);
+    }
+
+    headers
+}
+
 /// Returns the first 121 signet blocks, including genesis
 pub fn signet_blocks() -> HashMap<BlockHash, Block> {
     let file = include_str!("./test_data/blocks.json");
@@ -278,11 +299,16 @@ pub fn signet_roots() -> HashMap<BlockHash, Vec<u8>> {
     accs
 }
 
-/// Returns a mutated signet block at height 7
-pub fn mutated_block_h7() -> Block {
-    deserialize_hex(
-        "00000020daf3b60d374b19476461f97540498dcfa2eb7016238ec6b1d022f82fb60100007a7ae65b53cb988c2ec92d2384996713821d5645ffe61c9acea60da75cd5edfa1a944d5fae77031e9dbb050001010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025751feffffff0200f2052a01000000160014ef2dceae02e35f8137de76768ae3345d99ca68860000000000000000776a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf94c4fecc7daa2490047304402202b3f946d6447f9bf17d00f3696cede7ee70b785495e5498274ee682a493befd5022045fc0bcf9331073168b5d35507175f9f374a8eba2336873885d12aada67ea5f601000120000000000000000000000000000000000000000000000000000000000000000000000000"
-    ).unwrap()
+/// Modifies a block to have an invalid output script (txdata is tampered with)
+pub fn mutate_block(block: &mut Block) {
+    let mut rng = rand::thread_rng();
+
+    let tx = block.txdata.choose_mut(&mut rng).unwrap();
+    let out = tx.output.choose_mut(&mut rng).unwrap();
+    let spk = out.script_pubkey.as_mut_bytes();
+    let byte = spk.choose_mut(&mut rng).unwrap();
+
+    *byte += 1;
 }
 
 #[derive(Clone, Constructor)]
@@ -293,52 +319,48 @@ pub struct PeerData {
     accs: HashMap<BlockHash, Vec<u8>>,
 }
 
-pub async fn setup_node(
+#[derive(Constructor)]
+/// The arguments needed to set up the test `UtreexoNode`
+pub struct SetupNodeArgs {
     peers: Vec<PeerData>,
     pow_fraud_proofs: bool,
     network: Network,
-    datadir: &str,
+    datadir: String,
     num_blocks: usize,
-) -> Arc<ChainState<FlatChainStore>> {
-    let config = FlatChainStoreConfig::new(datadir.into());
+}
 
-    let chainstore = FlatChainStore::new(config).unwrap();
-    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
-    let chain = ChainState::new(chainstore, network, AssumeValidArg::Disabled);
-    let chain = Arc::new(chain);
+type Chain = Arc<ChainState<FlatChainStore>>;
 
-    let mut headers = signet_headers();
-    headers.remove(0);
-    headers.truncate(num_blocks);
-    for header in headers {
+pub fn setup_node<T>(args: SetupNodeArgs) -> UtreexoNode<Chain, T>
+where
+    T: 'static + Default + NodeContext,
+{
+    let net = args.network;
+    let datadir = args.datadir;
+
+    // Create `ChainState` and add headers to it
+    let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(datadir.clone())).unwrap();
+    let chain = Arc::new(ChainState::new(chainstore, net, AssumeValidArg::Disabled));
+
+    let headers = match net {
+        Network::Signet => signet_headers(),
+        Network::Bitcoin => mainnet_headers(),
+        _ => panic!("unavailable headers for net: {net}"),
+    };
+    for header in headers.into_iter().skip(1).take(args.num_blocks) {
         chain.accept_header(header).unwrap();
     }
 
-    let config = get_node_config(datadir.into(), network, pow_fraud_proofs);
+    // Create `UtreexoNode` and spawn the simulated peers
+    let config = get_node_config(datadir, net, args.pow_fraud_proofs);
+    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
     let kill_signal = Arc::new(RwLock::new(false));
-    let mut node = UtreexoNode::<Arc<ChainState<FlatChainStore>>, SyncNode>::new(
-        config,
-        chain.clone(),
-        mempool,
-        None,
-        kill_signal.clone(),
-        AddressMan::new(None, &[]),
-    )
-    .unwrap();
+    let addr_man = AddressMan::new(None, &[]);
+    let mut node = UtreexoNode::new(config, chain, mempool, None, kill_signal, addr_man).unwrap();
 
-    for (i, peer) in peers.into_iter().enumerate() {
-        let (sender, receiver) = unbounded_channel();
+    for (i, peer_data) in args.peers.into_iter().enumerate() {
         let peer_id = i as u32;
-
-        let peer = create_peer(
-            peer.headers,
-            peer.blocks,
-            peer.accs,
-            node.node_tx.clone(),
-            sender.clone(),
-            receiver,
-            peer_id,
-        );
+        let peer = spawn_peer(peer_data, node.node_tx.clone(), peer_id);
 
         // Add a fixed peer to avoid opening real P2P connections
         if i == 0 {
@@ -365,9 +387,46 @@ pub async fn setup_node(
         );
     }
 
-    timeout(Duration::from_secs(100), node.run(|_| {}))
-        .await
-        .unwrap();
+    node
+}
+
+const NODE_TIMEOUT: Duration = Duration::from_secs(100);
+
+pub async fn setup_sync_node(args: SetupNodeArgs) -> Arc<ChainState<FlatChainStore>> {
+    let node = setup_node::<SyncNode>(args);
+    let chain = node.chain.clone();
+
+    timeout(NODE_TIMEOUT, node.run(|_| {})).await.unwrap();
+
+    chain
+}
+
+pub async fn setup_swiftsync(args: SetupNodeArgs) -> Arc<ChainState<FlatChainStore>> {
+    let node = setup_node::<SwiftSync>(args);
+    let chain = node.chain.clone();
+
+    timeout(NODE_TIMEOUT, node.run(|_| {})).await.unwrap();
+
+    chain
+}
+
+#[allow(unused)]
+pub async fn setup_running_node(args: SetupNodeArgs) -> Arc<ChainState<FlatChainStore>> {
+    let node = setup_node::<RunningNode>(args);
+    let kill_signal = node.kill_signal.clone();
+    let chain = node.chain.clone();
+
+    // Sends a kill signal to the `RunningNode` after 20 seconds
+    let killer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        *kill_signal.write().await = true;
+    });
+
+    let (sender, receiver) = tokio::sync::oneshot::channel::<()>();
+    timeout(NODE_TIMEOUT, node.run(sender)).await.unwrap();
+
+    receiver.await.unwrap();
+    killer.abort();
 
     chain
 }
@@ -382,14 +441,74 @@ fn to_addr_v2(addr: IpAddr) -> AddrV2 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::Hash;
     use bitcoin::BlockHash;
+    use floresta_common::bhash;
+    use hintsfile::Hintsfile;
 
-    use super::mutated_block_h7;
+    use super::mutate_block;
     use super::signet_blocks;
     use super::signet_headers;
     use super::signet_roots;
+
+    /*
+    fn build_new_hints() {
+        use hintsfile::{EliasFano, HintsfileBuilder};
+        let mut file = File::create("./src/p2p_wire/tests/test_data/bitcoin.hints").unwrap();
+        let mut builder = HintsfileBuilder::new(&mut file)
+            .initialize(175)
+            .unwrap();
+
+        for height in 1..=175 {
+            let unspent_indices = match height {
+                9 => Vec::new(),      // The single UTXO in this block is spent later
+                170 => vec![0, 1, 2], // Contains the transaction spending the height-9 UTXO
+                _ => vec![0],         // Other blocks have just a coinbase output (here unspent)
+            };
+            let ef = EliasFano::compress(&unspent_indices);
+            builder.append(ef).unwrap();
+        }
+        builder.finish().unwrap();
+    }
+    */
+
+    fn load_test_hints() -> Hintsfile {
+        let mut file = File::open("./src/p2p_wire/tests/test_data/bitcoin.hints").unwrap();
+        Hintsfile::from_reader(&mut file).unwrap()
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_hints_file_genesis() {
+        let hints = load_test_hints();
+        hints.indices_at_height(0).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_hints_file_after_stop_height() {
+        let hints = load_test_hints();
+        hints.indices_at_height(176).unwrap();
+    }
+
+    #[test]
+    fn test_hints_file_shape() {
+        let hints = load_test_hints();
+        assert_eq!(hints.stop_height(), 175);
+
+        for height in 1..=175 {
+            let unspent_indices = match height {
+                9 => Vec::new(),      // The single UTXO in this block is spent later
+                170 => vec![0, 1, 2], // Contains the transaction spending the height-9 UTXO
+                _ => vec![0],         // Other blocks have just a coinbase output (here unspent)
+            };
+
+            assert_eq!(hints.indices_at_height(height).unwrap(), unspent_indices);
+        }
+    }
 
     #[test]
     fn test_get_headers_and_blocks() {
@@ -420,16 +539,23 @@ mod tests {
 
     #[test]
     fn test_get_mutated_block() {
-        let mutated_block = mutated_block_h7();
-        assert!(!mutated_block.txdata.is_empty(), "at least one tx");
+        let hash = bhash!("000002c45c8ea9e553d4b0ee5d50324e56fc76f13019873fe707ff44fc56183f");
+        let blocks = signet_blocks();
 
-        assert!(!mutated_block.check_merkle_root(), "invalid merkle root");
+        let mut block_25 = blocks.get(&hash).unwrap().clone();
+        mutate_block(&mut block_25);
+
+        assert!(!block_25.txdata.is_empty(), "at least one tx");
+        assert!(
+            !block_25.check_merkle_root(),
+            "invalid merkle root (txdata was tampered with)",
+        );
 
         let headers = signet_headers();
         assert_eq!(
-            mutated_block.header.prev_blockhash,
-            headers[6].block_hash(),
-            "invalid block is at height 7",
+            block_25.header.prev_blockhash,
+            headers[24].block_hash(),
+            "block is at height 25",
         );
     }
 

@@ -1526,7 +1526,7 @@ mod tests {
     #[test]
     fn test_save_and_retrieve_headers() {
         let mut store = get_test_chainstore(None).unwrap();
-        let blocks = include_str!("../../testdata/blocks.txt");
+        let blocks = include_str!("../../testdata/regtest_blocks.txt");
 
         for (i, line) in blocks.lines().enumerate() {
             let block = hex::decode(line).unwrap();
@@ -1656,7 +1656,7 @@ mod tests {
     fn test_index() {
         let mut store = get_test_chainstore(None).unwrap();
         let mut hashes = Vec::new();
-        let blocks = include_str!("../../testdata/blocks.txt");
+        let blocks = include_str!("../../testdata/regtest_blocks.txt");
 
         for (i, line) in blocks.lines().enumerate() {
             let block = hex::decode(line).unwrap();
@@ -1713,7 +1713,7 @@ mod tests {
     #[test]
     fn test_fork_blocks() {
         let mut store = get_test_chainstore(None).unwrap();
-        let file = include_str!("../../testdata/blocks.txt");
+        let file = include_str!("../../testdata/regtest_blocks.txt");
         let headers = file
             .lines()
             .map(|x| hex::decode(x).unwrap())

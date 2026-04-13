@@ -6,8 +6,10 @@ use core::ops::Add;
 
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Work;
+use floresta_common::bhash;
 use floresta_common::prelude::Box;
 use floresta_common::prelude::String;
 use floresta_common::prelude::Vec;
@@ -15,6 +17,26 @@ use floresta_common::prelude::Vec;
 use crate::BlockchainInterface;
 
 const MEDIAN_TIME_PAST_BLOCK_COUNT: usize = 11;
+
+pub trait Bip30UnspendableExt {
+    /// Returns true if the coinbase output in this block is BIP-30 unspendable.
+    fn is_bip30_unspendable(&self, height: u32) -> bool;
+}
+
+impl Bip30UnspendableExt for Block {
+    fn is_bip30_unspendable(&self, height: u32) -> bool {
+        let bhash_91722 =
+            bhash!("00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e");
+        let bhash_91812 =
+            bhash!("00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f");
+
+        match height {
+            91722 => self.block_hash() == bhash_91722,
+            91812 => self.block_hash() == bhash_91812,
+            _ => false,
+        }
+    }
+}
 
 /// Provides additional methods for working with [`Header`] objects,
 pub trait HeaderExt {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use bitcoin::p2p::ServiceFlags;
@@ -43,12 +44,15 @@ pub(crate) struct InflightBlock {
     pub peer: PeerId,
 
     /// The block itself.
-    pub block: Block,
+    pub block: Arc<Block>,
 
     /// Auxiliary data needed for validating this block. Currently, it includes utreexo
     /// leaf data (previous UTXOs spent in the block), the corresponding accumulator
     /// inclusion proof, and the peer id that provided them.
     pub aux_data: Option<UtreexoData>,
+
+    /// If this block is currently being processed in a worker, this is the start time.
+    pub processing_since: Option<Instant>,
 }
 
 impl InflightBlock {
@@ -57,7 +61,7 @@ impl InflightBlock {
     /// If the block doesn't spend any output (i.e., coinbase transaction only) this method adds
     /// empty auxiliary data, which marks this inflight block as ready to process. Blocks with
     /// transactions require [`UtreexoData`] (see [`InflightBlock::add_utreexo_data`]).
-    fn new(block: Block, peer: PeerId) -> Self {
+    fn new(block: Arc<Block>, peer: PeerId) -> Self {
         let aux_data = match block.txdata.len() {
             1 => Some((Vec::new(), Proof::default(), peer)),
             _ => None, // we need auxiliary data for the txs
@@ -67,6 +71,7 @@ impl InflightBlock {
             peer,
             block,
             aux_data,
+            processing_since: None,
         }
     }
 
@@ -82,6 +87,29 @@ where
     Chain: ChainBackend + 'static,
     WireError: From<Chain::Error>,
 {
+    /// Returns `true` only if we can request `BLOCKS_PER_GETDATA` without exceeding the maximum
+    /// unprocessed blocks allowed.
+    pub(crate) fn can_request_more_blocks(&self) -> bool {
+        let max_inflight_blocks = T::BLOCKS_PER_GETDATA * T::MAX_CONCURRENT_GETDATA;
+
+        // If we do a GETDATA request, this will be the new unprocessed count
+        let next_unprocessed = self.unprocessed_blocks() + T::BLOCKS_PER_GETDATA;
+
+        next_unprocessed <= max_inflight_blocks
+    }
+
+    /// Returns the number of blocks awaiting processing (in memory or requested).
+    pub(crate) fn unprocessed_blocks(&self) -> usize {
+        let blocks_in_mem = self.blocks.len();
+        let requested_blocks = self
+            .inflight
+            .keys()
+            .filter(|inflight| matches!(inflight, InflightRequests::Blocks(_)))
+            .count();
+
+        blocks_in_mem + requested_blocks
+    }
+
     pub(crate) fn request_blocks(&mut self, blocks: Vec<BlockHash>) -> Result<(), WireError> {
         let should_request = |block: &BlockHash| {
             let is_inflight = self
@@ -126,7 +154,7 @@ where
         debug!("Received block {block_hash} from peer {peer}, with {txdata_len} txs");
 
         self.blocks
-            .insert(block_hash, InflightBlock::new(block, peer));
+            .insert(block_hash, InflightBlock::new(Arc::new(block), peer));
 
         // We only need auxiliary utreexo data if there are non-coinbase transactions
         if txdata_len != 1 {
@@ -311,7 +339,7 @@ where
     }
 
     /// Returns the inner [`BlockValidationErrors`] of this chain error, if any.
-    fn block_validation_err(e: BlockchainError) -> Option<BlockValidationErrors> {
+    pub(crate) fn block_validation_err(e: BlockchainError) -> Option<BlockValidationErrors> {
         match e {
             BlockchainError::TransactionError(tx_err) => Some(tx_err.error),
             BlockchainError::BlockValidation(block_err) => Some(block_err),
@@ -329,7 +357,7 @@ where
     fn handle_validation_errors(
         &mut self,
         e: BlockValidationErrors,
-        block: Block,
+        block: Arc<Block>,
         block_peer: PeerId,
         utreexo_peer: PeerId,
     ) -> Option<PeerId> {
