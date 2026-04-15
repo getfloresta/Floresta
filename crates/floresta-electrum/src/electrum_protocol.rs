@@ -457,7 +457,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             // end of experimental endpoints
             "blockchain.transaction.broadcast" => {
                 let tx = get_arg!(request, String, 0);
-                let hex: Vec<_> = Vec::from_hex(&tx).map_err(|_| Error::InvalidParams)?;
+                let hex = Vec::from_hex(&tx).map_err(|_| Error::InvalidParams)?;
                 let tx: Transaction = deserialize(&hex).map_err(|_| Error::InvalidParams)?;
 
                 let txid = tx.compute_txid();
