@@ -1,8 +1,8 @@
 [package]
-name = "floresta-fuzz"
-version = "0.1.0"
-publish = false
 edition = "2021"
+name = "floresta-fuzz"
+publish = false
+version = "0.1.0"
 
 [package.metadata]
 cargo-fuzz = true
@@ -18,60 +18,60 @@ floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-wire = { workspace = true }
 
 [[bin]]
+bench = false
+doc = false
 name = "local_address_str"
 path = "fuzz_targets/local_address_str.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "utreexo_proof_des"
 path = "fuzz_targets/utreexo_proof_des.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "addrman"
 path = "fuzz_targets/addrman.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "best_chain_decode"
 path = "fuzz_targets/best_chain_decode.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "flat_chainstore_header_insertion"
 path = "fuzz_targets/flat_chainstore_header_insertion.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "best_chain_roundtrip"
 path = "fuzz_targets/best_chain_roundtrip.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "disk_block_header_decode"
 path = "fuzz_targets/disk_block_header_decode.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "disk_block_header_roundtrip"
 path = "fuzz_targets/disk_block_header_roundtrip.rs"
 test = false
-doc = false
-bench = false
 
 [lints]
 workspace = true

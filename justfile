@@ -89,6 +89,7 @@ doc-check:
 lint:
     @just fmt --check
     @just just-fmt --check
+    @just toml-fmt --check
     @just doc-check
 
     # 1) Run with no features
@@ -110,6 +111,11 @@ fmt *args="":
 just-fmt *args="":
     just --fmt --unstable {{ args }}
 
+# Format TOML files (pass '--check' to verify without modifying)
+toml-fmt *args="":
+    @just check-command taplo toml-fmt "https://github.com/tamasfe/taplo"
+    taplo fmt {{ args }}
+
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
     @just check-command "cargo-hack" "test-features" "cargo install cargo-hack --locked --version 0.6.34"
@@ -121,6 +127,7 @@ lint-features arg="":
 
     @just fmt --check
     @just just-fmt --check
+    @just toml-fmt --check
     @just doc-check
     @just spell-check
 

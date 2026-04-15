@@ -1,0 +1,4 @@
+exclude = [".cz.toml", "target/**", ".direnv/**"]
+
+[formatting]
+reorder_keys = true

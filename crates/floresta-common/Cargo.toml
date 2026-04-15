@@ -1,12 +1,12 @@
 [package]
-name = "floresta-common"
-version = "0.5.0"
-edition = "2021"
-description = "Common types and functions for Floresta"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
+description = "Common types and functions for Floresta"
+edition = "2021"
 license = "MIT"
+name = "floresta-common"
+readme.workspace = true                                     # Floresta/README.md
 repository = "https://github.com/getfloresta/Floresta"
-readme.workspace = true # Floresta/README.md
+version = "0.5.0"
 
 [dependencies]
 bitcoin = { workspace = true }
@@ -19,8 +19,8 @@ spin = { workspace = true }
 default = ["std", "descriptors-std"]
 std = ["bitcoin/std", "sha2/std"]
 # Both features can be set at the same time, but for `no_std` only the latter should be used
-descriptors-std = ["miniscript/std"]
 descriptors-no-std = ["miniscript/no-std"]
+descriptors-std = ["miniscript/std"]
 
 [lints]
 workspace = true

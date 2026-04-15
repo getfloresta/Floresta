@@ -70,6 +70,7 @@
               boost
               cmake
               typos
+              taplo
               python312
               uv
               gcc
@@ -99,6 +100,16 @@
                 flake-checker = {
                   enable = true;
                   stages = [ "pre-commit" ];
+                };
+                tomlfmt-hook = {
+                  enable = true;
+                  name = "tomlfmt-hook";
+                  entry = "${pkgs.just}/bin/just toml-fmt --check";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "toml" ];
+                  pass_filenames = false;
+                  verbose = true;
                 };
                 justfmt-hook = {
                   enable = true;

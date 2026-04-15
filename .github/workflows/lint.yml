@@ -22,6 +22,19 @@ jobs:
       - name: Check justfile formatting
         run: just --fmt --check --unstable
 
+  toml-lint:
+    name: TOML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install taplo
+        run: |
+          curl -fsSL https://github.com/tamasfe/taplo/releases/latest/download/taplo-full-linux-x86_64.gz \
+            | gzip -d > /usr/local/bin/taplo
+          chmod +x /usr/local/bin/taplo
+      - name: Check TOML formatting
+        run: taplo fmt --check
+
   rust-lint:
     name: Rust Lint
     runs-on: ubuntu-latest

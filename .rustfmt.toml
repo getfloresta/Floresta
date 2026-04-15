@@ -1,7 +1,7 @@
 # imports
-reorder_imports = true
-imports_granularity = "Item"
 group_imports = "StdExternalCrate"
+imports_granularity = "Item"
+reorder_imports = true
 
 # lines
 newline_style = "Unix"
