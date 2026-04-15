@@ -90,6 +90,8 @@ lint:
     @just fmt --check
     @just just-fmt --check
     @just toml-fmt --check
+    @just sh-fmt --check
+    @just sh-lint
     @just doc-check
 
     # 1) Run with no features
@@ -116,6 +118,24 @@ toml-fmt *args="":
     @just check-command taplo toml-fmt "https://github.com/tamasfe/taplo"
     taplo fmt {{ args }}
 
+# Shell files managed by sh-fmt and sh-lint
+
+shell-files := "contrib/clean_data.sh contrib/feature_matrix.sh contrib/dist/gen_manpages.sh contrib/install.sh tests/prepare.sh tests/run.sh"
+
+# Format shell scripts (pass '--check' to verify without modifying)
+sh-fmt *args="":
+    @just check-command shfmt sh-fmt "https://github.com/mvdan/sh"
+    if echo "{{ args }}" | grep -q -- '--check'; then \
+        shfmt -d {{ shell-files }}; \
+    else \
+        shfmt -w {{ shell-files }}; \
+    fi
+
+# Lint shell scripts with shellcheck
+sh-lint:
+    @just check-command shellcheck sh-lint "https://github.com/koalaman/shellcheck"
+    shellcheck {{ shell-files }}
+
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
     @just check-command "cargo-hack" "test-features" "cargo install cargo-hack --locked --version 0.6.34"
@@ -128,6 +148,8 @@ lint-features arg="":
     @just fmt --check
     @just just-fmt --check
     @just toml-fmt --check
+    @just sh-fmt --check
+    @just sh-lint
     @just doc-check
     @just spell-check
 

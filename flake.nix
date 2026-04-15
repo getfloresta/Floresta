@@ -71,6 +71,8 @@
               cmake
               typos
               taplo
+              shellcheck
+              shfmt
               python312
               uv
               gcc
@@ -100,6 +102,26 @@
                 flake-checker = {
                   enable = true;
                   stages = [ "pre-commit" ];
+                };
+                shfmt-hook = {
+                  enable = true;
+                  name = "shfmt-hook";
+                  entry = "${pkgs.just}/bin/just sh-fmt --check";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "shell" ];
+                  pass_filenames = false;
+                  verbose = true;
+                };
+                shellcheck-hook = {
+                  enable = true;
+                  name = "shellcheck-hook";
+                  entry = "${pkgs.just}/bin/just sh-lint";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "shell" ];
+                  pass_filenames = false;
+                  verbose = true;
                 };
                 tomlfmt-hook = {
                   enable = true;

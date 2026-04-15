@@ -35,6 +35,21 @@ jobs:
       - name: Check TOML formatting
         run: taplo fmt --check
 
+  shell-lint:
+    name: Shell Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shfmt
+        run: |
+          curl -fsSL https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_amd64 \
+            -o /usr/local/bin/shfmt
+          chmod +x /usr/local/bin/shfmt
+      - name: Check shell formatting
+        run: shfmt -d contrib/clean_data.sh contrib/feature_matrix.sh contrib/dist/gen_manpages.sh contrib/install.sh tests/prepare.sh tests/run.sh
+      - name: Run shellcheck
+        run: shellcheck contrib/clean_data.sh contrib/feature_matrix.sh contrib/dist/gen_manpages.sh contrib/install.sh tests/prepare.sh tests/run.sh
+
   rust-lint:
     name: Rust Lint
     runs-on: ubuntu-latest

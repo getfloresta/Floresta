@@ -11,9 +11,9 @@ FORCE_BUILD=0
 BUILD_RELEASE=0
 for ARG in "$@"; do
     case "$ARG" in
-        --build) FORCE_BUILD=1 ;;
-        --release) BUILD_RELEASE=1 ;;
-        *) ;;
+    --build) FORCE_BUILD=1 ;;
+    --release) BUILD_RELEASE=1 ;;
+    *) ;;
     esac
 done
 
@@ -84,31 +84,37 @@ download_prebuilt_bitcoind() {
 
     # Map uname -> platform name used by Bitcoin Core distribution filenames
     case "$UNAME_S" in
-        Linux)
-            case "$UNAME_M" in
-                x86_64) PLATFORM="x86_64-linux-gnu" ;;
-                aarch64|arm64) PLATFORM="aarch64-linux-gnu" ;;
-                armv7l) PLATFORM="arm-linux-gnueabihf" ;;
-                *) echo "Unsupported architecture for prebuilt bitcoind: $UNAME_M"; return 1 ;;
-            esac
-            FILE_EXT="tar.gz"
-            ;;
-        Darwin)
-            case "$UNAME_M" in
-                x86_64) PLATFORM="x86_64-apple-darwin" ;;
-                aarch64|arm64) PLATFORM="arm64-apple-darwin" ;;
-                *) echo "Unsupported architecture for prebuilt bitcoind on macOS: $UNAME_M"; return 1 ;;
-            esac
-            FILE_EXT="tar.gz"
-            ;;
-        MINGW*|MSYS*|CYGWIN*|Windows_NT)
-            PLATFORM="win64"
-            FILE_EXT="zip"
-            ;;
+    Linux)
+        case "$UNAME_M" in
+        x86_64) PLATFORM="x86_64-linux-gnu" ;;
+        aarch64 | arm64) PLATFORM="aarch64-linux-gnu" ;;
+        armv7l) PLATFORM="arm-linux-gnueabihf" ;;
         *)
-            echo "Unsupported OS for prebuilt bitcoind: $UNAME_S"
+            echo "Unsupported architecture for prebuilt bitcoind: $UNAME_M"
             return 1
             ;;
+        esac
+        FILE_EXT="tar.gz"
+        ;;
+    Darwin)
+        case "$UNAME_M" in
+        x86_64) PLATFORM="x86_64-apple-darwin" ;;
+        aarch64 | arm64) PLATFORM="arm64-apple-darwin" ;;
+        *)
+            echo "Unsupported architecture for prebuilt bitcoind on macOS: $UNAME_M"
+            return 1
+            ;;
+        esac
+        FILE_EXT="tar.gz"
+        ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT)
+        PLATFORM="win64"
+        FILE_EXT="zip"
+        ;;
+    *)
+        echo "Unsupported OS for prebuilt bitcoind: $UNAME_S"
+        return 1
+        ;;
     esac
 
     FILE_NAME="bitcoin-${BITCOIN_REVISION}-${PLATFORM}.${FILE_EXT}"
@@ -217,7 +223,7 @@ build_bitcoind_from_source() {
             --without-gui \
             --disable-tests \
             --disable-bench \
-        make_nprocs="${BUILD_BITCOIND_NPROCS:-4}" || exit 1
+            make_nprocs="${BUILD_BITCOIND_NPROCS:-4}" || exit 1
         make -j"$(make_nprocs)" || exit 1
         mv "$DISPOSABLE_DIR/bitcoin/src/bitcoind" "$BINARIES_DIR/bitcoind" || exit 1
     fi

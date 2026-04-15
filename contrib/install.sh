@@ -106,8 +106,7 @@ check_interactive_mode() {
 }
 
 # Use getopt for long options
-OPTIONS=$(getopt -o x:d:a:n:t:p:C:z:v:f:usUNh --long xpub:,desc:,address:,network:,tag:,proxy:,connect:,zmq-address:,assume-valid:,filters:,assume-utreexo,tls,uninstall,non-interactive,help -n "$0" -- "$@")
-if [ $? -ne 0 ]; then
+if ! OPTIONS=$(getopt -o x:d:a:n:t:p:C:z:v:f:usUNh --long xpub:,desc:,address:,network:,tag:,proxy:,connect:,zmq-address:,assume-valid:,filters:,assume-utreexo,tls,uninstall,non-interactive,help -n "$0" -- "$@"); then
     show_usage
     exit 1
 fi
@@ -216,8 +215,15 @@ done
 #   - testnet
 #   - regtest
 validate_network() {
-    valid_networks=("bitcoin" "signet" "testnet3" "testnet4" "regtest")
-    if [[ ! " ${valid_networks[@]} " =~ " ${network} " ]]; then
+    local valid_networks=("bitcoin" "signet" "testnet3" "testnet4" "regtest")
+    local valid=false
+    for n in "${valid_networks[@]}"; do
+        if [ "$n" = "$network" ]; then
+            valid=true
+            break
+        fi
+    done
+    if [ "$valid" = false ]; then
         echo "❌ Invalid network '$network'. Valid options are: ${valid_networks[*]}"
         exit 1
     fi
@@ -264,19 +270,20 @@ install_rustup() {
         export PATH=/home/$me/.cargo/bin:$PATH
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y --no-modify-path
 
-        chown $me:$me -R /home/$me/.cargo
+        chown "$me":"$me" -R /home/"$me"/.cargo
 
         # Load it on profile
-        echo "source /home/$me/.cargo/env" >>/home/$me/.profile
-        source /home/$me/.cargo/env
+        echo "source /home/$me/.cargo/env" >>/home/"$me"/.profile
+        # shellcheck disable=SC1090
+        source /home/"$me"/.cargo/env
     else
         echo "🦀 Rustup found in $haveRust. Skip download..."
     fi
 
-    isUpdated=$(/home/$me/.cargo/bin/rustup check | grep -B 1 "Up to date")
+    isUpdated=$(/home/"$me"/.cargo/bin/rustup check | grep -B 1 "Up to date")
     if [ -z "$isUpdated" ]; then
         echo "🦀 Updating rust..."
-        /home/$me/.cargo/bin/rustup update
+        /home/"$me"/.cargo/bin/rustup update
     else
         echo "🦀 Skip rust update..."
     fi
@@ -286,7 +293,7 @@ install_rustup() {
 #
 # Clean all downloaded or installed things
 clean_on_error() {
-    rm $1
+    rm "$1"
     rm -rf "$tarDest"
     rm -rf "$bdlDir"
     cleanup_apt gcc build-essential pkg-config libssl-dev mold
@@ -339,13 +346,13 @@ download_floresta() {
         clean_on_error "$ascDest"
     fi
 
-    cd /tmp
+    cd /tmp || exit 1
     tarBaseName=$(basename "$tarDest")
     if ! grep "$tarBaseName" "$shaDest" | sha256sum -c --status -; then
         echo "❌ Integrity check failed for $tarDest"
         clean_on_error "$tarDest"
     fi
-    cd - >/dev/null
+    cd - >/dev/null || exit 1
     echo "🌳 Integrity check passed"
 }
 
@@ -355,11 +362,11 @@ download_floresta() {
 # and floresta-cli (command line interface) into /usr/local/bin
 build_floresta() {
     echo "🌳 Extracting floresta $tarDest to /tmp..."
-    tar -xzf $tarDest -C /tmp
+    tar -xzf "$tarDest" -C /tmp
 
     echo "🦀 Building florestad and floresta-cli $defaultTag..."
-    cd $bdlDir
-    RUSTFLAGS="-C link-arg=-fuse-ld=mold -C target-cpu=native"
+    cd "$bdlDir" || exit 1
+    export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C target-cpu=native"
     cargo build --release \
         --bin florestad \
         --bin floresta-cli \
@@ -367,8 +374,8 @@ build_floresta() {
         --locked
 
     echo "🌳 Copying binaries to /usr/local/bin (need sudo)..."
-    sudo install -m 0755 -t /usr/local/bin/ $bdlDir/target/release/florestad
-    sudo install -m 0755 -t /usr/local/bin/ $bdlDir/target/release/floresta-cli
+    sudo install -m 0755 -t /usr/local/bin/ "$bdlDir"/target/release/florestad
+    sudo install -m 0755 -t /usr/local/bin/ "$bdlDir"/target/release/floresta-cli
 }
 
 # func: setup_service
@@ -383,8 +390,7 @@ setup_service() {
     echo "🐧 Setup floresta sysusers.d..."
     echo "u florestad - - $florestaDir" | sudo tee $florestaUserPath >/dev/null
     echo "🐧 Applying $florestaUserPath (need sudo)"
-    sudo systemd-sysusers
-    if [ $? -ne 0 ]; then
+    if ! sudo systemd-sysusers; then
         echo "❌ Failed to create systemd-sysusers"
         exit 1
     fi
@@ -394,8 +400,7 @@ setup_service() {
     echo "d $florestaDir 0710 florestad florestad - -" | sudo tee $florestaTmpPath >/dev/null
     echo "d $florestaLib 0710 florestad florestad - -" | sudo tee -a $florestaTmpPath >/dev/null
     echo "🐧 Applying $florestaTmpPath (need sudo)"
-    sudo systemd-tmpfiles --create
-    if [ $? -ne 0 ]; then
+    if ! sudo systemd-tmpfiles --create; then
         echo "❌ Failed to create systemd-tmpfiles"
         exit 1
     fi
@@ -914,8 +919,8 @@ interactive_select_proxy() {
         edited=$?
         check_dialog_escape
 
-        # Check if user pressed Cancel or ESC
-        if [ $? -ne 0 ]; then
+        # Check if user pressed Cancel
+        if [ "$edited" -ne 0 ]; then
             dialog --title "Floresta" \
                 --msgbox "❌ Proxy input canceled. Returning to setup menu." 8 45
             check_dialog_escape
@@ -953,23 +958,25 @@ interactive_connect() {
     local connect_regex="^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(:([0-9]{1,5}))?$"
 
     while true; do
-        # Prompt user for proxy input
+        # Prompt user for connect input
         connect=$(dialog --title "Floresta-Installer (Set a node to connect)" \
             --inputbox "We'll connect ONLY to this node. It should be an ipv4 address in the format <address>[:<port>]." \
             10 60 \
             3>&1 1>&2 2>&3)
+
+        edited=$?
         check_dialog_escape
 
         # Check if user pressed Cancel or ESC
-        if [ $? -ne 0 ]; then
+        if [ "$edited" -ne 0 ]; then
             dialog --title "Floresta-Installer" --msgbox "❌ Connect input canceled. Returning to setup menu." 8 45
             check_dialog_escape
             interactive_advanced_setup
             return 1
         fi
 
-        # Validate proxy format
-        if [[ "$proxy" =~ $proxy_regex ]]; then
+        # Validate connect format
+        if [[ "$connect" =~ $connect_regex ]]; then
             dialog --title "Floresta-Installer" --msgbox "✅ A node to connect to set successfully: $connect" 10 60
             check_dialog_escape
             interactive_advanced_setup
@@ -994,8 +1001,9 @@ interactive_zeromq() {
             10 60 \
             3>&1 1>&2 2>&3)
 
+        edited=$?
         # Check if user pressed Cancel or ESC
-        if [ $? -ne 0 ]; then
+        if [ "$edited" -ne 0 ]; then
             dialog --title "Floresta-Installer (Set zeromq)" --msgbox "❌ ZeroMQ input canceled. Returning to setup menu." 8 45
             check_dialog_escape
             interactive_advanced_setup
@@ -1023,16 +1031,16 @@ interactive_filters() {
 
     while true; do
         # Prompt user for filters_start_height input
-        echo "sha256sum: $sha256res == $sha256exp"
         filters_start_height=$(dialog --title "Floresta-Installer (Set enable filters)" \
             --inputbox $'Do you want to use \'cfilters\' and \'filters-start-height\'?\n\n"cfilters" let you query for chain data after IBD, like wallet rescan, finding a utxo, finding specific tx_ids. Will cause more disk usage.\n\n"filters-start-height" download block filters starting at this height. Negative numbers are relative to the current tip. For example, if the current tip is at height 1000, and we set this value to -100, we will start downloading filters from height 900.\n' \
             20 60 \
             3>&1 1>&2 2>&3)
 
+        edited=$?
         check_dialog_escape
 
         # Check if user pressed Cancel or ESC
-        if [ $? -ne 0 ]; then
+        if [ "$edited" -ne 0 ]; then
             enable_cfilters=false
             dialog --title "Floresta-Installer (Set enable filters)" --msgbox "❌ Enable filters input canceled. Returning to setup menu." 8 45
             check_dialog_escape
@@ -1062,8 +1070,7 @@ interactive_ask_assume_valid() {
 
     if dialog --title "Floresta-Installer" --yesno "Do you want to use 'assume-valid'?\n\nThis option assumes that scripts before this height are valid." 15 60; then
         check_dialog_escape
-        interactive_assume_valid
-        if [ $? -ne 0 ]; then
+        if ! interactive_assume_valid; then
             assume_valid="" # Clear invalid value
             dialog --title "Floresta-Installer" --msgbox "❌ Invalid BLOCK_HEIGHT detected. Must be a numeric value." 8 45
             check_dialog_escape
@@ -1241,18 +1248,19 @@ interactive_ask_for_add_descriptors() {
 # wallet_descriptors array and show a confirmation.
 # If the user provides an invalid one, clear the list and restart the process.
 interactive_add_descriptor() {
-    local temp_file=$(mktemp)
+    local temp_file
+    temp_file=$(mktemp)
     echo "" >"$temp_file"
 
     while true; do
+        # shellcheck disable=SC2094
         dialog --title "Floresta" \
             --editbox "$temp_file" 15 80 2>"$temp_file"
 
         edited=$?
         check_dialog_escape
 
-        result=$?
-        if [ result -ne 0 ]; then
+        if [ "$edited" -ne 0 ]; then
             rm -f "$temp_file"
             return 1
         fi
@@ -1354,7 +1362,7 @@ interactive_review() {
     review_message+="Proxy:              $([ -n "$proxy" ] && echo "$proxy" || echo "Not configured")\n"
     review_message+="ZeroMQ:             $([ -n "$zeromq" ] && echo "$zeromq" || echo "Not configured")\n"
     review_message+="Connect to:         $([ -n "$connect" ] && echo "$connect" || echo "Not configured")\n"
-    review_message+="Filters:            $([ -n "$filters_start_height" ] && echo $filters_start_height || echo "Not configured")\n"
+    review_message+="Filters:            $([ -n "$filters_start_height" ] && echo "$filters_start_height" || echo "Not configured")\n"
     review_message+="Assume valid:       $([ -n "$assume_valid" ] && echo "$assume_valid" || echo "Not configured")\n"
     review_message+="Assume utreexo:     $assume_utreexo\n"
     review_message+="Enable TLS:         $enable_tls\n"
@@ -1401,7 +1409,6 @@ main() {
         if [ "$uninstall_mode" = true ]; then
             clear
             uninstall_floresta
-            exit 0
         else
             interactive_setup
         fi
