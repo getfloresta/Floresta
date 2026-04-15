@@ -114,14 +114,8 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             vout,
             script,
             height_hint,
-        } => serde_json::to_string_pretty(&client.find_tx_out(
-            txid,
-            vout,
-            script,
-            height_hint.unwrap_or(0),
-        )?)?,
+        } => serde_json::to_string_pretty(&client.find_tx_out(txid, vout, script, height_hint)?)?,
         Methods::GetMemoryInfo { mode } => {
-            let mode = mode.unwrap_or("stats".to_string());
             serde_json::to_string_pretty(&client.get_memory_info(mode)?)?
         }
         Methods::GetRpcInfo => serde_json::to_string_pretty(&client.get_rpc_info()?)?,
@@ -337,7 +331,7 @@ pub enum Methods {
     )]
     DisconnectNode {
         node_address: String,
-        node_id: Option<usize>,
+        node_id: Option<u32>,
     },
 
     #[command(name = "findtxout")]

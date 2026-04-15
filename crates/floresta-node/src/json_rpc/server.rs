@@ -321,7 +321,7 @@ async fn handle_json_rpc_request(
             let vout = get_numeric(&params, 1, "vout")?;
             let script = get_string(&params, 2, "script")?;
             let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_numeric(&params, 3, "height")?;
+            let height = get_optional_field(&params, 3, "height", get_numeric)?.unwrap_or(0);
 
             let state = state.clone();
             state.find_tx_out(txid, vout, script, height).await
