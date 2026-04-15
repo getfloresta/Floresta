@@ -39,11 +39,11 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain):
     while time.time() < timeout:
         floresta_info = florestad.rpc.get_blockchain_info()
         if (
-            floresta_info["height"]
+            floresta_info["headers"]
             == utreexod.rpc.get_block_count()
             == bitcoind.rpc.get_block_count()
             == blocks
-            and not floresta_info["ibd"]
+            and not floresta_info["initialblockdownload"]
         ):
             break
 
@@ -55,7 +55,9 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain):
         except Exception as e:
             log.error(f"Error fetching block from peer: {e}")
 
-    assert floresta_info["height"] == blocks and not floresta_info["ibd"]
+    assert (
+        floresta_info["headers"] == blocks and not floresta_info["initialblockdownload"]
+    )
 
     log.info("Comparing gettxout results between Floresta and Bitcoind...")
     for height in range(2, blocks):
