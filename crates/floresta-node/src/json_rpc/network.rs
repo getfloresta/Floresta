@@ -58,7 +58,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         &self,
         node_address: String,
         command: String,
-        v2transport: bool,
+        v2transport: Option<bool>,
     ) -> Result<Value> {
         // Try to parse both IP address and port.
         let (addr, port) = if let Ok(socket_addr) = node_address.parse::<SocketAddr>() {
@@ -81,6 +81,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
             (ip, default_port)
         };
+
+        let v2transport = v2transport.unwrap_or(self.default_connection_is_v2);
 
         let _ = match command.as_str() {
             "add" => self.node.add_peer(addr, port, v2transport).await,
