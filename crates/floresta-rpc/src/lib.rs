@@ -159,18 +159,7 @@ mod tests {
 
         assert_eq!(gbi.blocks, 0);
         assert_eq!(gbi.chain, "regtest".to_owned());
-        assert!(gbi.initialblockdownload);
-        assert_eq!(gbi.leaf_count, 0);
-        assert_eq!(gbi.root_hashes, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_get_roots() {
-        let (_proc, client) = start_florestad();
-
-        let gbi = client.get_blockchain_info().expect("rpc not working");
-
-        assert_eq!(gbi.root_hashes, Vec::<String>::new());
+        assert!(gbi.initial_block_download);
     }
 
     #[test]

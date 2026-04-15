@@ -66,8 +66,8 @@ class ChainReorgTest:
 
         florestad_info = self.florestad.rpc.get_blockchain_info()
         utreexod_info = self.utreexod.rpc.get_blockchain_info()
-        assert florestad_info["best_block"] == utreexod_info["bestblockhash"]
-        assert florestad_info["height"] == utreexod_info["blocks"]
+        assert florestad_info["bestblockhash"] == utreexod_info["bestblockhash"]
+        assert florestad_info["headers"] == utreexod_info["blocks"]
 
     def mine_blocks(self, blocks):
         """Request Utreexod to generate blocks and wait for Florestad to sync."""
