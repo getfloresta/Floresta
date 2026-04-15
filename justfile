@@ -87,7 +87,7 @@ doc-check:
 
 # Format code and run configured linters
 lint:
-    @just fmt
+    @just fmt --check
     @just doc-check
 
     # 1) Run with no features
@@ -101,13 +101,9 @@ lint:
     # Lint the functional tests
     @just test-functional-uv-fmt
 
-# Format code
-fmt:
-    cargo +nightly fmt --all
-
-# Checks the formatting
-format:
-    cargo +nightly fmt --all --check
+# Format Rust code (pass '--check' to verify without modifying)
+fmt *args="":
+    cargo +nightly fmt --all {{ args }}
 
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
@@ -118,7 +114,7 @@ test-features arg="":
 lint-features arg="":
     @just check-command "cargo-hack" "lint-features" "cargo install cargo-hack --locked --version 0.6.34"
 
-    @just fmt
+    @just fmt --check
     @just doc-check
     @just spell-check
 

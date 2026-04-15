@@ -103,7 +103,7 @@
                 rustfmt-hook = {
                   enable = true;
                   name = "rustfmt-hook";
-                  entry = "${pkgs.just}/bin/just format";
+                  entry = "${pkgs.just}/bin/just fmt --check";
                   language = "system";
                   stages = [ "pre-commit" ];
                   types = [ "rust" ];
