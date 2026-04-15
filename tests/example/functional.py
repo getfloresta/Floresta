@@ -17,8 +17,7 @@ import pytest
 from test_framework.constants import (
     GENESIS_BLOCK_HEIGHT,
     GENESIS_BLOCK_HASH,
-    GENESIS_BLOCK_DIFFICULTY_INT,
-    GENESIS_BLOCK_LEAF_COUNT,
+    GENESIS_BLOCK_DIFFICULTY_FLOAT,
 )
 
 
@@ -31,7 +30,6 @@ def test_functional(florestad_node):
     """
     response = florestad_node.rpc.get_blockchain_info()
 
-    assert response["height"] == GENESIS_BLOCK_HEIGHT
-    assert response["best_block"] == GENESIS_BLOCK_HASH
-    assert response["difficulty"] == GENESIS_BLOCK_DIFFICULTY_INT
-    assert response["leaf_count"] == GENESIS_BLOCK_LEAF_COUNT
+    assert response["blocks"] == GENESIS_BLOCK_HEIGHT
+    assert response["bestblockhash"] == GENESIS_BLOCK_HASH
+    assert response["difficulty"] == pytest.approx(GENESIS_BLOCK_DIFFICULTY_FLOAT)

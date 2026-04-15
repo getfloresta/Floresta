@@ -12,8 +12,9 @@ require the versionbits state machine; those keys are present in bitcoind's
 response but skipped on the floresta side.
 """
 
-import time
 import pytest
+
+from test_framework.util import wait_for_chain_sync
 
 TIMEOUT_SECONDS = 30
 MINE_BLOCKS = 10
@@ -35,16 +36,7 @@ def test_get_deployment_info(florestad_bitcoind_utreexod_with_chain):
     """
     florestad, bitcoind, utreexod = florestad_bitcoind_utreexod_with_chain(MINE_BLOCKS)
 
-    end = time.time() + TIMEOUT_SECONDS
-    while time.time() < end:
-        if (
-            florestad.rpc.get_block_count()
-            == bitcoind.rpc.get_block_count()
-            == utreexod.rpc.get_block_count()
-            == MINE_BLOCKS
-        ):
-            break
-        time.sleep(0.5)
+    wait_for_chain_sync(florestad, bitcoind, utreexod, MINE_BLOCKS, TIMEOUT_SECONDS)
 
     floresta_info = florestad.rpc.get_deployment_info()
     bitcoind_info = bitcoind.rpc.get_deployment_info()

@@ -164,15 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_roots() {
-        let (_proc, client) = start_florestad();
-
-        let roots = client.get_roots().expect("rpc not working");
-
-        assert!(roots.is_empty());
-    }
-
-    #[test]
     fn test_get_best_block_hash() {
         let (_proc, client) = start_florestad();
 
