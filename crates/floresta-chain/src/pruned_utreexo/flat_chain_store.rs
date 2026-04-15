@@ -1652,12 +1652,13 @@ mod tests {
 
         let size = store.size_on_disk().unwrap();
 
-        // Sum of the four mmap regions plus the accumulator file. At init the accumulator
-        // file is empty, so the total should equal the sum of the four mapped files.
-        let expected = (store.headers.len()
-            + store.metadata.len()
-            + store.block_index.index_map.len()
-            + store.fork_headers.len()) as u64;
+        // Expected bytes from the config values in `get_test_chainstore`,
+        // block_index (32_768 × u32) + headers (32_768 × HashedDiskHeader)
+        // + fork_headers (10_000 rounds to 16_384 × HashedDiskHeader) + metadata + 0 (acc file).
+        let expected = (32_768 * size_of::<u32>()
+            + 32_768 * size_of::<HashedDiskHeader>()
+            + 16_384 * size_of::<HashedDiskHeader>()
+            + size_of::<Metadata>()) as u64;
 
         assert_eq!(size, expected);
         assert!(size > 0);
