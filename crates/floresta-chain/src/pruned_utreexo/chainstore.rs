@@ -72,6 +72,13 @@ pub trait ChainStore {
     /// If you're using a database that already checks for integrity by itself,
     /// this can safely be a no-op.
     fn check_integrity(&self) -> Result<(), Self::Error>;
+
+    /// Returns the total size on disk, in bytes, of the data this store persists.
+    ///
+    /// The returned value is the sum of the sizes of each backing file managed by
+    /// this store. Implementations should not include the size of any enclosing
+    /// directory or unrelated data.
+    fn size_on_disk(&self) -> Result<u64, Self::Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

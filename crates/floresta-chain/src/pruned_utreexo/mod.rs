@@ -128,6 +128,9 @@ pub trait BlockchainInterface {
 
     /// Returns the amount of [`Work`] associated with a given chain tip
     fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error>;
+
+    /// Returns the total size on disk, in bytes, of the chain data persisted by this backend.
+    fn size_on_disk(&self) -> Result<u64, Self::Error>;
 }
 
 /// [UpdatableChainstate] is a contract that a is expected from a chainstate
@@ -360,6 +363,10 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
         T::get_fork_point(self, block)
+    }
+
+    fn size_on_disk(&self) -> Result<u64, Self::Error> {
+        T::size_on_disk(self)
     }
 }
 

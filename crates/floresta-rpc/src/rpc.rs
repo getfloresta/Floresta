@@ -6,6 +6,7 @@ use bitcoin::block::Header as BlockHeader;
 use bitcoin::BlockHash;
 use bitcoin::Txid;
 use corepc_types::v29::GetTxOut;
+use corepc_types::v30::GetBlockchainInfo;
 use serde_json::Number;
 use serde_json::Value;
 
@@ -28,7 +29,7 @@ pub trait FlorestaRPC {
     /// This method returns a bunch of information about the chain we are on, including
     /// the current height, the best block hash, the difficulty, and whether we are
     /// currently in IBD (Initial Block Download) mode.
-    fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes>;
+    fn get_blockchain_info(&self) -> Result<GetBlockchainInfo>;
     /// Returns the hash of the best (tip) block in the most-work fully-validated chain.
     fn get_best_block_hash(&self) -> Result<BlockHash>;
     /// Returns the hash of the block at the given height
@@ -327,7 +328,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call("getblockheader", &[Value::String(hash.to_string())])
     }
 
-    fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes> {
+    fn get_blockchain_info(&self) -> Result<GetBlockchainInfo> {
         self.call("getblockchaininfo", &[])
     }
 

@@ -1122,6 +1122,16 @@ impl ChainStore for FlatChainStore {
         unsafe { self.do_flush() }
     }
 
+    fn size_on_disk(&self) -> Result<u64, Self::Error> {
+        let headers_size = self.headers.len() as u64;
+        let metadata_size = self.metadata.len() as u64;
+        let block_index_size = self.block_index.index_map.len() as u64;
+        let fork_headers_size = self.fork_headers.len() as u64;
+        let accumulator_size = self.accumulator_file.metadata()?.len();
+
+        Ok(headers_size + metadata_size + block_index_size + fork_headers_size + accumulator_size)
+    }
+
     fn save_roots_for_block(&mut self, roots: Vec<u8>, height: u32) -> Result<(), Self::Error> {
         let index = Index::new(height)?;
 
@@ -1666,6 +1676,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_size_on_disk() {
+        let store = get_test_chainstore(None).unwrap();
+
+        let size = store.size_on_disk().unwrap();
+
+        // Sum of the four mmap regions plus the accumulator file. At init the accumulator
+        // file is empty, so the total should equal the sum of the four mapped files.
+        let expected = (store.headers.len()
+            + store.metadata.len()
+            + store.block_index.index_map.len()
+            + store.fork_headers.len()) as u64;
+
+        assert_eq!(size, expected);
+        assert!(size > 0);
     }
 
     #[test]
