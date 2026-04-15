@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::fmt::Debug;
-use std::vec;
 
 use bitcoin::BlockHash;
 use bitcoin::Txid;
@@ -9,6 +8,7 @@ use corepc_types::v29::GetTxOut;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::v30::GetDeploymentInfo;
+use serde::Serialize;
 use serde_json::Number;
 use serde_json::Value;
 
@@ -138,7 +138,7 @@ pub trait FlorestaRPC {
     ///
     /// The peer can be referenced either by node_address or node_id.
     /// If referencing by node_id, an empty string must be passed as the node_address.
-    fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value>;
+    fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<Value>;
     /// Finds an specific utxo in the chain
     ///
     /// You can use this to look for a utxo. If it exists, it will return the amount and
@@ -149,12 +149,12 @@ pub trait FlorestaRPC {
         tx_id: Txid,
         outpoint: u32,
         script: String,
-        height_hint: u32,
+        height_hint: Option<u32>,
     ) -> Result<Value>;
     /// Returns statistics about Floresta's memory usage.
     ///
     /// Returns zeroed values for all runtimes that are not *-gnu or MacOS.
-    fn get_memory_info(&self, mode: String) -> Result<GetMemInfoRes>;
+    fn get_memory_info(&self, mode: Option<String>) -> Result<GetMemInfoRes>;
     /// Returns stats about our RPC server
     fn get_rpc_info(&self) -> Result<GetRpcInfoRes>;
     #[doc = include_str!("../../../doc/rpc/uptime.md")]
@@ -185,25 +185,25 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         tx_id: Txid,
         outpoint: u32,
         script: String,
-        height_hint: u32,
+        height_hint: Option<u32>,
     ) -> Result<Value> {
-        self.call(
-            "findtxout",
-            &[
-                Value::String(tx_id.to_string()),
-                Value::Number(Number::from(outpoint)),
-                Value::String(script),
-                Value::Number(Number::from(height_hint)),
-            ],
-        )
+        let params = rpc_params([
+            tx_id.into(),
+            outpoint.into(),
+            script.into(),
+            height_hint.into(),
+        ]);
+
+        self.call("findtxout", &params)
     }
 
     fn uptime(&self) -> Result<u32> {
         self.call("uptime", &[])
     }
 
-    fn get_memory_info(&self, mode: String) -> Result<GetMemInfoRes> {
-        self.call("getmemoryinfo", &[Value::String(mode)])
+    fn get_memory_info(&self, mode: Option<String>) -> Result<GetMemInfoRes> {
+        let params = rpc_params([mode.into()]);
+        self.call("getmemoryinfo", &params)
     }
 
     fn get_rpc_info(&self) -> Result<GetRpcInfoRes> {
@@ -216,26 +216,15 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         command: AddNodeCommand,
         v2transport: Option<bool>,
     ) -> Result<Value> {
-        let mut params = vec![Value::String(node), Value::String(command.to_string())];
-
-        if let Some(v2transport) = v2transport {
-            params.push(Value::Bool(v2transport));
-        }
+        let params = rpc_params([node.into(), command.to_string().into(), v2transport.into()]);
 
         self.call("addnode", &params)
     }
 
-    fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value> {
-        match node_id {
-            Some(node_id) => self.call(
-                "disconnectnode",
-                &[
-                    Value::String(node_address),
-                    Value::Number(Number::from(node_id)),
-                ],
-            ),
-            None => self.call("disconnectnode", &[Value::String(node_address)]),
-        }
+    fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<Value> {
+        let params = rpc_params([node_address.into(), node_id.into()]);
+
+        self.call("disconnectnode", &params)
     }
 
     fn stop(&self) -> Result<String> {
@@ -249,19 +238,16 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         use_timestamp: bool,
         confidence: RescanConfidence,
     ) -> Result<bool> {
-        let start_height = start_height.unwrap_or(0u32);
+        let params = rpc_params([
+            start_height.into(),
+            stop_height.into(),
+            use_timestamp.into(),
+            serde_json::to_value(&confidence)
+                .expect("RescanConfidence implements Ser/De")
+                .into(),
+        ]);
 
-        let stop_height = stop_height.unwrap_or(0u32);
-
-        self.call(
-            "rescanblockchain",
-            &[
-                Value::Number(Number::from(start_height)),
-                Value::Number(Number::from(stop_height)),
-                Value::Bool(use_timestamp),
-                serde_json::to_value(&confidence).expect("RescanConfidence implements Ser/De"),
-            ],
-        )
+        self.call("rescanblockchain", &params)
     }
 
     fn get_roots(&self) -> Result<Vec<String>> {
@@ -269,15 +255,9 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
-        let verbosity = verbosity.unwrap_or(1);
+        let params = rpc_params([hash.into(), verbosity.into()]);
 
-        self.call(
-            "getblock",
-            &[
-                Value::String(hash.to_string()),
-                Value::Number(Number::from(verbosity)),
-            ],
-        )
+        self.call("getblock", &params)
     }
 
     fn get_block_count(&self) -> Result<u32> {
@@ -285,10 +265,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_deployment_info(&self, blockhash: Option<BlockHash>) -> Result<GetDeploymentInfo> {
-        let params = match blockhash {
-            Some(h) => vec![Value::String(h.to_string())],
-            None => vec![],
-        };
+        let params = rpc_params([blockhash.into()]);
         self.call("getdeploymentinfo", &params)
     }
 
@@ -297,32 +274,18 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut> {
-        let result: serde_json::Value = self.call(
-            "gettxout",
-            &[
-                Value::String(tx_id.to_string()),
-                Value::Number(Number::from(outpoint)),
-            ],
-        )?;
+        let params = rpc_params([tx_id.into(), outpoint.into()]);
+
+        let result: serde_json::Value = self.call("gettxout", &params)?;
         if result.is_null() {
             return Err(Error::TxOutNotFound);
         }
+
         serde_json::from_value(result).map_err(Error::Serde)
     }
 
     fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Option<String> {
-        let params: Vec<Value> = match blockhash {
-            Some(blockhash) => vec![
-                serde_json::to_value(txids)
-                    .expect("Unreachable, Vec<Txid> can be parsed into a json value"),
-                Value::String(blockhash.to_string()),
-            ],
-            None => {
-                let txids = serde_json::to_value(txids)
-                    .expect("Unreachable, Vec<Txid> can be parsed into a json value");
-                vec![txids]
-            }
-        };
+        let params = rpc_params([txids.into(), blockhash.into()]);
         self.call("gettxoutproof", &params).ok()
     }
 
@@ -343,7 +306,8 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
-        self.call("getblockhash", &[Value::Number(Number::from(height))])
+        let params = rpc_params([height.into()]);
+        self.call("getblockhash", &params)
     }
 
     fn get_raw_transaction(
@@ -351,21 +315,19 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         tx_id: Txid,
         verbosity: Option<u8>,
     ) -> Result<GetRawTransactionRes> {
-        let mut params = vec![Value::String(tx_id.to_string())];
-
-        if let Some(verbosity) = verbosity {
-            params.push(Value::Number(Number::from(verbosity)));
-        }
+        let params = rpc_params([tx_id.into(), verbosity.into()]);
 
         self.call("getrawtransaction", &params)
     }
 
     fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        self.call("loaddescriptor", &[Value::String(descriptor)])
+        let params = rpc_params([descriptor.into()]);
+        self.call("loaddescriptor", &params)
     }
 
     fn get_block_filter(&self, height: u32) -> Result<String> {
-        self.call("getblockfilter", &[Value::Number(Number::from(height))])
+        let params = rpc_params([height.into()]);
+        self.call("getblockfilter", &params)
     }
 
     fn get_block_header(
@@ -373,10 +335,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         hash: BlockHash,
         verbosity: Option<bool>,
     ) -> Result<GetBlockHeaderRes> {
-        let mut params = vec![Value::String(hash.to_string())];
-        if let Some(verbosity) = verbosity {
-            params.push(Value::Bool(verbosity));
-        }
+        let params = rpc_params([hash.into(), verbosity.into()]);
         self.call("getblockheader", &params)
     }
 
@@ -385,7 +344,8 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        self.call("sendrawtransaction", &[Value::String(tx)])
+        let params = rpc_params([tx.into()]);
+        self.call("sendrawtransaction", &params)
     }
 
     fn list_descriptors(&self) -> Result<Vec<String>> {
@@ -398,5 +358,155 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
         self.call("getaddrmaninfo", &[])
+    }
+}
+
+enum RpcArg {
+    Value(Value),
+    Optional(Option<Value>),
+}
+
+impl From<String> for RpcArg {
+    fn from(v: String) -> Self {
+        Self::Value(Value::String(v))
+    }
+}
+
+impl From<&str> for RpcArg {
+    fn from(v: &str) -> Self {
+        Self::Value(Value::String(v.to_owned()))
+    }
+}
+
+impl From<bool> for RpcArg {
+    fn from(v: bool) -> Self {
+        Self::Value(Value::Bool(v))
+    }
+}
+
+impl From<u32> for RpcArg {
+    fn from(v: u32) -> Self {
+        Self::Value(Value::Number(Number::from(v)))
+    }
+}
+
+impl From<Txid> for RpcArg {
+    fn from(value: Txid) -> Self {
+        Self::Value(Value::String(value.to_string()))
+    }
+}
+
+impl From<BlockHash> for RpcArg {
+    fn from(value: BlockHash) -> Self {
+        Self::Value(Value::String(value.to_string()))
+    }
+}
+
+impl<T: Serialize> From<Vec<T>> for RpcArg {
+    fn from(v: Vec<T>) -> Self {
+        let values: Vec<Value> = v
+            .into_iter()
+            .filter_map(|item| serde_json::to_value(item).ok())
+            .collect();
+        Self::Value(Value::Array(values))
+    }
+}
+
+impl<T: Serialize> From<Option<T>> for RpcArg {
+    fn from(v: Option<T>) -> Self {
+        Self::Optional(v.and_then(|x| serde_json::to_value(x).ok()))
+    }
+}
+
+impl From<Value> for RpcArg {
+    fn from(v: Value) -> Self {
+        Self::Value(v)
+    }
+}
+
+fn rpc_params(args: impl IntoIterator<Item = RpcArg>) -> Vec<Value> {
+    args.into_iter()
+        .map(|arg| match arg {
+            RpcArg::Value(v) => v,
+            RpcArg::Optional(Some(v)) => v,
+            RpcArg::Optional(None) => Value::Null,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rpc_arg_from_string() {
+        let arg = RpcArg::from("test".to_string());
+        match arg {
+            RpcArg::Value(Value::String(s)) => assert_eq!(s, "test"),
+            _ => panic!("Expected RpcArg::Value"),
+        }
+    }
+
+    #[test]
+    fn test_rpc_arg_from_bool() {
+        let arg = RpcArg::from(true);
+        match arg {
+            RpcArg::Value(Value::Bool(b)) => assert!(b),
+            _ => panic!("Expected RpcArg::Value with bool"),
+        }
+    }
+
+    #[test]
+    fn test_rpc_arg_from_option_some() {
+        let opt: Option<u32> = Some(42);
+        let arg = RpcArg::from(opt);
+        match arg {
+            RpcArg::Optional(Some(Value::Number(n))) => {
+                assert_eq!(n.as_u64(), Some(42));
+            }
+            _ => panic!("Expected RpcArg::Optional(Some(...))"),
+        }
+    }
+
+    #[test]
+    fn test_rpc_arg_from_option_none() {
+        let opt: Option<u32> = None;
+        let arg = RpcArg::from(opt);
+        match arg {
+            RpcArg::Optional(None) => {}
+            _ => panic!("Expected RpcArg::Optional(None)"),
+        }
+    }
+
+    #[test]
+    fn test_rpc_params_preserves_null_for_none() {
+        let params = rpc_params([
+            "node1".into(),
+            true.into(),
+            Some(123u32).into(),
+            None::<u32>.into(),
+            None::<String>.into(),
+            "node2".into(),
+            Some(321u32).into(),
+        ]);
+
+        // Should have only 3 elements (None was filtered)
+        assert_eq!(params.len(), 7);
+        assert!(matches!(params[0], Value::String(ref s) if s == "node1"));
+        assert!(matches!(params[1], Value::Bool(true)));
+        assert!(matches!(params[2], Value::Number(_)));
+        assert!(matches!(params[3], Value::Null));
+        assert!(matches!(params[4], Value::Null));
+        assert!(matches!(params[5], Value::String(ref s) if s == "node2"));
+        assert!(matches!(params[6], Value::Number(_)));
+    }
+
+    #[test]
+    fn test_rpc_params_all_none() {
+        let params = rpc_params([None::<u32>.into(), None::<String>.into()]);
+
+        assert_eq!(params.len(), 2);
+        assert!(matches!(params[0], Value::Null));
+        assert!(matches!(params[1], Value::Null));
     }
 }
