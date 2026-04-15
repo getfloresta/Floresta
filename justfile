@@ -92,6 +92,7 @@ lint:
     @just toml-fmt --check
     @just sh-fmt --check
     @just sh-lint
+    @just docker-lint
     @just doc-check
 
     # 1) Run with no features
@@ -136,6 +137,11 @@ sh-lint:
     @just check-command shellcheck sh-lint "https://github.com/koalaman/shellcheck"
     shellcheck {{ shell-files }}
 
+# Lint Dockerfiles with hadolint
+docker-lint:
+    @just check-command hadolint docker-lint "https://github.com/hadolint/hadolint"
+    hadolint Dockerfile
+
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
     @just check-command "cargo-hack" "test-features" "cargo install cargo-hack --locked --version 0.6.34"
@@ -150,6 +156,7 @@ lint-features arg="":
     @just toml-fmt --check
     @just sh-fmt --check
     @just sh-lint
+    @just docker-lint
     @just doc-check
     @just spell-check
 

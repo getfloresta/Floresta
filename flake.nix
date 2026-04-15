@@ -73,6 +73,7 @@
               taplo
               shellcheck
               shfmt
+              hadolint
               python312
               uv
               gcc
@@ -102,6 +103,17 @@
                 flake-checker = {
                   enable = true;
                   stages = [ "pre-commit" ];
+                };
+                hadolint-hook = {
+                  enable = true;
+                  name = "hadolint-hook";
+                  entry = "${pkgs.just}/bin/just docker-lint";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "file" ];
+                  files = "Dockerfile";
+                  pass_filenames = false;
+                  verbose = true;
                 };
                 shfmt-hook = {
                   enable = true;

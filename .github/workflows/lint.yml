@@ -50,6 +50,16 @@ jobs:
       - name: Run shellcheck
         run: shellcheck contrib/clean_data.sh contrib/feature_matrix.sh contrib/dist/gen_manpages.sh contrib/install.sh tests/prepare.sh tests/run.sh
 
+  docker-lint:
+    name: Dockerfile Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
   rust-lint:
     name: Rust Lint
     runs-on: ubuntu-latest
