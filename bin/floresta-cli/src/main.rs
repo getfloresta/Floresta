@@ -104,10 +104,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             node,
             command,
             v2transport,
-        } => {
-            let transport = v2transport.unwrap_or(false);
-            serde_json::to_string_pretty(&client.add_node(node, command, transport)?)?
-        }
+        } => serde_json::to_string_pretty(&client.add_node(node, command, v2transport)?)?,
         Methods::DisconnectNode {
             node_address,
             node_id,

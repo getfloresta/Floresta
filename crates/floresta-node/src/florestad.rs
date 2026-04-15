@@ -478,6 +478,7 @@ impl Florestad {
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
                 format!("{data_dir}/debug.log"),
+                !self.config.allow_v1_fallback,
             ));
 
             if self.json_rpc.set(server).is_err() {

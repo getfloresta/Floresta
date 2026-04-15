@@ -116,7 +116,12 @@ pub trait FlorestaRPC {
     /// If the `v2transport` option is set, we won't retry connecting using the old, unencrypted
     /// P2P protocol.
     #[doc = include_str!("../../../doc/rpc/addnode.md")]
-    fn add_node(&self, node: String, command: AddNodeCommand, v2transport: bool) -> Result<Value>;
+    fn add_node(
+        &self,
+        node: String,
+        command: AddNodeCommand,
+        v2transport: Option<bool>,
+    ) -> Result<Value>;
     /// Immediately disconnect from a peer.
     ///
     /// The peer can be referenced either by node_address or node_id.
@@ -191,15 +196,19 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call("getrpcinfo", &[])
     }
 
-    fn add_node(&self, node: String, command: AddNodeCommand, v2transport: bool) -> Result<Value> {
-        self.call(
-            "addnode",
-            &[
-                Value::String(node),
-                Value::String(command.to_string()),
-                Value::Bool(v2transport),
-            ],
-        )
+    fn add_node(
+        &self,
+        node: String,
+        command: AddNodeCommand,
+        v2transport: Option<bool>,
+    ) -> Result<Value> {
+        let mut params = vec![Value::String(node), Value::String(command.to_string())];
+
+        if let Some(v2transport) = v2transport {
+            params.push(Value::Bool(v2transport));
+        }
+
+        self.call("addnode", &params)
     }
 
     fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value> {
