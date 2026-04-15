@@ -310,6 +310,10 @@ mod tests {
     impl BlockchainInterface for MockBlockchainInterface {
         type Error = MockBlockchainError;
 
+        fn size_on_disk(&self) -> Result<u64, Self::Error> {
+            Ok(0)
+        }
+
         fn get_block_header(&self, hash: &BlockHash) -> Result<Header, Self::Error> {
             self.headers
                 .get(hash)
