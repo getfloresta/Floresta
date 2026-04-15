@@ -88,6 +88,7 @@ doc-check:
 # Format code and run configured linters
 lint:
     @just fmt --check
+    @just just-fmt --check
     @just doc-check
 
     # 1) Run with no features
@@ -105,6 +106,10 @@ lint:
 fmt *args="":
     cargo +nightly fmt --all {{ args }}
 
+# Format justfile (pass '--check' to verify without modifying)
+just-fmt *args="":
+    just --fmt --unstable {{ args }}
+
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
     @just check-command "cargo-hack" "test-features" "cargo install cargo-hack --locked --version 0.6.34"
@@ -115,6 +120,7 @@ lint-features arg="":
     @just check-command "cargo-hack" "lint-features" "cargo install cargo-hack --locked --version 0.6.34"
 
     @just fmt --check
+    @just just-fmt --check
     @just doc-check
     @just spell-check
 

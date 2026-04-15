@@ -100,6 +100,17 @@
                   enable = true;
                   stages = [ "pre-commit" ];
                 };
+                justfmt-hook = {
+                  enable = true;
+                  name = "justfmt-hook";
+                  entry = "${pkgs.just}/bin/just just-fmt --check";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "file" ];
+                  files = "justfile";
+                  pass_filenames = false;
+                  verbose = true;
+                };
                 rustfmt-hook = {
                   enable = true;
                   name = "rustfmt-hook";

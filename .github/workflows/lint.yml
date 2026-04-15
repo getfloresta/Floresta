@@ -13,10 +13,19 @@ jobs:
       - name: Run typos
         uses: crate-ci/typos@v1
 
+  just-lint:
+    name: Justfile Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - name: Check justfile formatting
+        run: just --fmt --check --unstable
+
   rust-lint:
     name: Rust Lint
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@cargo-hack
