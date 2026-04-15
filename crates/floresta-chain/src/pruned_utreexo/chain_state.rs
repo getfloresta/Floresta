@@ -1042,6 +1042,10 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         read_lock!(self).acc.to_owned()
     }
 
+    fn size_on_disk(&self) -> Result<u64, Self::Error> {
+        Ok(read_lock!(self).chainstore.size_on_disk()?)
+    }
+
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
         let fork_point = self.find_fork_point(&self.get_block_header(&block)?)?;
         Ok(fork_point.block_hash())
