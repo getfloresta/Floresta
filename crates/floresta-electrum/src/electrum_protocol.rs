@@ -728,8 +728,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             .is_ok_and(|h| h == height);
 
         if height_matches {
-            let serialized = serde_json::to_string(&result)
-                .expect("serde_json::Value is always serializable");
+            let serialized =
+                serde_json::to_string(&result).expect("serde_json::Value is always serializable");
             for client in self.clients.values() {
                 if client.write(serialized.as_bytes()).is_err() {
                     info!("Could not write to client {client:?}");
