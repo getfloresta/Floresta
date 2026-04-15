@@ -121,6 +121,9 @@ at your option.
 ## Acknowledgments
 
 * [Utreexo](https://eprint.iacr.org/2019/611)
+  * [BIP-0181: Accumulator Specification](https://github.com/kcalvinalvin/bips/blob/2025-08-10-utreexo-bips/bip-0181.md)
+  * [BIP-0182: Transaction and Block Validation](https://github.com/kcalvinalvin/bips/blob/2025-08-10-utreexo-bips/bip-0182.md)
+  * [BIP-0183: Network Messages Specification](https://github.com/kcalvinalvin/bips/blob/2025-08-10-utreexo-bips/bip-0183.md)
 * [Bitcoin Core](https://github.com/bitcoin/bitcoin)
 * [Rust Bitcoin](https://github.com/rust-bitcoin/rust-bitcoin)
 * [Rust Miniscript](https://github.com/rust-bitcoin/rust-miniscript)
