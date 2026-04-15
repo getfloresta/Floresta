@@ -347,8 +347,12 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 };
                 let mut final_utxos = Vec::new();
                 for (utxo, prevout) in utxos.into_iter() {
-                    let height = self.address_cache.get_height(&prevout.txid).unwrap_or(0);
-                    let position = self.address_cache.get_position(&prevout.txid).unwrap_or(0);
+                    let Some(height) = self.address_cache.get_height(&prevout.txid) else {
+                        return json_rpc_res!(request, []);
+                    };
+                    let Some(position) = self.address_cache.get_position(&prevout.txid) else {
+                        return json_rpc_res!(request, []);
+                    };
 
                     final_utxos.push(json!({
                         "height": height,
@@ -493,18 +497,18 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
             "blockchain.transaction.get_merkle" => {
                 let tx_id = get_arg!(request, Txid, 0);
-                let proof = self.address_cache.get_merkle_proof(&tx_id);
-                let height = self.address_cache.get_height(&tx_id);
-                if let Some(proof) = proof {
-                    let result = json!({
-                        "merkle": proof.hashes,
-                        "block_height": height.unwrap_or(0),
-                        "pos": proof.pos
-                    });
-                    return json_rpc_res!(request, result);
-                }
-
-                Err(super::error::Error::InvalidParams)
+                let Some(proof) = self.address_cache.get_merkle_proof(&tx_id) else {
+                    return Err(super::error::Error::InvalidParams);
+                };
+                let Some(height) = self.address_cache.get_height(&tx_id) else {
+                    return Err(super::error::Error::InvalidParams);
+                };
+                let result = json!({
+                    "merkle": proof.hashes,
+                    "block_height": height,
+                    "pos": proof.pos
+                });
+                json_rpc_res!(request, result)
             }
             //blockchain.transaction.id_from_pos
             // TODO: Create an actual histogram
@@ -518,7 +522,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let genesis_hash = self
                     .chain
                     .get_block_hash(0)
-                    .expect("genesis block is always in the chain store");
+                    .expect("Genesis block is always in the chain store");
                 let res = json!(
                     {
                         "genesis_hash": genesis_hash,
@@ -543,14 +547,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         }
     }
 
-    pub async fn rebroadcast_mempool_transactions(&self) {
-        let unconfirmed = match self.address_cache.find_unconfirmed() {
-            Ok(txs) => txs,
-            Err(e) => {
-                error!("Could not fetch unconfirmed transactions for rebroadcast: {e}");
-                return;
-            }
-        };
+    pub async fn rebroadcast_mempool_transactions(&self) -> Result<(), super::error::Error> {
+        let unconfirmed = self
+            .address_cache
+            .find_unconfirmed()
+            .map_err(|e| super::error::Error::WatchOnly(Box::new(e)))?;
         for tx in unconfirmed {
             let txid = tx.compute_txid();
             if let Ok(Err(e)) = self.node_interface.broadcast_transaction(tx.clone()).await {
@@ -559,6 +560,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 debug!("Rebroadcasted transaction {txid}");
             }
         }
+        Ok(())
     }
 
     pub async fn main_loop(mut self) -> Result<(), crate::error::Error> {
@@ -594,7 +596,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 .unwrap_or(true);
 
             if should_rebroadcast {
-                self.rebroadcast_mempool_transactions().await;
+                self.rebroadcast_mempool_transactions().await?;
                 self.last_rebroadcast = Some(Instant::now());
             }
 
@@ -654,7 +656,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         let Ok(blocks) =
             cfilters.match_any(_addresses, start_height, stop_height, self.chain.clone())
         else {
-            info!("Could not match block filters");
+            error!("Could not match block filters");
             self.addresses_to_scan.extend(addresses); // push them back to get a retry
             return Ok(());
         };
@@ -665,13 +667,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         for block in blocks {
             let block = self.node_interface.get_block(block).await;
             let Ok(Some(block)) = block else {
-                info!("Could not get block from node");
+                error!("Could not get block from node");
                 self.addresses_to_scan.extend(addresses); // push them back to get a retry
                 return Ok(());
             };
 
             let Ok(Some(height)) = self.chain.get_block_height(&block.block_hash()) else {
-                info!("Could not get block height: {}", block.block_hash());
+                error!("Could not get block height: {}", block.block_hash());
                 self.addresses_to_scan.extend(addresses); // push them back to get a retry
                 return Ok(());
             };
@@ -719,23 +721,19 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             self.address_cache.bump_height(height);
         }
 
-        match self.chain.get_height() {
-            Ok(chain_height) => {
-                if chain_height == height {
-                    for client in &mut self.clients.values() {
-                        let res = client.write(
-                            serde_json::to_string(&result)
-                                .expect("serde_json::Value is always serializable")
-                                .as_bytes(),
-                        );
-                        if res.is_err() {
-                            info!("Could not write to client {client:?}");
-                        }
-                    }
+        let height_matches = self
+            .chain
+            .get_height()
+            .inspect_err(|e| error!("Could not get chain height: {e:?}"))
+            .is_ok_and(|h| h == height);
+
+        if height_matches {
+            let serialized = serde_json::to_string(&result)
+                .expect("serde_json::Value is always serializable");
+            for client in self.clients.values() {
+                if client.write(serialized.as_bytes()).is_err() {
+                    info!("Could not write to client {client:?}");
                 }
-            }
-            Err(e) => {
-                error!("Could not get chain height: {e:?}");
             }
         }
 
@@ -762,11 +760,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     let res = self.handle_client_request(client.clone(), req).await;
 
                     if let Ok(res) = res {
-                        client.write(
-                            serde_json::to_string(&res)
-                                .expect("serde_json::Value is always serializable")
-                                .as_bytes(),
-                        )?;
+                        let res = serde_json::to_string(&res)
+                            .expect("serde_json::Value is always serializable");
+                        client.write(res.as_bytes())?;
                     } else {
                         let res = json!({
                             "jsonrpc": "2.0",
@@ -777,11 +773,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                             },
                             "id": id
                         });
-                        client.write(
-                            serde_json::to_string(&res)
-                                .expect("serde_json::Value is always serializable")
-                                .as_bytes(),
-                        )?;
+                        let res = serde_json::to_string(&res)
+                            .expect("serde_json::Value is always serializable");
+                        client.write(res.as_bytes())?;
                     }
                 } else if let Ok(requests) = serde_json::from_str::<Vec<Request>>(&msg) {
                     let mut results = Vec::new();
@@ -809,11 +803,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                         }
                     }
                     if let Some(client) = self.clients.get(&client) {
-                        client.write(
-                            serde_json::to_string(&results)
-                                .expect("serde_json::Value is always serializable")
-                                .as_bytes(),
-                        )?;
+                        let results = serde_json::to_string(&results)
+                            .expect("serde_json::Value is always serializable");
+                        client.write(results.as_bytes())?;
                     }
                 } else {
                     let res = json!({
@@ -826,11 +818,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                         "id": null
                     });
                     if let Some(client) = self.clients.get(&client) {
-                        client.write(
-                            serde_json::to_string(&res)
-                                .expect("serde_json::Value is always serializable")
-                                .as_bytes(),
-                        )?;
+                        let res = serde_json::to_string(&res)
+                            .expect("serde_json::Value is always serializable");
+                        client.write(res.as_bytes())?;
                     }
                 }
             }
@@ -858,11 +848,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "method": "blockchain.scripthash.subscribe",
                     "params": [hash, status_hash]
                 });
-                if let Err(err) = client.write(
-                    serde_json::to_string(&notify)
-                        .expect("serde_json::Value is always serializable")
-                        .as_bytes(),
-                ) {
+                let notify = serde_json::to_string(&notify)
+                    .expect("serde_json::Value is always serializable");
+                if let Err(err) = client.write(notify.as_bytes()) {
                     error!("{err}");
                 }
             }
