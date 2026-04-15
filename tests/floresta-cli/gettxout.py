@@ -84,12 +84,14 @@ class GetTxoutTest(FlorestaTestFramework):
                 self.florestad.rpc.get_block_count()
                 == self.bitcoind.rpc.get_block_count()
                 == self.utreexod.rpc.get_block_count()
-            ) and not self.florestad.rpc.get_blockchain_info()["ibd"]:
+            ) and not self.florestad.rpc.get_blockchain_info()["initialblockdownload"]:
                 break
 
             time.sleep(1)
 
-        self.assertFalse(self.florestad.rpc.get_blockchain_info()["ibd"])
+        self.assertFalse(
+            self.florestad.rpc.get_blockchain_info()["initialblockdownload"]
+        )
 
         self.log("=== Get a list of transactions")
         blocks = self.florestad.rpc.get_block_count()

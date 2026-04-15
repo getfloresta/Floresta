@@ -1352,6 +1352,7 @@ mod tests {
     use super::FlatChainStore;
     use super::FlatChainStoreConfig;
     use super::FlatChainstoreError;
+    use super::HashedDiskHeader;
     use super::Index;
     use super::FLAT_CHAINSTORE_MAGIC;
     use super::FLAT_CHAINSTORE_VERSION;
