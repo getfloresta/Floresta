@@ -42,6 +42,7 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 
+use crate::error::Error;
 use crate::get_arg;
 use crate::json_rpc_res;
 use crate::request::Request;
@@ -92,27 +93,22 @@ impl<S: AsyncStream> TcpActor<S> {
                 result = lines.next_line() => {
                     match result {
                         Ok(Some(line)) => {
-                            match self.message_transmitter.send(Message::Message((self.client_id, line))) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!("main loop receiver dropped: {e:?}");
-                                    break;
-                                }
+                            if let Err(e) = self.message_transmitter.send(Message::Message((self.client_id, line))) {
+                                error!("main loop receiver dropped: {e:?}");
+                                break;
                             }
                         }
                         Ok(None) => {
                             info!("Client closed connection: {}", self.client_id);
-                            match self.message_transmitter.send(Message::Disconnect(self.client_id)) {
-                                Ok(_) => {}
-                                Err(e) => error!("main loop receiver dropped: {e:?}"),
+                            if let Err(e) = self.message_transmitter.send(Message::Disconnect(self.client_id)) {
+                                error!("main loop receiver dropped: {e:?}");
                             }
                             break;
                         }
                         Err(e) => {
                             error!("Error reading from client: {e:?}");
-                            match self.message_transmitter.send(Message::Disconnect(self.client_id)) {
-                                Ok(_) => {}
-                                Err(e) => error!("main loop receiver dropped: {e:?}"),
+                            if let Err(e) = self.message_transmitter.send(Message::Disconnect(self.client_id)) {
+                                error!("main loop receiver dropped: {e:?}");
                             }
                             break;
                         }
@@ -256,7 +252,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         &mut self,
         client: Arc<Client>,
         request: Request,
-    ) -> Result<Value, super::error::Error> {
+    ) -> Result<Value, Error> {
         // Methods are in alphabetical order
         match request.method.as_str() {
             "blockchain.block.header" => {
@@ -264,11 +260,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = self
                     .chain
                     .get_block_hash(height as u32)
-                    .map_err(|_| super::error::Error::InvalidParams)?;
+                    .map_err(|_| Error::InvalidParams)?;
                 let header = self
                     .chain
                     .get_block_header(&hash)
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
                 let header = serialize_hex(&header);
                 json_rpc_res!(request, header)
             }
@@ -281,12 +277,12 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     let hash = self
                         .chain
                         .get_block_hash(height as u32)
-                        .map_err(|_| super::error::Error::InvalidParams)?;
+                        .map_err(|_| Error::InvalidParams)?;
 
                     let header = self
                         .chain
                         .get_block_header(&hash)
-                        .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                        .map_err(|e| Error::Blockchain(Box::new(e)))?;
                     let header = serialize_hex(&header);
                     headers.push_str(&header);
                 }
@@ -301,11 +297,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let (height, hash) = self
                     .chain
                     .get_best_block()
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
                 let header = self
                     .chain
                     .get_block_header(&hash)
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
                 let result = json!({
                     "height": height,
                     "hex": serialize_hex(&header)
@@ -461,10 +457,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             // end of experimental endpoints
             "blockchain.transaction.broadcast" => {
                 let tx = get_arg!(request, String, 0);
-                let hex: Vec<_> =
-                    Vec::from_hex(&tx).map_err(|_| super::error::Error::InvalidParams)?;
-                let tx: Transaction =
-                    deserialize(&hex).map_err(|_| super::error::Error::InvalidParams)?;
+                let hex: Vec<_> = Vec::from_hex(&tx).map_err(|_| Error::InvalidParams)?;
+                let tx: Transaction = deserialize(&hex).map_err(|_| Error::InvalidParams)?;
 
                 let txid = tx.compute_txid();
                 if let Err(e) = self
@@ -473,7 +467,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     .await?
                 {
                     error!("Could not broadcast transaction {txid} due to {e}");
-                    return Err(super::error::Error::Mempool(Box::new(e)));
+                    return Err(Error::Mempool(Box::new(e)));
                 };
 
                 let updated = self
@@ -493,15 +487,15 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     return json_rpc_res!(request, tx);
                 }
 
-                Err(super::error::Error::InvalidParams)
+                Err(Error::InvalidParams)
             }
             "blockchain.transaction.get_merkle" => {
                 let tx_id = get_arg!(request, Txid, 0);
                 let Some(proof) = self.address_cache.get_merkle_proof(&tx_id) else {
-                    return Err(super::error::Error::InvalidParams);
+                    return Err(Error::InvalidParams);
                 };
                 let Some(height) = self.address_cache.get_height(&tx_id) else {
-                    return Err(super::error::Error::InvalidParams);
+                    return Err(Error::InvalidParams);
                 };
                 let result = json!({
                     "merkle": proof.hashes,
@@ -543,15 +537,15 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 [format!("Floresta {}", env!("CARGO_PKG_VERSION")), "1.4"]
             ),
 
-            _ => Err(super::error::Error::InvalidParams),
+            _ => Err(Error::InvalidParams),
         }
     }
 
-    pub async fn rebroadcast_mempool_transactions(&self) -> Result<(), super::error::Error> {
+    pub async fn rebroadcast_mempool_transactions(&self) -> Result<(), Error> {
         let unconfirmed = self
             .address_cache
             .find_unconfirmed()
-            .map_err(|e| super::error::Error::WatchOnly(Box::new(e)))?;
+            .map_err(|e| Error::WatchOnly(Box::new(e)))?;
         for tx in unconfirmed {
             let txid = tx.compute_txid();
             if let Ok(Err(e)) = self.node_interface.broadcast_transaction(tx.clone()).await {
@@ -623,10 +617,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     /// Usually, we'll rely on compact block filters to speed things up. If
     /// we don't have compact block filters, we may rescan using the older,
     /// more bandwidth-intensive method of actually downloading blocks.
-    async fn rescan_for_addresses(
-        &mut self,
-        addresses: Vec<ScriptBuf>,
-    ) -> Result<(), super::error::Error> {
+    async fn rescan_for_addresses(&mut self, addresses: Vec<ScriptBuf>) -> Result<(), Error> {
         // If compact block filters are enabled, use them. Otherwise, fallback
         // to the "old-school" rescaning.
         if let Some(cfilters) = &self.block_filters {
@@ -646,7 +637,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         start_height: Option<u32>,
         stop_height: Option<u32>,
         addresses: Vec<ScriptBuf>,
-    ) -> Result<(), super::error::Error> {
+    ) -> Result<(), Error> {
         // By default, we look from 1..tip
         let mut _addresses = addresses
             .iter()
@@ -656,7 +647,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         let Ok(blocks) =
             cfilters.match_any(_addresses, start_height, stop_height, self.chain.clone())
         else {
-            error!("Could not match block filters");
+            error!("Could not find matching block filters");
             self.addresses_to_scan.extend(addresses); // push them back to get a retry
             return Ok(());
         };
@@ -877,17 +868,13 @@ pub async fn client_accept_loop(
                             tls_stream,
                             message_transmitter.clone(),
                         ));
-                        match message_transmitter
-                            .send(Message::NewClient((client.client_id, client)))
+                        if let Err(e) =
+                            message_transmitter.send(Message::NewClient((client.client_id, client)))
                         {
-                            Ok(_) => {
-                                id_count += 1;
-                            }
-                            Err(e) => {
-                                error!("main loop receiver dropped: {e:?}");
-                                break;
-                            }
+                            error!("main loop receiver dropped: {e:?}");
+                            break;
                         }
+                        id_count += 1;
                     }
                     Err(e) => {
                         error!("TLS accept error: {e:?}");
@@ -895,15 +882,13 @@ pub async fn client_accept_loop(
                 }
             } else {
                 let client = Arc::new(Client::new(id_count, stream, message_transmitter.clone()));
-                match message_transmitter.send(Message::NewClient((client.client_id, client))) {
-                    Ok(_) => {
-                        id_count += 1;
-                    }
-                    Err(e) => {
-                        error!("main loop receiver dropped: {e:?}");
-                        break;
-                    }
+                if let Err(e) =
+                    message_transmitter.send(Message::NewClient((client.client_id, client)))
+                {
+                    error!("main loop receiver dropped: {e:?}");
+                    break;
                 }
+                id_count += 1;
             }
         }
     }
@@ -963,13 +948,13 @@ macro_rules! json_rpc_res {
 }
 
 #[macro_export]
-/// Returns and parses a value from the request json or fails with [super::error::Error::InvalidParams].
+/// Returns and parses a value from the request json or fails with [Error::InvalidParams].
 macro_rules! get_arg {
     ($request:ident, $arg_type:ty, $idx:literal) => {
         if let Some(arg) = $request.params.get($idx) {
             serde_json::from_value::<$arg_type>(arg.clone())?
         } else {
-            return Err(super::error::Error::InvalidParams);
+            return Err(Error::InvalidParams);
         }
     };
 }
