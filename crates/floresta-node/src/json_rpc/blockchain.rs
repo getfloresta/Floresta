@@ -6,6 +6,7 @@ use bitcoin::Address;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::MerkleBlock;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Script;
 use bitcoin::ScriptBuf;
@@ -21,6 +22,7 @@ use corepc_types::v29::GetTxOut;
 use corepc_types::v30::DeploymentInfo;
 use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
+use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::v30::GetDeploymentInfo;
 use floresta_chain::buried_deployments_for;
 use floresta_chain::extensions::HeaderExt;
@@ -31,7 +33,6 @@ use serde_json::json;
 use tracing::debug;
 
 use super::res::GetBlockHeaderRes;
-use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
 use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
@@ -245,7 +246,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     // getblockchaininfo
-    pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes, JsonRpcError> {
+    pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfo, JsonRpcError> {
         let (height, hash) = self
             .chain
             .get_best_block()
@@ -254,49 +255,61 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .chain
             .get_validation_index()
             .map_err(|_| JsonRpcError::Chain)?;
-        let ibd = self.chain.is_in_ibd();
+        let initial_block_download = self.chain.is_in_ibd();
         let latest_header = self
             .chain
             .get_block_header(&hash)
             .map_err(|_| JsonRpcError::Chain)?;
-        let latest_work = latest_header
+        let chain_work = latest_header
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
-        let latest_block_time = latest_header.time;
-        let leaf_count = self.chain.acc().leaves as u32;
-        let root_count = self.chain.acc().roots.len() as u32;
-        let root_hashes = self
-            .chain
-            .acc()
-            .roots
-            .into_iter()
-            .map(|r| r.to_string())
-            .collect();
 
-        let validated_blocks = self
-            .chain
-            .get_validation_index()
-            .map_err(|_| JsonRpcError::Chain)?;
-
-        let validated_percentage = if height != 0 {
-            validated_blocks as f32 / height as f32
+        let verification_progress = if height != 0 {
+            f64::from(validated) / f64::from(height)
         } else {
             0.0
         };
 
-        Ok(GetBlockchainInfoRes {
-            best_block: hash.to_string(),
-            height,
-            ibd,
-            validated,
-            latest_work,
-            latest_block_time,
-            leaf_count,
-            root_count,
-            root_hashes,
-            chain: self.network.to_string(),
-            difficulty: latest_header.difficulty(self.chain.get_params()) as u64,
-            progress: validated_percentage,
+        let blocks = i64::from(validated);
+        let headers = i64::from(height);
+        let best_block_hash = hash.to_string();
+        let bits = latest_header.get_bits_hex();
+        let target = latest_header.get_target_hex();
+        let difficulty = latest_header.get_difficulty();
+        let time = i64::from(latest_header.time);
+        let median_time = i64::from(latest_header.calculate_median_time_past(&self.chain)?);
+        let size_on_disk = self.chain.size_on_disk().map_err(|_| JsonRpcError::Chain)?;
+        let prune_height = Some(headers + 1);
+
+        let chain = match self.network {
+            Network::Bitcoin => "main",
+            Network::Testnet => "test",
+            Network::Testnet4 => "testnet4",
+            Network::Signet => "signet",
+            Network::Regtest => "regtest",
+        }
+        .to_string();
+
+        Ok(GetBlockchainInfo {
+            chain,
+            blocks,
+            headers,
+            best_block_hash,
+            bits,
+            target,
+            difficulty,
+            time,
+            median_time,
+            verification_progress,
+            initial_block_download,
+            chain_work,
+            size_on_disk,
+            pruned: true,
+            prune_height,
+            automatic_pruning: Some(true),
+            prune_target_size: Some(0),
+            signet_challenge: None,
+            warnings: vec![],
         })
     }
 
