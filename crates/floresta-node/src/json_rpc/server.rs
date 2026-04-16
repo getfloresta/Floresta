@@ -96,24 +96,21 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_transaction(&self, tx_id: Txid, verbosity: bool) -> Result<Value> {
-        if verbosity {
-            let tx = self
-                .wallet
-                .get_transaction(&tx_id)
-                .ok_or(JsonRpcError::TxNotFound)?;
-            let raw = self.make_raw_transaction(tx)?;
-            return Ok(serde_json::to_value(raw).expect(SERIALIZATION_EXPECT_MSG));
-        }
-
-        self.wallet
+    fn get_raw_transaction(&self, tx_id: Txid, verbosity: u8) -> Result<Value> {
+        let tx = self
+            .wallet
             .get_transaction(&tx_id)
-            .and_then(|tx| {
-                self.make_raw_transaction(tx)
-                    .ok()
-                    .and_then(|v| serde_json::to_value(v).ok())
-            })
-            .ok_or(JsonRpcError::TxNotFound)
+            .ok_or(JsonRpcError::TxNotFound)?;
+
+        match verbosity {
+            0 => serde_json::to_value(serialize_hex(&tx.tx))
+                .map_err(|e| JsonRpcError::Decode(e.to_string())),
+            1 => {
+                let raw_tx = self.make_raw_transaction(tx)?;
+                serde_json::to_value(raw_tx).map_err(|e| JsonRpcError::Decode(e.to_string()))
+            }
+            _ => Err(JsonRpcError::InvalidVerbosityLevel),
+        }
     }
 
     fn load_descriptor(&self, descriptor: String) -> Result<bool> {
@@ -379,10 +376,10 @@ async fn handle_json_rpc_request(
 
         "getrawtransaction" => {
             let txid = get_at(&params, 0, "txid")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", false)?;
+            let verbosity = get_with_default(&params, 1, "verbosity", 0)?;
 
             state
-                .get_transaction(txid, verbosity)
+                .get_raw_transaction(txid, verbosity)
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
