@@ -68,8 +68,8 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         Methods::GetTxOutProof { txids, blockhash } => {
             serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash))?
         }
-        Methods::GetTransaction { txid, .. } => {
-            serde_json::to_string_pretty(&client.get_transaction(txid, Some(true))?)?
+        Methods::GetRawTransaction { txid, verbose } => {
+            serde_json::to_string_pretty(&client.get_raw_transaction(txid, verbose)?)?
         }
         Methods::RescanBlockchain {
             start_block,
@@ -213,8 +213,8 @@ pub enum Methods {
     },
 
     /// Returns the transaction, assuming it is cached by our watch only wallet
-    #[command(name = "gettransaction")]
-    GetTransaction { txid: Txid, verbose: Option<bool> },
+    #[command(name = "getrawtransaction")]
+    GetRawTransaction { txid: Txid, verbose: Option<u32> },
 
     #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
     #[command(

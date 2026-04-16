@@ -88,19 +88,23 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_transaction(&self, tx_id: Txid, verbosity: Option<bool>) -> Result<Value> {
-        if verbosity == Some(true) {
-            let tx = self
-                .wallet
-                .get_transaction(&tx_id)
-                .ok_or(JsonRpcError::TxNotFound);
-            return tx.map(|tx| serde_json::to_value(self.make_raw_transaction(tx)).unwrap());
+    fn get_raw_transaction(&self, tx_id: Txid, verbosity: u32) -> Result<Value> {
+        if verbosity > 1 {
+            return Err(JsonRpcError::InvalidVerbosityLevel);
         }
 
-        self.wallet
+        let tx = self
+            .wallet
             .get_transaction(&tx_id)
-            .and_then(|tx| serde_json::to_value(self.make_raw_transaction(tx)).ok())
-            .ok_or(JsonRpcError::TxNotFound)
+            .ok_or(JsonRpcError::TxNotFound)?;
+
+        match verbosity {
+            0 => serde_json::to_value(serialize_hex(&tx.tx))
+                .map_err(|e| JsonRpcError::Decode(e.to_string())),
+            1 => serde_json::to_value(self.make_raw_transaction(tx))
+                .map_err(|e| JsonRpcError::Decode(e.to_string())),
+            _ => return Err(JsonRpcError::InvalidVerbosityLevel),
+        }
     }
 
     fn load_descriptor(&self, descriptor: String) -> Result<bool> {
@@ -306,10 +310,10 @@ async fn handle_json_rpc_request(
 
         "getrawtransaction" => {
             let txid = get_hash(&params, 0, "txid")?;
-            let verbosity = get_optional_field(&params, 1, "verbosity", get_bool)?;
+            let verbosity = get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(0);
 
             state
-                .get_transaction(txid, verbosity)
+                .get_raw_transaction(txid, verbosity)
                 .map(|v| serde_json::to_value(v).unwrap())
         }
 
