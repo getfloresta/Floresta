@@ -156,18 +156,31 @@ impl Mempool {
 
         let mut txs = Vec::new();
         for (_, tx) in self.transactions.iter() {
-            let tx_size = tx.transaction.weight().to_wu();
-            if size + tx_size > max_block_weight {
-                break;
-            }
-
             if txs.contains(&tx.transaction) {
                 continue;
             }
 
-            size += tx_size;
             let short_txid = self.hasher.hash_one(tx.transaction.compute_txid());
-            self.add_transaction_to_block(&mut txs, short_txid);
+
+            let mut dependent_txns = Vec::new();
+            self.add_transaction_to_block(&mut dependent_txns, short_txid);
+
+            let total_txn_weight: u64 = dependent_txns
+                .iter()
+                .filter(|txn| !txs.contains(txn))
+                .map(|txn| txn.weight().to_wu())
+                .sum();
+
+            if size + total_txn_weight > max_block_weight {
+                continue;
+            }
+
+            for txn in dependent_txns {
+                if !txs.contains(&txn) {
+                    size += txn.weight().to_wu();
+                    txs.push(txn);
+                }
+            }
         }
 
         let mut block = Block {
