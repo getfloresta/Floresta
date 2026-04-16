@@ -213,7 +213,13 @@ pub enum Methods {
     },
 
     /// Returns the transaction, assuming it is cached by our watch only wallet
-    #[command(name = "getrawtransaction")]
+    #[doc = include_str!("../../../doc/rpc/getrawtransaction.md")]
+    #[command(
+        name = "getrawtransaction",
+        about = "Returns raw transaction data for a given txid from wallet cache (controlled by verbosity level)",
+        long_about = Some(include_str!("../../../doc/rpc/getrawtransaction.md")),
+        disable_help_subcommand = true
+    )]
     GetRawTransaction { txid: Txid, verbose: Option<u32> },
 
     #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
