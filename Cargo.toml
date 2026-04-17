@@ -12,6 +12,7 @@ members = [
     "crates/floresta-watch-only",
     "crates/floresta-wire",
     "crates/floresta-mempool",
+    "crates/floresta-wasm",
 
     # Binaries
     "bin/florestad",

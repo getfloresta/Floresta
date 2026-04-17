@@ -33,6 +33,9 @@ config.toml
 # uv python management
 .venv
 
+# wasm-pack output
+crates/floresta-wasm/pkg/
+
 # tests pycache
 tests/**/__pycache__/*
 
