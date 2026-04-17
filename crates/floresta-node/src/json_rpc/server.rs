@@ -274,8 +274,10 @@ async fn handle_json_rpc_request(
 
         "getblockheader" => {
             let hash = get_hash(&params, 0, "block_hash")?;
+            let verbose =
+                get_optional_field(&params, 1, "verbose", get_bool)?.unwrap_or(true);
             state
-                .get_block_header(hash)
+                .get_block_header(hash, verbose)
                 .map(|h| serde_json::to_value(h).unwrap())
         }
 

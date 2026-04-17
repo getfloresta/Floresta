@@ -226,9 +226,13 @@ mod tests {
         let (_proc, client) = start_florestad();
 
         let blockhash = client.get_block_hash(0).expect("rpc not working");
-        let block_header = client.get_block_header(blockhash).expect("rpc not working");
+        let block_header = client.get_block_header(blockhash, None).expect("rpc not working");
 
-        assert_eq!(block_header.block_hash(), blockhash);
+        assert_eq!(block_header["hash"].as_str().unwrap(), blockhash.to_string());
+        assert!(block_header["mediantime"].is_number());
+        assert!(block_header["chainwork"].is_string());
+        assert!(block_header["target"].is_string());
+        assert!(block_header["nTx"].is_number());
     }
 
     #[test]

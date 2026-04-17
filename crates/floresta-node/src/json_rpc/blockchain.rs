@@ -24,6 +24,8 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
+use super::res::GetBlockHeaderRes;
+use super::res::GetBlockHeaderVerboseRes;
 use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
@@ -302,10 +304,64 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     // getblockheader
-    pub(super) fn get_block_header(&self, hash: BlockHash) -> Result<Header, JsonRpcError> {
-        self.chain
+    pub(super) fn get_block_header(
+        &self,
+        hash: BlockHash,
+        verbose: bool,
+    ) -> Result<GetBlockHeaderRes, JsonRpcError> {
+        let header = self
+            .chain
             .get_block_header(&hash)
-            .map_err(|_| JsonRpcError::BlockNotFound)
+            .map_err(|_| JsonRpcError::BlockNotFound)?;
+
+        if !verbose {
+            let hex = serialize_hex(&header);
+            return Ok(GetBlockHeaderRes::Hex(hex));
+        }
+
+        let height = header.get_height(&self.chain)?;
+        let median_time = header.calculate_median_time_past(&self.chain)?;
+        let chain_work = header.calculate_chain_work(&self.chain)?.to_string_hex();
+        let confirmations = header.get_confirmations(&self.chain)? as i64;
+        let version_hex = header.get_version_hex();
+        let bits = header.get_bits_hex();
+        let difficulty = header.get_difficulty();
+        let target = header.get_target_hex();
+
+        let next_block_hash = header
+            .get_next_block_hash(&self.chain)?
+            .map(|h| h.to_string());
+
+        let previous_block_hash = (header.prev_blockhash != BlockHash::all_zeros())
+            .then_some(header.prev_blockhash.to_string());
+
+        // nTx requires the full block; attempt to fetch it, default to 0 if unavailable
+        let n_tx = self
+            .chain
+            .get_block(&hash)
+            .map(|b| b.txdata.len() as i64)
+            .unwrap_or(0);
+
+        let res = GetBlockHeaderVerboseRes {
+            hash: header.block_hash().to_string(),
+            confirmations,
+            height: height as i64,
+            version: header.version.to_consensus(),
+            version_hex,
+            merkle_root: header.merkle_root.to_string(),
+            time: header.time as i64,
+            median_time: median_time as i64,
+            nonce: header.nonce as i64,
+            bits,
+            target,
+            difficulty,
+            chain_work,
+            n_tx,
+            previous_block_hash,
+            next_block_hash,
+        };
+
+        Ok(GetBlockHeaderRes::Verbose(Box::new(res)))
     }
 
     // getblockstats

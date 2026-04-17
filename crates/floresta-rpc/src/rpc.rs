@@ -2,7 +2,6 @@
 
 use core::fmt::Debug;
 
-use bitcoin::block::Header as BlockHeader;
 use bitcoin::BlockHash;
 use bitcoin::Txid;
 use corepc_types::v29::GetTxOut;
@@ -38,11 +37,11 @@ pub trait FlorestaRPC {
     fn get_block_hash(&self, height: u32) -> Result<BlockHash>;
     /// Returns the block header for the given block hash
     ///
-    /// This method returns the block header for the given block hash, as defined
-    /// in the Bitcoin protocol specification. A header contains the block's version,
-    /// the previous block hash, the merkle root, the timestamp, the difficulty target,
-    /// and the nonce.
-    fn get_block_header(&self, hash: BlockHash) -> Result<BlockHeader>;
+    /// If verbose is true (the default), returns a JSON object with detailed header
+    /// information including hash, confirmations, height, version, merkleroot, time,
+    /// mediantime, nonce, bits, target, difficulty, chainwork, nTx, previousblockhash,
+    /// and nextblockhash. If verbose is false, returns the header as a hex-encoded string.
+    fn get_block_header(&self, hash: BlockHash, verbose: Option<bool>) -> Result<Value>;
     /// Gets a transaction from the blockchain
     ///
     /// This method returns a transaction that's cached in our wallet. If the verbosity flag is
@@ -323,8 +322,12 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call("getblockfilter", &[Value::Number(Number::from(height))])
     }
 
-    fn get_block_header(&self, hash: BlockHash) -> Result<BlockHeader> {
-        self.call("getblockheader", &[Value::String(hash.to_string())])
+    fn get_block_header(&self, hash: BlockHash, verbose: Option<bool>) -> Result<Value> {
+        let mut params = vec![Value::String(hash.to_string())];
+        if let Some(v) = verbose {
+            params.push(Value::Bool(v));
+        }
+        self.call("getblockheader", &params)
     }
 
     fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes> {

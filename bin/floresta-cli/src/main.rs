@@ -86,7 +86,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.send_raw_transaction(tx)?)?
         }
         Methods::GetBlockHeader { hash } => {
-            serde_json::to_string_pretty(&client.get_block_header(hash)?)?
+            serde_json::to_string_pretty(&client.get_block_header(hash, None)?)?
         }
         Methods::LoadDescriptor { desc } => {
             serde_json::to_string_pretty(&client.load_descriptor(desc)?)?

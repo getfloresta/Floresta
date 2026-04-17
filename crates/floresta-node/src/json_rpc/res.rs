@@ -131,6 +131,42 @@ pub enum GetBlockRes {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum GetBlockHeaderRes {
+    /// Verbosity 0: hex-encoded serialized header
+    Hex(String),
+    /// Verbosity 1 (default): verbose JSON object
+    Verbose(Box<GetBlockHeaderVerboseRes>),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetBlockHeaderVerboseRes {
+    pub hash: String,
+    pub confirmations: i64,
+    pub height: i64,
+    pub version: i32,
+    #[serde(rename = "versionHex")]
+    pub version_hex: String,
+    #[serde(rename = "merkleroot")]
+    pub merkle_root: String,
+    pub time: i64,
+    #[serde(rename = "mediantime")]
+    pub median_time: i64,
+    pub nonce: i64,
+    pub bits: String,
+    pub target: String,
+    pub difficulty: f64,
+    #[serde(rename = "chainwork")]
+    pub chain_work: String,
+    #[serde(rename = "nTx")]
+    pub n_tx: i64,
+    #[serde(rename = "previousblockhash", skip_serializing_if = "Option::is_none")]
+    pub previous_block_hash: Option<String>,
+    #[serde(rename = "nextblockhash", skip_serializing_if = "Option::is_none")]
+    pub next_block_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RpcError {
     pub code: i32,
     pub message: String,
