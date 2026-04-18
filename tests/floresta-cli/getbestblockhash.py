@@ -38,7 +38,6 @@ class GetBestblockhashTest(FlorestaTestFramework):
             variant=NodeType.UTREEXOD,
             extra_args=[
                 "--miningaddr=bcrt1q4gfcga7jfjmm02zpvrh4ttc5k7lmnq2re52z2y",
-                "--prune=0",
             ],
         )
 
