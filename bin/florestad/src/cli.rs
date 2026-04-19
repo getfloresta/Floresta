@@ -31,11 +31,20 @@ pub struct Cli {
     /// Turn debugging information on
     pub debug: bool,
 
-    #[arg(long)]
-    /// Option for saving log into data_Dir
+    #[arg(long, value_name = "FILE")]
+    /// Specify location of debug log file
     ///
-    /// if set, log will be saved into $DATA_DIR/debug.log.
-    pub log_to_file: bool,
+    /// Specify location of debug log file (default: debug.log). Relative paths
+    /// will be prefixed by the net-specific datadir location.
+    /// Pass --nodebuglogfile to disable writing the log to a file.
+    pub debuglogfile: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    /// Disable writing the log to a file
+    ///
+    /// When set, no log file will be written.
+    /// This overrides --debuglogfile.
+    pub nodebuglogfile: bool,
 
     #[arg(long, value_name = "PATH")]
     /// Where should we store data. This is the directory where we'll store the chainstate,
