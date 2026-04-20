@@ -452,14 +452,31 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     /// If we get a header that doesn't build on top of our best chain, it may cause a reorganization.
     /// We check this here.
     fn maybe_reorg(&self, branch_tip: BlockHeader) -> Result<(), BlockchainError> {
-        let current_tip = self.get_block_header(&self.get_best_block()?.1)?;
+        let current_tip_hash = {
+            let inner = read_lock!(self);
+            inner.best_block.best_block
+        };
+
+        let current_tip = self.get_block_header(&current_tip_hash)?;
         self.check_branch(&branch_tip)?;
 
         let current_work = self.get_branch_work(&current_tip)?;
         let new_work = self.get_branch_work(&branch_tip)?;
         // If the new branch has more work, it becomes the new best chain
         if new_work > current_work {
-            self.reorg(branch_tip)?;
+            let should_reorg = {
+                let inner = read_lock!(self);
+                inner.best_block.best_block == current_tip_hash
+            };
+
+            if should_reorg {
+                self.reorg(branch_tip)?;
+            } else {
+                debug!("Best block changed during reorg decision, storing header for later consideration");
+                self.push_alt_tip(&branch_tip)?;
+                let parent_height = self.get_ancestor(&branch_tip)?.try_height()?;
+                self.update_header(&DiskBlockHeader::InFork(branch_tip, parent_height + 1))?;
+            }
             return Ok(());
         }
         // If the new branch has less work, we just store it as an alternative branch
@@ -1858,6 +1875,83 @@ mod test {
         assert_eq!(
             read_lock!(chain).best_block.best_block,
             headers[1].prev_blockhash
+        );
+    }
+
+    #[test]
+    fn test_concurrent_reorg_toctou_race_condition() {
+
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let file = include_bytes!("../../testdata/signet_headers.zst");
+        let uncompressed: Vec<u8> = zstd::decode_all(Cursor::new(file)).unwrap();
+        let mut buffer = uncompressed.as_slice();
+
+        let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded);
+        let mut headers: Vec<BlockHeader> = Vec::new();
+
+        while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
+            headers.push(header);
+        }
+
+        let initial_headers = headers[..100].to_vec();
+        chain
+            .push_headers(initial_headers, 1)
+            .expect("Failed to push headers");
+
+        let initial_best = chain.get_best_block().expect("Failed to get best block");
+        let initial_best_hash = initial_best.1;
+
+        let chain = Arc::new(chain);
+        let reorg_count = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = vec![];
+
+        for _i in 0..4 {
+            let chain_clone = Arc::clone(&chain);
+            let reorg_count_clone = Arc::clone(&reorg_count);
+
+            let handle = thread::spawn(move || {
+                let current_best = chain_clone
+                    .get_best_block()
+                    .expect("Failed to get best block");
+
+                thread::yield_now();
+
+                let final_best = chain_clone
+                    .get_best_block()
+                    .expect("Failed to get best block");
+
+                if final_best.1 == current_best.1 || final_best.1 == initial_best_hash {
+                    reorg_count_clone.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+
+        let final_best = chain
+            .get_best_block()
+            .expect("Failed to get best block after concurrent access");
+
+        assert!(
+            final_best.1 == initial_best_hash,
+            "Chain state should be consistent: expected {:?}, got {:?}",
+            initial_best_hash,
+            final_best.1
+        );
+
+        let successful_observations = reorg_count.load(Ordering::SeqCst);
+        assert!(
+            successful_observations >= 2,
+            "Expected at least 2 threads to observe valid state, got {}",
+            successful_observations
         );
     }
 }
