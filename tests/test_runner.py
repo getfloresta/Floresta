@@ -51,6 +51,7 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "disconnectnode"),
     ("florestad", "reorg-chain"),
     ("floresta-cli", "getblockcount"),
+    ("floresta-cli", "getdifficulty"),
     ("floresta-cli", "uptime"),
     ("floresta-cli", "getbestblockhash"),
     ("floresta-cli", "getblockhash"),
