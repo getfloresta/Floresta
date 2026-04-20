@@ -248,12 +248,20 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
     }
 
     fn new(database: D) -> AddressCacheInner<D> {
-        let scripts = database.load().expect("Could not load database");
+        let scripts = match database.load() {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to load addresses from the database: {e:?}");
+                Vec::new()
+            }
+        };
+
         if database.get_stats().is_err() {
-            database
-                .save_stats(&Stats::default())
-                .expect("Could not save stats");
+            if let Err(e) = database.save_stats(&Stats::default()) {
+                error!("Failed to save stats to the database: {e:?}");
+            }
         }
+
         let mut address_map = HashMap::new();
         let mut script_set = HashSet::new();
         let mut utxo_index = HashMap::new();
@@ -366,11 +374,12 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
     }
 
     fn maybe_derive_addresses(&mut self) {
-        let stats = self.database.get_stats().unwrap();
-        if stats.transaction_count > (stats.derivation_index as usize * 100) {
-            let res = self.derive_addresses();
-            if res.is_err() {
-                error!("Error deriving addresses: {res:?}");
+        if let Ok(stats) = self.database.get_stats() {
+            if stats.transaction_count > (stats.derivation_index as usize * 100) {
+                let res = self.derive_addresses();
+                if res.is_err() {
+                    error!("Error deriving new addresses: {res:?}");
+                }
             }
         }
     }
@@ -392,11 +401,12 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
         let mut spends = Vec::new();
         for (idx, input) in transaction.input.iter().enumerate() {
             if self.utxo_index.contains_key(&input.previous_output) {
-                let prev_tx = self.get_transaction(&input.previous_output.txid).unwrap();
-                spends.push((
-                    idx,
-                    prev_tx.tx.output[input.previous_output.vout as usize].clone(),
-                ));
+                if let Some(prev_tx) = self.get_transaction(&input.previous_output.txid) {
+                    if let Some(output) = prev_tx.tx.output.get(input.previous_output.vout as usize)
+                    {
+                        spends.push((idx, output.clone()));
+                    }
+                }
             }
         }
         spends
@@ -1008,5 +1018,80 @@ mod test {
 
         assert_eq!(address.transactions.len(), 2);
         assert_eq!(address.utxos.len(), 1);
+    }
+
+    #[test]
+    fn test_find_spend_handles_missing_transaction() {
+        let cache = get_test_cache();
+
+        let tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+            }],
+            output: vec![],
+        };
+
+        let spends = cache.inner.read().unwrap().find_spend(&tx);
+
+        assert!(spends.is_empty());
+    }
+
+    #[test]
+    fn test_find_spend_handles_invalid_output_index() {
+        use bitcoin::consensus::deserialize;
+        use bitcoin::hex::FromHex;
+
+        let cache = get_test_cache();
+
+        let raw_tx = "020000000001017ca523c5e6df0c014e837279ab49be1676a9fe7571c3989aeba1e5d534f4054a0000000000fdffffff01d2410f00000000001600142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a02473044022071b8583ba1f10531b68cb5bd269fb0e75714c20c5a8bce49d8a2307d27a082df022069a978dac00dd9d5761aa48c7acc881617fa4d2573476b11685596b17d437595012103b193d06bd0533d053f959b50e3132861527e5a7a49ad59c5e80a265ff6a77605eece0100";
+
+        let tx_bytes = Vec::from_hex(raw_tx).unwrap();
+        let transaction: bitcoin::Transaction = deserialize(&tx_bytes).unwrap();
+
+        cache.cache_transaction(
+            &transaction,
+            100,
+            999890,
+            crate::MerkleProof::default(),
+            0,
+            0,
+            false,
+            floresta_common::get_spk_hash(&transaction.output[0].script_pubkey),
+        );
+
+        let prev_txid = transaction.compute_txid();
+        let fake_outpoint = bitcoin::OutPoint {
+            txid: prev_txid,
+            vout: 999,
+        };
+
+        {
+            let mut inner = cache.inner.write().unwrap();
+            inner.utxo_index.insert(
+                fake_outpoint,
+                floresta_common::get_spk_hash(&transaction.output[0].script_pubkey),
+            );
+        }
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: fake_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+            }],
+            output: vec![],
+        };
+
+        let spends = cache.inner.read().unwrap().find_spend(&spending_tx);
+
+        assert!(spends.is_empty());
     }
 }
