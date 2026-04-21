@@ -717,9 +717,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
         }
 
-        let transactions = self.address_cache.block_process(&block, height);
-
-        self.wallet_notify(&transactions);
+        match self.address_cache.block_process(&block, height) {
+            Ok(transactions) => self.wallet_notify(&transactions),
+            Err(err) => error!("Error processing block at height {height}: {err}"),
+        }
     }
 
     /// Handles each kind of Message
@@ -1022,20 +1023,22 @@ mod test {
     fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
         let test_id: u32 = rand::random();
         let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
-        let cache = AddressCache::new(cache);
+        let cache = AddressCache::new(cache).unwrap();
 
         // Inserting test transactions in the wallet
         let (transaction, proof) = get_test_transaction();
-        cache.cache_transaction(
-            &transaction,
-            118511,
-            transaction.output[0].value.to_sat(),
-            proof,
-            1,
-            0,
-            false,
-            get_spk_hash(&transaction.output[0].script_pubkey),
-        );
+        cache
+            .cache_transaction(
+                &transaction,
+                118511,
+                transaction.output[0].value.to_sat(),
+                proof,
+                1,
+                0,
+                false,
+                get_spk_hash(&transaction.output[0].script_pubkey),
+            )
+            .unwrap();
 
         Arc::new(cache)
     }

@@ -613,7 +613,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .unwrap()
                     .unwrap();
 
-                wallet.block_process(&block, height);
+                if let Err(err) = wallet.block_process(&block, height) {
+                    error!("Error processing block at height {height}: {err}");
+                }
             }
         }
 
