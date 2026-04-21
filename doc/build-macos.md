@@ -26,7 +26,7 @@ Note: If you run into issues while installing Homebrew or pulling packages, refe
 On the Terminal, using Homebrew, run the following:
 ```bash
 brew update
-brew install gcc pkg-config
+brew install gcc pkg-config boost
 ```
 You'll need Rust and Cargo, refer to [this](https://www.rust-lang.org/) for more details. Minimum support version is rustc 1.74 and newer.
 
