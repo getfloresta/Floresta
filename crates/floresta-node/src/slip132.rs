@@ -9,7 +9,10 @@
 //! Bitcoin SLIP-132 standard implementation for parsing custom xpub/xpriv key
 //! formats
 
+use core::fmt;
 use core::fmt::Debug;
+use core::fmt::Display;
+use core::fmt::Formatter;
 
 use bitcoin::base58;
 use bitcoin::bip32;
@@ -108,6 +111,23 @@ pub enum Error {
 
     /// failure in rust bitcoin library
     InternalFailure,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Base58(e) => write!(f, "Base58 error: {e}"),
+            Error::Hex(e) => write!(f, "Hex error: {e}"),
+            Error::CannotDeriveFromHardenedKey => write!(f, "Cannot derive from hardened key"),
+            Error::InvalidChildNumber(n) => write!(f, "Invalid child number: {n}"),
+            Error::InvalidChildNumberFormat => write!(f, "Invalid child number format"),
+            Error::InvalidDerivationPathFormat => write!(f, "Invalid derivation path format"),
+            Error::UnknownVersion(v) => write!(f, "Unknown version: {v:?}"),
+            Error::WrongExtendedKeyLength(l) => write!(f, "Wrong extended key length: {l}"),
+            Error::UnknownSlip32Prefix => write!(f, "Unknown SLIP32 prefix"),
+            Error::InternalFailure => write!(f, "Internal failure"),
+        }
+    }
 }
 
 impl From<bip32::Error> for Error {

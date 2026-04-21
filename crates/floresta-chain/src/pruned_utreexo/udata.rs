@@ -229,6 +229,16 @@ pub mod proof_util {
         NotPushBytes,
     }
 
+    impl Display for LeafErrorKind {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            match self {
+                LeafErrorKind::EmptyStack => write!(f, "Empty stack"),
+                LeafErrorKind::InvalidInstruction(e) => write!(f, "Invalid instruction: {e}"),
+                LeafErrorKind::NotPushBytes => write!(f, "Not push bytes"),
+            }
+        }
+    }
+
     /// Error while reconstructing a leaf's scriptPubKey, returned by `process_proof`.
     ///
     /// This error is triggered if the input lacks the hashed data required by the
