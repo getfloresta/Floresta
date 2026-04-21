@@ -911,8 +911,7 @@ mod test {
         let (_, script_hash) = get_test_address();
         let cache = get_test_cache();
 
-        cache
-            .cache_transaction(
+        cache.cache_transaction(
                 &transaction,
                 118511,
                 transaction.output[0].value.to_sat(),
@@ -976,8 +975,7 @@ mod test {
         let transaction = Vec::from_hex(transaction).unwrap();
         let transaction = deserialize(&transaction).unwrap();
 
-        cache
-            .cache_transaction(
+        cache.cache_transaction(
                 &transaction,
                 0,
                 transaction.output[1].value.to_sat(),

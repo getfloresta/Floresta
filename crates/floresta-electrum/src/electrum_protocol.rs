@@ -1027,8 +1027,7 @@ mod test {
 
         // Inserting test transactions in the wallet
         let (transaction, proof) = get_test_transaction();
-        cache
-            .cache_transaction(
+        cache.cache_transaction(
                 &transaction,
                 118511,
                 transaction.output[0].value.to_sat(),
