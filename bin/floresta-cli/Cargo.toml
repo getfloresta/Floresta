@@ -17,6 +17,7 @@ categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0"
+dirs = "5"
 bitcoin = { workspace = true }
 clap = { workspace = true, features = ["help"] }
 serde_json = { workspace = true }

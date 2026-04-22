@@ -92,6 +92,9 @@ fn main() {
         tls_key_path: params.tls_key_path,
         allow_v1_fallback: params.allow_v1_fallback,
         backfill: !params.no_backfill,
+        rpc_user: params.rpc_user,
+        rpc_pass: params.rpc_pass,
+        rpc_cookie_file: params.rpc_cookie_file,
     };
 
     #[cfg(unix)]

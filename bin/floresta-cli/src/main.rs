@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Create a new JSON-RPC client using the host from the CLI arguments
-    let client = Client::new(get_host(&cli));
+    let client = build_client(&cli);
 
     // Perform the requested RPC call and get the result
     let res = do_request(&cli, client)?;
@@ -30,6 +30,48 @@ fn main() -> anyhow::Result<()> {
 
     // Return Ok to indicate the program ran successfully
     anyhow::Ok(())
+}
+
+fn build_client(cli: &Cli) -> Client {
+    let host = get_host(cli);
+
+    // Explicit user & password provided by the caller.
+    if let (Some(user), Some(pass)) = (cli.rpc_user.clone(), cli.rpc_password.clone()) {
+        return Client::new_with_auth(host, user, pass);
+    }
+
+    // Explicit cookie file path provided by the caller.
+    if let Some(ref cookie_path) = cli.rpc_cookie_file {
+        if !std::path::Path::new(cookie_path).exists() {
+            std::process::exit(1);
+        }
+        return Client::new_with_cookie(host, cookie_path.clone());
+    }
+
+    let default_cookie = default_cookie_path(cli.network);
+    if std::path::Path::new(&default_cookie).exists() {
+        return Client::new_with_cookie(host, default_cookie);
+    }
+
+    Client::new(host)
+}
+
+/// Returns the default path of the cookie file that `florestad` writes on startup.
+fn default_cookie_path(network: Network) -> String {
+    let mut base = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".floresta");
+
+    match network {
+        Network::Bitcoin => {}
+        Network::Signet => base.push("signet"),
+        Network::Testnet => base.push("testnet3"),
+        Network::Testnet4 => base.push("testnet4"),
+        Network::Regtest => base.push("regtest"),
+    }
+
+    base.push(".cookie");
+    base.to_string_lossy().into_owned()
 }
 
 // Function to determine the RPC host based on CLI arguments and network type
@@ -157,6 +199,9 @@ pub struct Cli {
     /// The RPC password to use
     #[arg(short = 'P', long, value_name = "PASSWORD")]
     pub rpc_password: Option<String>,
+    /// Path to a cookie file to use or generate for JSON-RPC Auth.
+    #[arg(long, value_name = "PATH")]
+    pub rpc_cookie_file: Option<String>,
     /// An actual RPC command to run
     #[command(subcommand)]
     pub methods: Methods,

@@ -185,6 +185,21 @@ pub struct Cli {
     /// This will run in the background and wont't affect node's operation. However,
     /// to disable backfilling, run floresta using this flag.
     pub no_backfill: bool,
+
+    /// Optional username for JSON-RPC HTTP Basic Auth.
+    #[cfg(feature = "json-rpc")]
+    #[arg(long, value_name = "USERNAME")]
+    pub rpc_user: Option<String>,
+
+    /// Optional password for JSON-RPC HTTP Basic Auth.
+    #[cfg(feature = "json-rpc")]
+    #[arg(long, value_name = "PASSWORD")]
+    pub rpc_pass: Option<String>,
+
+    /// Path to a cookie file to use or generate for JSON-RPC Auth.
+    #[cfg(feature = "json-rpc")]
+    #[arg(long, value_name = "PATH")]
+    pub rpc_cookie_file: Option<String>,
 }
 
 impl Cli {
@@ -201,6 +216,20 @@ impl Cli {
                     "--pid-file requires that --daemon be set",
                 )
                 .exit();
+        }
+        #[cfg(feature = "json-rpc")]
+        {
+            let has_user = self.rpc_user.is_some();
+            let has_pass = self.rpc_pass.is_some();
+            if has_user != has_pass {
+                #[cfg(unix)]
+                Cli::command()
+                    .error(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "--rpc-user and --rpc-pass must be provided, or neither",
+                    )
+                    .exit();
+            }
         }
     }
 }

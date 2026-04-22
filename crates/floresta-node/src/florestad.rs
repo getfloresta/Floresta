@@ -62,6 +62,7 @@ use crate::error::FlorestadError;
 use crate::florestad::fs::OpenOptions;
 #[cfg(feature = "json-rpc")]
 use crate::json_rpc;
+use crate::json_rpc::server::AuthConfig;
 use crate::wallet_input::InitialWalletSetup;
 #[cfg(feature = "zmq-server")]
 use crate::zmq::ZMQServer;
@@ -217,6 +218,18 @@ pub struct Config {
     /// and won't affect the node's operation. You may notice that this will take a lot of CPU
     /// and bandwidth to run.
     pub backfill: bool,
+
+    /// Optional username for JSON-RPC HTTP Basic Auth.
+    #[cfg(feature = "json-rpc")]
+    pub rpc_user: Option<String>,
+
+    /// Optional password for JSON-RPC HTTP Basic Auth.
+    #[cfg(feature = "json-rpc")]
+    pub rpc_pass: Option<String>,
+
+    /// Path to a cookie file to use (or generate) for JSON-RPC authentication.
+    #[cfg(feature = "json-rpc")]
+    pub rpc_cookie_file: Option<String>,
 }
 
 impl Config {
@@ -251,6 +264,12 @@ impl Config {
             tls_cert_path: None,
             allow_v1_fallback: false,
             backfill: false,
+            #[cfg(feature = "json-rpc")]
+            rpc_user: None,
+            #[cfg(feature = "json-rpc")]
+            rpc_pass: None,
+            #[cfg(feature = "json-rpc")]
+            rpc_cookie_file: None,
         }
     }
 }
@@ -463,8 +482,31 @@ impl Florestad {
         let wallet = Arc::new(wallet);
 
         // JSON-RPC
-        #[cfg(feature = "json-rpc")]
         {
+            let auth: Option<AuthConfig> = {
+                #[cfg(feature = "json-rpc")]
+                {
+                    if let (Some(user), Some(pass)) =
+                        (self.config.rpc_user.clone(), self.config.rpc_pass.clone())
+                    {
+                        Some(AuthConfig::from_user_pass(user, pass))
+                    } else {
+                        // Use a cookie file – either the specified one,
+                        // or the default location inside the data directory.
+                        let cookie_path = self
+                            .config
+                            .rpc_cookie_file
+                            .clone()
+                            .unwrap_or_else(|| format!("{data_dir}/.cookie"));
+
+                        Some(
+                            AuthConfig::from_cookie_file(&cookie_path)
+                                .expect("Failed to create RPC cookie file"),
+                        )
+                    }
+                }
+            };
+
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
                 blockchain_state.clone(),
                 wallet.clone(),
@@ -478,6 +520,7 @@ impl Florestad {
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
                 format!("{data_dir}/debug.log"),
+                auth,
             ));
 
             if self.json_rpc.set(server).is_err() {

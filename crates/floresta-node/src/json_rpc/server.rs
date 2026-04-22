@@ -2,6 +2,8 @@
 
 use core::net::SocketAddr;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,12 +11,15 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::header::AUTHORIZATION;
 use axum::http::Method;
 use axum::http::Response;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Json;
 use axum::Router;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::hex::FromHex;
@@ -36,6 +41,8 @@ use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_wire::node_interface::NodeInterface;
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use serde_json::json;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -60,9 +67,65 @@ use crate::json_rpc::request::arg_parser::get_string;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::res::RescanConfidence;
 
+/// The username written to the cookie file by floresta when no external credential are given
+const COOKIE_USERNAME: &str = "__cookie__";
+
+/// Length of the randomly generated cookie token.
+const COOKIE_TOKEN_LEN: usize = 32;
+
 pub(super) struct InflightRpc {
     pub method: String,
     pub when: Instant,
+}
+
+/// Holds the rpc credentials
+#[derive(Clone, Debug)]
+pub struct AuthConfig {
+    pub user: String,
+    pub pass: String,
+}
+
+impl AuthConfig {
+    /// Create an [`AuthConfig`] from an explicit username and password.
+    pub fn from_user_pass(user: String, pass: String) -> Self {
+        Self { user, pass }
+    }
+
+    /// Create an [`AuthConfig`] by generating a random cookie token and
+    /// writing to `cookie_path` in the format `__cookie__:<token>`.
+    ///
+    /// Returns the [`AuthConfig`] on success, or an error string on failure.
+    pub fn from_cookie_file(cookie_path: &str) -> Result<Self> {
+        let token: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(COOKIE_TOKEN_LEN)
+            .map(char::from)
+            .collect();
+
+        let cookie_contents = format!("{COOKIE_USERNAME}:{token}");
+
+        // Ensure the parent directory exists before writing.
+        if let Some(parent) = Path::new(cookie_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                JsonRpcError::Decode(format!("Failed to create cookie directory: {e}"))
+            })?;
+        }
+
+        fs::write(cookie_path, &cookie_contents).map_err(|e| {
+            JsonRpcError::Decode(format!("Failed to write cookie file '{cookie_path}': {e}"))
+        })?;
+
+        info!("RPC cookie file written to {cookie_path}");
+
+        Ok(Self {
+            user: COOKIE_USERNAME.to_string(),
+            pass: token,
+        })
+    }
+
+    pub fn verify(&self, user: &str, pass: &str) -> bool {
+        self.user == user && self.pass == pass
+    }
 }
 
 /// Utility trait to ensure that the chain implements all the necessary traits
@@ -83,9 +146,82 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    pub(super) auth: Option<AuthConfig>,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
+
+/// Attempt to extract and verify HTTP Basic Auth credentials
+///
+/// Returns `Ok(())` when authentication succeeds or when its not required, and an
+/// `Err(Response)` containing a ready-to-send `401` response otherwise.
+fn authenticate(
+    headers: &axum::http::HeaderMap,
+    auth: &Option<AuthConfig>,
+) -> std::result::Result<(), Box<Response<Body>>> {
+    let Some(expected) = auth else {
+        // No authentication configured
+        return Ok(());
+    };
+
+    let unauthorized = || {
+        Box::new(
+            Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("Content-Type", "application/json")
+                .header("WWW-Authenticate", "Basic realm=\"floresta\"")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "error": {
+                            "code": -32600,
+                            "message": "Unauthorized",
+                            "data": null
+                        },
+                        "result": null,
+                        "id": null
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+    };
+
+    // Extract the raw `Authorization` header value.
+    let auth_header = match headers.get(AUTHORIZATION) {
+        Some(v) => v,
+        None => return Err(unauthorized()),
+    };
+
+    let auth_str = match auth_header.to_str() {
+        Ok(s) => s,
+        Err(_) => return Err(unauthorized()),
+    };
+
+    let encoded = match auth_str.strip_prefix("Basic ") {
+        Some(e) => e,
+        None => return Err(unauthorized()),
+    };
+
+    // Decode the base64 payload.
+    let decoded_bytes = match BASE64.decode(encoded) {
+        Ok(b) => b,
+        Err(_) => return Err(unauthorized()),
+    };
+    let decoded = match String::from_utf8(decoded_bytes) {
+        Ok(s) => s,
+        Err(_) => return Err(unauthorized()),
+    };
+
+    let mut parts = decoded.splitn(2, ':');
+    let user = parts.next().unwrap_or("");
+    let pass = parts.next().unwrap_or("");
+
+    if expected.verify(user, pass) {
+        Ok(())
+    } else {
+        Err(unauthorized())
+    }
+}
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     fn get_transaction(&self, tx_id: Txid, verbosity: Option<bool>) -> Result<Value> {
@@ -513,8 +649,13 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
 
 async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
+    headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    if let Err(auth_err) = authenticate(&headers, &state.auth) {
+        return *auth_err;
+    }
+
     let req: RpcRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
         Err(e) => {
@@ -749,6 +890,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
+        auth: Option<AuthConfig>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -789,6 +931,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                auth,
             }));
 
         axum::serve(listener, router)

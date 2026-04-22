@@ -31,6 +31,8 @@ floresta-mempool = { workspace = true }
 floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
 metrics = { workspace = true,  optional = true }
+base64 = "0.22.1"
+rand.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1.4"
