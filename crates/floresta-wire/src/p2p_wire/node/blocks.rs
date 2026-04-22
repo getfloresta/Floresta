@@ -357,6 +357,7 @@ where
             BlockValidationErrors::InvalidCoinbase(_)
             | BlockValidationErrors::ScriptValidationError(_)
             | BlockValidationErrors::NullPrevOut
+            | BlockValidationErrors::DuplicateInput
             | BlockValidationErrors::EmptyInputs
             | BlockValidationErrors::EmptyOutputs
             | BlockValidationErrors::ScriptError

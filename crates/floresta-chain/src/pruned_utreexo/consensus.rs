@@ -449,6 +449,30 @@ impl Consensus {
         Ok(())
     }
 
+    /// Returns `true` if the transaction contains duplicate inputs
+    /// (the same `OutPoint` is spent more than once).
+    ///
+    /// Optimized for the most common cases: over 80% of Bitcoin transactions
+    /// have a single input (see <https://mainnet.observer/charts/transactions-1in/>),
+    /// which is handled with no allocation. Two-input transactions are handled
+    /// with a single equality check. Only transactions with three or more inputs
+    /// fall back to a `HashSet`.
+    fn has_duplicate_inputs(inputs: &[TxIn]) -> bool {
+        match inputs.len() {
+            1 => false,
+            2 => inputs[0].previous_output == inputs[1].previous_output,
+            _ => {
+                let mut seen = HashSet::with_capacity(inputs.len());
+                for input in inputs {
+                    if !seen.insert(&input.previous_output) {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
+
     /// Performs consensus checks that are independent of the spent outputs (non-coinbase only).
     /// Returns the total output value as an [`Amount`].
     pub fn check_transaction_context_free(
@@ -469,11 +493,23 @@ impl Consensus {
                 Err(tx_err!(txid, NullPrevOut))?;
             }
 
-            // Check script sizes (current tx scriptsig and TODO witness if present)
+            // Witness size is intentionally not checked here — witness-specific
+            // limits are enforced during script execution, not in context-free checks.
+            // This matches Bitcoin Core's CheckTransaction() which explicitly skips
+            // witness in context-free checks because witness data has not been
+            // checked for malleability at this point.
+            // See: https://github.com/bitcoin/bitcoin/blob/master/src/consensus/tx_check.cpp
             Self::validate_script_size(&input.script_sig, txid)?;
-            // TODO check also witness script size
         }
 
+        // Check for duplicate inputs (CVE-2018-17144).
+        // UpdateCoins does not detect duplicates — a duplicate prevout causes either
+        // a crash or an inflation bug depending on the coins database implementation.
+        // Bitcoin Core catches this explicitly in CheckTransaction() for the same reason.
+        // after:
+        if Self::has_duplicate_inputs(&transaction.input) {
+            Err(tx_err!(txid, DuplicateInput))?;
+        }
         let out_value = Self::total_out_value(transaction)?;
 
         // Sanity check
@@ -1371,6 +1407,24 @@ mod tests {
         match Consensus::check_transaction_context_free(&tx) {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManyCoins)) => (),
             other => panic!("Expected TooManyCoins, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_duplicate_inputs_rejected() {
+        let outpoint = dummy_outpoint();
+
+        // Same prevout used in both inputs
+        let tx = build_tx(
+            vec![txin!(outpoint), txin!(outpoint)],
+            vec![txout!(0, ScriptBuf::new())],
+        );
+
+        match Consensus::check_transaction_context_free(&tx) {
+            Err(BlockchainError::TransactionError(tx_err)) => {
+                assert_eq!(tx_err.error, BlockValidationErrors::DuplicateInput);
+            }
+            other => panic!("Expected DuplicateInput, got: {other:?}"),
         }
     }
 
