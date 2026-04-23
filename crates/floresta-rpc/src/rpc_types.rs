@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
 pub use corepc_types::v30::GetNetworkInfo;
+use corepc_types::v31::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,107 +19,12 @@ use serde::Serialize;
 /// by btc core.
 pub struct GetTxOutProof(pub Vec<u8>);
 
-/// The information returned by a get_raw_tx
-#[derive(Deserialize, Serialize)]
-pub struct RawTx {
-    /// Whether this tx is in our best known chain
-    pub in_active_chain: bool,
-    /// The hex-encoded tx
-    pub hex: String,
-    /// The sha256d of the serialized transaction without witness
-    pub txid: String,
-    /// The sha256d of the serialized transaction including witness
-    pub hash: String,
-    /// The size this transaction occupies on disk
-    pub size: u32,
-    /// The virtual size of this transaction, as define by the segwit soft-fork
-    pub vsize: u32,
-    /// The weight of this transaction, as defined by the segwit soft-fork
-    pub weight: u32,
-    /// This transaction's version. The current bigger version is 2
-    pub version: u32,
-    /// This transaction's locktime
-    pub locktime: u32,
-    /// A list of inputs being spent by this transaction
-    ///
-    /// See [TxIn] for more information about the contents of this
-    pub vin: Vec<TxIn>,
-    /// A list of outputs being created by this tx
-    ///
-    /// Se [TxOut] for more information
-    pub vout: Vec<TxOut>,
-    /// The hash of the block that included this tx, if any
-    pub blockhash: String,
-    /// How many blocks have been mined after this transaction's confirmation
-    /// including the block that confirms it. A zero value means this tx is unconfirmed
-    pub confirmations: u32,
-    /// The timestamp for the block confirming this tx, if confirmed
-    pub blocktime: u32,
-    /// Same as blocktime
-    pub time: u32,
-}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum GetRawTransactionRes {
+    Zero(String),
 
-/// A transaction output returned by some RPCs like gettransaction and getblock
-#[derive(Deserialize, Serialize)]
-pub struct TxOut {
-    /// The amount in sats locked in this UTXO
-    pub value: u64,
-    /// This utxo's index inside the transaction
-    pub n: u32,
-    /// The locking script of this utxo
-    pub script_pub_key: ScriptPubKey,
-}
-
-/// The locking script inside a txout
-#[derive(Deserialize, Serialize)]
-pub struct ScriptPubKey {
-    /// A ASM representation for this script
-    ///
-    /// Assembly is a high-level representation of a lower level code. Instructions
-    /// are turned into OP_XXXXX and data is hex-encoded.
-    /// E.g: OP_DUP OP_HASH160 <0000000000000000000000000000000000000000> OP_EQUALVERIFY OP_CHECKSIG
-    pub asm: String,
-    /// The hex-encoded raw script
-    pub hex: String,
-    /// How many signatures are required to spend this UTXO.
-    ///
-    /// This field is deprecated and is here for compatibility with Core
-    pub req_sigs: u32,
-    #[serde(rename = "type")]
-    /// The type of this spk. E.g: PKH, SH, WSH, WPKH, TR, non-standard...
-    pub type_: String,
-    /// Encode this script using one of the standard address types, if possible
-    pub address: String,
-}
-
-/// A transaction input returned by some rpcs, like gettransaction and getblock
-#[derive(Deserialize, Serialize)]
-pub struct TxIn {
-    /// The txid that created this UTXO
-    pub txid: String,
-    /// The index of this UTXO inside the tx that created it
-    pub vout: u32,
-    /// Unlocking script that should solve the challenge and prove ownership over
-    /// that UTXO
-    pub script_sig: ScriptSigJson,
-    /// The nSequence field, used in relative and absolute lock-times
-    pub sequence: u32,
-    /// A vector of witness elements for this input
-    pub witness: Vec<String>,
-}
-
-/// A representation for the transaction ScriptSig, returned by some rpcs
-/// like gettransaction and getblock
-#[derive(Deserialize, Serialize)]
-pub struct ScriptSigJson {
-    /// A ASM representation for this scriptSig
-    ///
-    /// Assembly is a high-level representation of a lower level code. Instructions
-    /// are turned into OP_XXXXX and data is hex-encoded.
-    /// E.g: OP_PUSHBYTES32 <000000000000000000000000000000000000000000000000000000000000000000>
-    pub asm: String,
-    /// The hex-encoded script sig
-    pub hex: String,
+    One(Box<GetRawTransactionVerbose>),
 }
 
 /// General information about our peers. Returned by get_peer_info
