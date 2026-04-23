@@ -59,7 +59,11 @@ pub trait FlorestaRPC {
     /// This method returns a transaction that's cached in our wallet. If the verbosity flag is
     /// set to 0, the transaction is returned as a hexadecimal string. If the verbosity
     /// flag is set to 1, the transaction is returned as a json object.
-    fn get_raw_transaction(&self, tx_id: Txid, verbosity: Option<u8>) -> Result<Value>;
+    fn get_raw_transaction(
+        &self,
+        tx_id: Txid,
+        verbosity: Option<u8>,
+    ) -> Result<GetRawTransactionRes>;
     /// Returns the proof that one or more transactions were included in a block
     ///
     /// This method returns the Merkle proof, showing that a transaction was included in a block.
@@ -332,7 +336,11 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call("getblockhash", &[Value::Number(Number::from(height))])
     }
 
-    fn get_raw_transaction(&self, tx_id: Txid, verbosity: Option<u8>) -> Result<Value> {
+    fn get_raw_transaction(
+        &self,
+        tx_id: Txid,
+        verbosity: Option<u8>,
+    ) -> Result<GetRawTransactionRes> {
         let mut params = vec![Value::String(tx_id.to_string())];
 
         if let Some(verbosity) = verbosity {

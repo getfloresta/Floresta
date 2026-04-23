@@ -25,6 +25,7 @@ use core::fmt::Debug;
 
 use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
+use corepc_types::v30::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -567,56 +568,12 @@ impl RescanConfidence {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct RawTxJson {
-    pub in_active_chain: bool,
-    pub hex: String,
-    pub txid: String,
-    pub hash: String,
-    pub size: u32,
-    pub vsize: u32,
-    pub weight: u32,
-    pub version: u32,
-    pub locktime: u32,
-    pub vin: Vec<TxInJson>,
-    pub vout: Vec<TxOutJson>,
-    pub blockhash: String,
-    pub confirmations: u32,
-    pub blocktime: u32,
-    pub time: u32,
-}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum GetRawTransactionRes {
+    Zero(String),
 
-#[derive(Deserialize, Serialize)]
-pub struct TxOutJson {
-    pub value: u64,
-    pub n: u32,
-    pub script_pub_key: ScriptPubKeyJson,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ScriptPubKeyJson {
-    pub asm: String,
-    pub hex: String,
-    pub req_sigs: u32,
-    #[serde(rename = "type")]
-    pub type_: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct TxInJson {
-    pub txid: String,
-    pub vout: u32,
-    pub script_sig: ScriptSigJson,
-    pub sequence: u32,
-    pub witness: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ScriptSigJson {
-    pub asm: String,
-    pub hex: String,
+    One(Box<GetRawTransactionVerbose>),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
