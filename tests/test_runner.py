@@ -74,6 +74,7 @@ BASE_TEST_SUITE = [
     ("example", "bitcoin"),
     ("example", "utreexod"),
     ("florestad", "node-info"),
+    ("floresta-cli", "getrawtransaction"),
 ]
 
 # Before running the tests, we check if the number of tests
