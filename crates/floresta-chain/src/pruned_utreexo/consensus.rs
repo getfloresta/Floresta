@@ -296,9 +296,24 @@ impl Consensus {
                 return Err(tx_err!(txid, NullPrevOut))?;
             }
 
-            // Check script sizes (current tx scriptsig and TODO witness if present)
+            // Witness size is intentionally not checked here — witness-specific
+            // limits are enforced during script execution, not in context-free checks.
+            // This matches Bitcoin Core's CheckTransaction() which explicitly skips
+            // witness in context-free checks because witness data has not been
+            // checked for malleability at this point.
+            // See: https://github.com/bitcoin/bitcoin/blob/master/src/consensus/tx_check.cpp
             Self::validate_script_size(&input.script_sig, txid)?;
-            // TODO check also witness script size
+        }
+
+        // Check for duplicate inputs (CVE-2018-17144).
+        // UpdateCoins does not detect duplicates — a duplicate prevout causes either
+        // a crash or an inflation bug depending on the coins database implementation.
+        // Bitcoin Core catches this explicitly in CheckTransaction() for the same reason.
+        let mut seen = HashSet::new();
+        for input in &transaction.input {
+            if !seen.insert(&input.previous_output) {
+                 return Err(tx_err!(txid, DuplicateInput))?;
+            }
         }
 
         let out_value = transaction
@@ -980,6 +995,24 @@ mod tests {
         match Consensus::check_transaction_context_free(&tx) {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManyCoins)) => (),
             other => panic!("Expected TooManyCoins, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_duplicate_inputs_rejected() {
+        let outpoint = dummy_outpoint();
+
+        // Same prevout used in both inputs
+        let tx = build_tx(
+            vec![txin!(outpoint), txin!(outpoint)],
+            vec![txout!(0, ScriptBuf::new())],
+        );
+
+        match Consensus::check_transaction_context_free(&tx) {
+            Err(BlockchainError::TransactionError(tx_err)) => {
+                assert_eq!(tx_err.error, BlockValidationErrors::DuplicateInput);
+            }
+            other => panic!("Expected DuplicateInput, got: {other:?}"),
         }
     }
 

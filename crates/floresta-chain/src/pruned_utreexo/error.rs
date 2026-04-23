@@ -90,6 +90,7 @@ pub enum BlockValidationErrors {
     CoinbaseNotMatured,
     UnspendableUTXO,
     BIP94TimeWarp,
+    DuplicateInput,
 }
 
 // Helpful macro for generating a TransactionError
@@ -180,6 +181,9 @@ impl Display for BlockValidationErrors {
             BlockValidationErrors::BIP94TimeWarp => {
                 write!(f, "BIP94 time warp detected")
             }
+            BlockValidationErrors::DuplicateInput => {
+                write!(f, "This transaction has duplicate inputs")
+        }
         }
     }
 }
