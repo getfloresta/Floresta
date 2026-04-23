@@ -72,54 +72,140 @@ impl RescanConfidence {
     }
 }
 
+/// The information returned by a get_raw_tx
 #[derive(Deserialize, Serialize)]
 pub struct RawTxJson {
+    /// Whether this tx is in our best known chain
     pub in_active_chain: bool,
+
+    /// The hex-encoded tx
     pub hex: String,
+
+    /// The sha256d of the serialized transaction without witness
     pub txid: String,
+
+    /// The sha256d of the serialized transaction including witness
     pub hash: String,
+
+    /// The size this transaction occupies on disk
     pub size: u32,
+
+    /// The virtual size of this transaction, as define by the segwit soft-fork
     pub vsize: u32,
+
+    /// The weight of this transaction, as defined by the segwit soft-fork
     pub weight: u32,
+
+    /// This transaction's version. The current bigger version is 2
     pub version: u32,
+
+    /// This transaction's locktime
     pub locktime: u32,
+
+    /// A list of inputs being spent by this transaction
+    ///
+    /// See [TxInJson] for more information about the contents of this
     pub vin: Vec<TxInJson>,
+
+    /// A list of outputs being created by this tx
+    ///
+    /// See [TxOutJson] for more information
     pub vout: Vec<TxOutJson>,
-    pub blockhash: String,
-    pub confirmations: u32,
-    pub blocktime: u32,
-    pub time: u32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The hash of the block that included this tx, if any
+    pub blockhash: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// How many blocks have been mined after this transaction's confirmation
+    /// including the block that confirms it. A zero value means this tx is unconfirmed
+    pub confirmations: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The timestamp for the block confirming this tx, if confirmed
+    pub blocktime: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Same as blocktime
+    pub time: Option<u32>,
 }
 
+/// A transaction output returned by some RPCs like gettransaction and getblock
 #[derive(Deserialize, Serialize)]
 pub struct TxOutJson {
-    pub value: u64,
+    /// The amount in btc locked in this UTXO
+    pub value: f64,
+
+    /// This utxo's index inside the transaction
     pub n: u32,
+
+    #[serde(rename = "scriptPubKey")]
+    /// The locking script of this utxo
     pub script_pub_key: ScriptPubKeyJson,
 }
 
+/// The locking script inside a txout
 #[derive(Deserialize, Serialize)]
 pub struct ScriptPubKeyJson {
+    /// A ASM representation for this script
+    ///
+    /// Assembly is a high-level representation of a lower level code. Instructions
+    /// are turned into OP_XXXXX and data is hex-encoded.
+    /// E.g: OP_DUP OP_HASH160 <0000000000000000000000000000000000000000> OP_EQUALVERIFY OP_CHECKSIG
     pub asm: String,
+
+    /// The hex-encoded raw script
     pub hex: String,
-    pub req_sigs: u32,
+
     #[serde(rename = "type")]
+    /// The type of this spk. E.g: PKH, SH, WSH, WPKH, TR, non-standard...
     pub type_: String,
-    pub address: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Encode this script using one of the standard address types, if possible
+    pub address: Option<String>,
 }
 
-#[derive(Deserialize, Serialize)]
+/// A transaction input returned by some rpcs, like gettransaction and getblock
+#[derive(Deserialize, Serialize, Default)]
 pub struct TxInJson {
-    pub txid: String,
-    pub vout: u32,
-    pub script_sig: ScriptSigJson,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The coinbase field is only set for coinbase transactions, and contains the hex-encoded coinbase script
+    pub coinbase: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The txid that created this UTXO. Not set for coinbase transactions
+    pub txid: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The index of this UTXO inside the tx that created it. Not set for coinbase transactions
+    pub vout: Option<u32>,
+
+    #[serde(rename = "scriptSig", skip_serializing_if = "Option::is_none")]
+    /// Unlocking script that should solve the challenge and prove ownership over
+    /// that UTXO. Not set for coinbase transactions
+    pub script_sig: Option<ScriptSigJson>,
+
+    /// The nSequence field, used in relative and absolute lock-times
     pub sequence: u32,
-    pub witness: Vec<String>,
+
+    #[serde(rename = "txinwitness", skip_serializing_if = "Option::is_none")]
+    /// A vector of witness elements for this input
+    pub witness: Option<Vec<String>>,
 }
 
+/// A representation for the transaction ScriptSig, returned by some rpcs
+/// like gettransaction and getblock
 #[derive(Deserialize, Serialize)]
 pub struct ScriptSigJson {
+    /// A ASM representation for this scriptSig
+    ///
+    /// Assembly is a high-level representation of a lower level code. Instructions
+    /// are turned into OP_XXXXX and data is hex-encoded.
+    /// E.g: OP_PUSHBYTES32 <000000000000000000000000000000000000000000000000000000000000000000>
     pub asm: String,
+
+    /// The hex-encoded script sig
     pub hex: String,
 }
 
