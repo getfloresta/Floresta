@@ -46,3 +46,28 @@ class BitcoinRPC(BaseRPC):
         """
         address = "bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch"
         return self.generate_block_to_address(nblocks, address)
+
+    def get_new_address(self) -> str:
+        """
+        Get a new address from the wallet.
+        """
+        return self.perform_request("getnewaddress", params=[])
+
+    def generate_block_to_wallet(self, nblocks: int) -> list:
+        """
+        Mine blocks immediately, with coinbase reward sent to a new wallet address
+        """
+        address = self.get_new_address()
+        return self.generate_block_to_address(nblocks, address)
+
+    def create_wallet(self, wallet_name: str):
+        """
+        Create a new wallet with the given name.
+        """
+        return self.perform_request("createwallet", params=[wallet_name])
+
+    def send_to_address(self, address: str, amount: float) -> str:
+        """
+        Send a specified amount to a given address.
+        """
+        return self.perform_request("sendtoaddress", params=[address, amount])
