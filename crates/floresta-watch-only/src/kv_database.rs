@@ -8,6 +8,7 @@ use core::fmt::Formatter;
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::Error as EncodingError;
 use bitcoin::consensus::serialize;
+use bitcoin::hashes::FromSliceError;
 use bitcoin::hashes::Hash;
 use bitcoin::Txid;
 use floresta_common::impl_error_from;
@@ -38,10 +39,16 @@ pub enum KvDatabaseError {
     WalletNotInitialized,
     DeserializeError(EncodingError),
     TransactionNotFound,
+
+    /// A key stored in the `transactions` bucket could not be decoded back into
+    /// a [`Txid`]. This typically indicates a corrupted database entry whose
+    /// length does not match `Txid::LEN`.
+    InvalidTxid(FromSliceError),
 }
 impl_error_from!(KvDatabaseError, serde_json::Error, SerdeJsonError);
 impl_error_from!(KvDatabaseError, kv::Error, KvError);
 impl_error_from!(KvDatabaseError, EncodingError, DeserializeError);
+impl_error_from!(KvDatabaseError, FromSliceError, InvalidTxid);
 
 impl Display for KvDatabaseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -51,6 +58,9 @@ impl Display for KvDatabaseError {
             KvDatabaseError::WalletNotInitialized => write!(f, "WalletNotInitialized"),
             KvDatabaseError::DeserializeError(e) => write!(f, "DeserializeError: {e}"),
             KvDatabaseError::TransactionNotFound => write!(f, "TransactionNotFound"),
+            KvDatabaseError::InvalidTxid(e) => {
+                write!(f, "Invalid txid key in transactions bucket: {e}")
+            }
         }
     }
 }
@@ -69,7 +79,7 @@ impl AddressCacheDatabase for KvDatabase {
             if *"height" == key || *"desc" == key {
                 continue;
             }
-            let value: Vec<u8> = item.value().unwrap();
+            let value: Vec<u8> = item.value()?;
             let value = serde_json::from_slice(&value)?;
             addresses.push(value);
         }
@@ -103,8 +113,8 @@ impl AddressCacheDatabase for KvDatabase {
     fn desc_save(&self, descriptor: &str) -> Result<()> {
         let mut descs = self.descs_get()?;
         descs.push(String::from(descriptor));
-        self.1
-            .set(&String::from("desc"), &serde_json::to_vec(&descs).unwrap())?;
+        let serialized = serde_json::to_vec(&descs)?;
+        self.1.set(&String::from("desc"), &serialized)?;
         self.1.flush()?;
 
         Ok(())
@@ -164,7 +174,7 @@ impl AddressCacheDatabase for KvDatabase {
         for item in store.iter() {
             let item = item?;
             let key = item.key::<&[u8]>()?;
-            transactions.push(Txid::from_slice(key).unwrap());
+            transactions.push(Txid::from_slice(key)?);
         }
         Ok(transactions)
     }
@@ -178,11 +188,13 @@ mod test {
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
+    use bitcoin::hashes::Hash;
     use bitcoin::Address;
     use bitcoin::Transaction;
     use floresta_common::get_spk_hash;
 
     use super::KvDatabase;
+    use super::KvDatabaseError;
     use crate::AddressCacheDatabase;
     use crate::CachedAddress;
     use crate::CachedTransaction;
@@ -256,5 +268,79 @@ mod test {
 
         db.update(&cache_address);
         assert_eq!(db.load().unwrap()[0].script_hash, cache_address.script_hash);
+    }
+
+    /// Regression test for the previous `Txid::from_slice(key).unwrap()` in
+    /// `list_transactions()`. A key with a length other than `Txid::LEN` (32
+    /// bytes) cannot be decoded into a [`Txid`] and must surface as a typed
+    /// `KvDatabaseError::InvalidTxid` instead of panicking and tearing down the
+    /// embedding application.
+    #[test]
+    fn list_transactions_returns_invalid_txid_for_corrupt_key() {
+        let db = get_test_db();
+
+        let store = db
+            .0
+            .bucket::<&[u8], Vec<u8>>(Some("transactions"))
+            .expect("bucket should open in test setup");
+
+        // 16 bytes is deliberately not a valid Txid length (32).
+        let bad_key: &[u8] = b"not-a-valid-txid";
+        store
+            .set(&bad_key, &vec![0u8; 4])
+            .expect("write to test db should succeed");
+
+        let result = db.list_transactions();
+
+        match result {
+            Err(KvDatabaseError::InvalidTxid(_)) => {}
+            other => panic!(
+                "expected Err(KvDatabaseError::InvalidTxid(_)), got {other:?}"
+            ),
+        }
+    }
+
+    /// Regression test for the previous `item.value().unwrap()` in `load()`.
+    /// We do not have an easy way to force `kv` to return an error from
+    /// `Item::value()`, so instead we verify that the function still propagates
+    /// the existing `KvDatabaseError::SerdeJsonError` variant via `?` (which
+    /// shares the same `?`-based propagation style introduced for the value
+    /// read) when the stored bytes for a cached address are not valid JSON.
+    #[test]
+    fn load_returns_error_for_corrupt_address_value() {
+        let db = get_test_db();
+
+        // Insert garbage bytes under a key that is neither "height" nor "desc",
+        // so `load()` will attempt to deserialize it as a CachedAddress.
+        db.1
+            .set(&String::from("not-a-real-script-hash"), &vec![0xff; 8])
+            .expect("write to test db should succeed");
+
+        let result = db.load();
+
+        match result {
+            Err(KvDatabaseError::SerdeJsonError(_)) => {}
+            other => panic!(
+                "expected Err(KvDatabaseError::SerdeJsonError(_)), got {other:?}"
+            ),
+        }
+    }
+
+    /// Sanity check that the `Display` impl for the new `InvalidTxid` variant
+    /// is wired up and produces a message mentioning the bad key context, so
+    /// downstream consumers (logs, JSON-RPC errors) can surface a useful
+    /// message rather than a generic panic backtrace.
+    #[test]
+    fn invalid_txid_error_has_descriptive_display() {
+        let bad_key: &[u8] = b"too-short";
+        let err = bitcoin::Txid::from_slice(bad_key)
+            .map_err(KvDatabaseError::InvalidTxid)
+            .unwrap_err();
+
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Invalid txid key"),
+            "unexpected Display output: {msg}"
+        );
     }
 }
