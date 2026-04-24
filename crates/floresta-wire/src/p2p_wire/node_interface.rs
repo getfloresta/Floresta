@@ -91,6 +91,9 @@ pub enum UserRequest {
     /// Attempt to disconnect from a peer.
     Disconnect((IpAddr, u16)),
 
+    /// Ban a peer by its address.
+    BanPeer((IpAddr, Option<u16>)),
+
     /// Ping all connected peers to check if they are alive.
     Ping,
 
@@ -157,6 +160,9 @@ pub enum NodeResponse {
 
     /// Transaction broadcast
     TransactionBroadcastResult(Result<Txid, AcceptToMempoolError>),
+
+    /// A response indicating whether a peer was successfully banned.
+    BanPeer(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +262,21 @@ impl NodeInterface {
             .await?;
 
         extract_variant!(Disconnect, val);
+    }
+
+    /// Bans a peer by its address and port, disconnecting it immediately.
+    ///
+    /// Returns a bool indicating whether the ban was successful.
+    pub async fn ban_peer(
+        &self,
+        addr: IpAddr,
+        port: Option<u16>,
+    ) -> Result<bool, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::BanPeer((addr, port)))
+            .await?;
+
+        extract_variant!(BanPeer, val);
     }
 
     /// Attempts to connect to a peer once.
