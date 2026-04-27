@@ -1,6 +1,6 @@
 [package]
 name = "floresta-node"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 readme.workspace = true # Floresta/README.md
 authors = ["Floresta Developers <contact@getfloresta.org>"]

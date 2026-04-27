@@ -1,6 +1,6 @@
 [package]
 name = "floresta"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
 edition = "2021"
 description = """

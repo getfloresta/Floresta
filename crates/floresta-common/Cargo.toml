@@ -1,6 +1,6 @@
 [package]
 name = "floresta-common"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Common types and functions for Floresta"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
