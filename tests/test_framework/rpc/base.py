@@ -258,14 +258,18 @@ class BaseRPC(ABC):
         """
         return self.perform_request("getblockcount")
 
-    def get_blockheader(self, blockhash: str) -> dict:
+    def get_blockheader(self, blockhash: str, verbosity: bool | None = None) -> dict:
         """
         Get the header of a block
         """
         if not bool(re.fullmatch(r"^[a-f0-9]{64}$", blockhash)):
             raise ValueError(f"Invalid blockhash '{blockhash}'.")
 
-        return self.perform_request("getblockheader", params=[blockhash])
+        params = [blockhash]
+        if verbosity is not None:
+            params.append(verbosity)
+
+        return self.perform_request("getblockheader", params=params)
 
     def get_block(self, blockhash: str, verbosity: int = 1):
         """
