@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::fmt::Debug;
+use std::vec;
 
-use bitcoin::block::Header as BlockHeader;
 use bitcoin::BlockHash;
 use bitcoin::Txid;
 use corepc_types::v29::GetTxOut;
@@ -42,7 +42,11 @@ pub trait FlorestaRPC {
     /// in the Bitcoin protocol specification. A header contains the block's version,
     /// the previous block hash, the merkle root, the timestamp, the difficulty target,
     /// and the nonce.
-    fn get_block_header(&self, hash: BlockHash) -> Result<BlockHeader>;
+    fn get_block_header(
+        &self,
+        hash: BlockHash,
+        verbosity: Option<bool>,
+    ) -> Result<GetBlockHeaderRes>;
     /// Gets a transaction from the blockchain
     ///
     /// This method returns a transaction that's cached in our wallet. If the verbosity flag is
@@ -323,8 +327,16 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call("getblockfilter", &[Value::Number(Number::from(height))])
     }
 
-    fn get_block_header(&self, hash: BlockHash) -> Result<BlockHeader> {
-        self.call("getblockheader", &[Value::String(hash.to_string())])
+    fn get_block_header(
+        &self,
+        hash: BlockHash,
+        verbosity: Option<bool>,
+    ) -> Result<GetBlockHeaderRes> {
+        let mut params = vec![Value::String(hash.to_string())];
+        if let Some(verbosity) = verbosity {
+            params.push(Value::Bool(verbosity));
+        }
+        self.call("getblockheader", &params)
     }
 
     fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes> {
