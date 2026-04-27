@@ -262,7 +262,13 @@ pub enum Methods {
     SendRawTransaction { tx: String },
 
     /// Returns the block header for the given block hash
-    #[command(name = "getblockheader")]
+    #[doc = include_str!("../../../doc/rpc/getblockheader.md")]
+    #[command(
+        name = "getblockheader",
+        about = "Returns the block header for the given block hash",
+        long_about = Some(include_str!("../../../doc/rpc/getblockheader.md")),
+        disable_help_subcommand = true
+    )]
     GetBlockHeader {
         hash: BlockHash,
         verbosity: Option<bool>,

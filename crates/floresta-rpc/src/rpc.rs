@@ -42,6 +42,7 @@ pub trait FlorestaRPC {
     /// in the Bitcoin protocol specification. A header contains the block's version,
     /// the previous block hash, the merkle root, the timestamp, the difficulty target,
     /// and the nonce.
+    #[doc = include_str!("../../../doc/rpc/getblockheader.md")]
     fn get_block_header(
         &self,
         hash: BlockHash,
