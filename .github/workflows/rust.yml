@@ -48,7 +48,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.81.0 # The version in our `Cargo.toml`
+      - uses: dtolnay/rust-toolchain@1.85.0 # The version in our `Cargo.toml`
         with:
           components: rustfmt, clippy
       - uses: taiki-e/install-action@cargo-hack
@@ -146,7 +146,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.81.0
+      - uses: dtolnay/rust-toolchain@1.85.0
         with:
           # Common bare-metal Cortex-M target (no_std: `core` + `alloc`).
           targets: thumbv7em-none-eabi

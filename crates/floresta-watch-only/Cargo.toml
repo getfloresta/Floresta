@@ -16,6 +16,9 @@ kv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["alloc"] }
 tracing = { workspace = true }
+bdk_wallet = { optional = true, git = "https://github.com/thunderbiscuit/bdk_wallet", branch = "feature/multi-keychain-wallet", features = ["rusqlite"] }
+rusqlite = { version = "0.31", optional = true, features = [ "bundled" ], default-features = false  }
+refinery = { version = "0.8.0", optional = true, features = ["rusqlite"] }
 
 # Local dependencies
 floresta-chain = { workspace = true }
@@ -25,8 +28,10 @@ floresta-common = { workspace = true, features = ["descriptors-no-std"] }
 rand = { workspace = true }
 
 [features]
-default = ["std"]
+default = ["std", "sqlite", "bdk-provider"]
 memory-database = []
+sqlite = ["rusqlite", "refinery"]
+bdk-provider = ["bdk_wallet"]
 # The default features in common are `std` and `descriptors-std` (which is a superset of `descriptors-no-std`)
 std = ["floresta-common/default", "serde/std"]
 
