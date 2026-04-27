@@ -451,6 +451,10 @@ impl BlockchainInterface for PartialChainState {
     fn get_block_height(&self, _hash: &bitcoin::BlockHash) -> Result<Option<u32>, Self::Error> {
         unimplemented!("partialChainState::get_block_height")
     }
+
+    fn get_work(&self, _tip: BlockHash) -> Result<bitcoin::Work, Self::Error> {
+        unimplemented!()
+    }
 }
 
 // mainly for tests

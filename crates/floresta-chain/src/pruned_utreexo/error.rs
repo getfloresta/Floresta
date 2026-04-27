@@ -24,10 +24,12 @@ use floresta_common::impl_error_from;
 use floresta_common::prelude::*;
 use rustreexo::stump::StumpError;
 
+use crate::extensions::ChainWorkOverflow;
 use crate::proof_util::UtreexoLeafError;
 use crate::pruned_utreexo::chain_state_builder::BlockchainBuilderError;
 
 pub trait DatabaseError: Debug + Send + Sync + 'static {}
+
 #[derive(Debug)]
 /// This is the highest level error type in floresta-chain, returned by the [crate::ChainState] methods.
 /// It represents errors encountered during blockchain validation.
@@ -47,7 +49,10 @@ pub enum BlockchainError {
     Io(ioError),
     UnsupportedNetwork(Network),
     BadValidationIndex,
+    OperationOverflow(ChainWorkOverflow),
 }
+
+impl_error_from!(BlockchainError, ChainWorkOverflow, OperationOverflow);
 
 #[derive(Clone, Debug, PartialEq)]
 /// Represents errors encountered during transaction validation.

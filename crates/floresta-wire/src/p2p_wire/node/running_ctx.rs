@@ -52,6 +52,9 @@ const MAX_INV_RETENTION_TIME: Duration = Duration::from_secs(60 * 60); // One ho
 /// Don't hold more than this many invs in `last_invs`
 const MAX_LAST_INVS: usize = 144; // Around one day worth of blocks
 
+/// To prevent disk filling attacks, we forbid reorgs that are over two days deep.
+const MAX_REORG_DEPTH: u32 = 288; // The expected amount of blocks mined in two days
+
 #[derive(Debug, Clone)]
 pub struct RunningNode {
     pub(crate) last_address_rearrange: Instant,
@@ -730,6 +733,20 @@ where
 
                             if self.chain.get_block_header(&block_hash).is_ok() {
                                 continue;
+                            }
+
+                            let Some(previous_height) = self.chain.get_block_height(&header.prev_blockhash)? else {
+                                // Orphan chain
+                                self.disconnect_and_ban(peer)?;
+                                return Ok(());
+                            };
+
+                            let current_height = self.chain.get_best_block()?.0;
+                            if current_height.saturating_sub(MAX_REORG_DEPTH) > previous_height {
+                                // peer has a super deep reorg, this could be a disk fill attack
+                                warn!("Peer {peer} is trying to reorg a very deep block, might be a disk fill attack. Banning it");
+                                self.disconnect_and_ban(peer)?;
+                                return Ok(());
                             }
 
                             self.chain.accept_header(*header)?;

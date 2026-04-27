@@ -30,6 +30,7 @@ use bitcoin::hashes::sha256;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::OutPoint;
+use bitcoin::Work;
 use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
@@ -124,6 +125,9 @@ pub trait BlockchainInterface {
 
     /// Returns our current acc
     fn acc(&self) -> Stump;
+
+    /// Returns the amount of [`Work`] associated with a given chain tip
+    fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error>;
 }
 
 /// [UpdatableChainstate] is a contract that a is expected from a chainstate
@@ -259,6 +263,10 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
 
 impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
     type Error = <T as BlockchainInterface>::Error;
+
+    fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error> {
+        T::get_work(self, tip)
+    }
 
     fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Option<bitcoin::Transaction>, Self::Error> {
         T::get_tx(self, txid)

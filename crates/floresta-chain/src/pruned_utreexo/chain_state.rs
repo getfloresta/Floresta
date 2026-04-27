@@ -25,6 +25,8 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
+use core::cmp::min;
+use core::ops::Add;
 
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::blockdata::constants::genesis_block;
@@ -60,6 +62,7 @@ use super::partial_chain::PartialChainState;
 use super::partial_chain::PartialChainStateInner;
 use super::BlockchainInterface;
 use super::UpdatableChainstate;
+use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
@@ -248,16 +251,59 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         self.get_disk_block_header(&header.prev_blockhash)
     }
 
-    /// Returns the cumulative work in this branch
-    fn get_branch_work(&self, header: &BlockHeader) -> Result<Work, BlockchainError> {
-        let mut header = *header;
-        let mut work = Work::from_be_bytes([0; 32]);
-        while !self.is_genesis(&header) {
+    /// Computes the work of a fork branch.
+    ///
+    /// This function should only be used for forks. It will make O(n) header lookups, since we
+    /// can't use the index for fork blocks. Calling it on a big branch will cause it to use a
+    /// lot of CPU.
+    ///
+    /// If you want to get the work for a main chain block, use `get_branch_work` instead.
+    fn get_fork_work(
+        &self,
+        new_tip: BlockHeader,
+        fork_point: BlockHash,
+    ) -> Result<Work, BlockchainError> {
+        let mut header = new_tip;
+        let mut work = self.get_work(fork_point)?;
+
+        while header.block_hash() != fork_point {
             work = work + header.work();
             header = *self.get_ancestor(&header)?;
         }
 
         Ok(work)
+    }
+
+    /// Returns the cumulative work in this branch.
+    ///
+    /// This function is more optimized CPU-wise. It will take (n/2016) header lookups to compute
+    /// the work of a branch starting a `header`.
+    ///
+    /// It does not work with fork headers, see `get_fork_work` for that.
+    fn get_branch_work(&self, header: BlockHeader) -> Result<Work, BlockchainError> {
+        let block_height = self
+            .get_block_height(&header.block_hash())?
+            .ok_or(BlockchainError::BlockNotPresent)?;
+
+        let mut total_chainwork = Work::from_be_bytes([0u8; 32]);
+        for epoch_start_height in (0..=block_height).step_by(2016) {
+            // Calculate the number of blocks in this epoch
+            let epoch_end_height = min(epoch_start_height + 2015, block_height);
+            let blocks_in_epoch = epoch_end_height - epoch_start_height + 1;
+
+            // Get the block hash and header at the start of the epoch
+            let epoch_block_hash = self.get_block_hash(epoch_start_height)?;
+
+            let epoch_block_header = self.get_block_header(&epoch_block_hash)?;
+
+            let epoch_chainwork = epoch_block_header
+                .work()
+                .multiply_work_by_u32(blocks_in_epoch)?;
+
+            total_chainwork = total_chainwork.add(epoch_chainwork);
+        }
+
+        Ok(total_chainwork)
     }
 
     /// Checks if a branch is valid (i.e. all ancestors are known)
@@ -455,8 +501,10 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let current_tip = self.get_block_header(&self.get_best_block()?.1)?;
         self.check_branch(&branch_tip)?;
 
-        let current_work = self.get_branch_work(&current_tip)?;
-        let new_work = self.get_branch_work(&branch_tip)?;
+        let fork_point = self.find_fork_point(&branch_tip)?;
+        let current_work = self.get_branch_work(current_tip)?;
+        let new_work = self.get_fork_work(branch_tip, fork_point.block_hash())?;
+
         // If the new branch has more work, it becomes the new best chain
         if new_work > current_work {
             self.reorg(branch_tip)?;
@@ -965,6 +1013,11 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         self.chain_params().params
     }
 
+    fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error> {
+        let header = self.get_block_header(&tip)?;
+        self.get_branch_work(header)
+    }
+
     fn acc(&self) -> Stump {
         read_lock!(self).acc.to_owned()
     }
@@ -1432,6 +1485,7 @@ macro_rules! read_lock {
         $obj.inner.read()
     };
 }
+
 #[macro_export]
 /// Grabs a RwLock for writing
 macro_rules! write_lock {
@@ -1456,6 +1510,7 @@ mod test {
     use bitcoin::BlockHash;
     use bitcoin::Network;
     use bitcoin::OutPoint;
+    use bitcoin::Work;
     use floresta_common::assert_ok;
     use floresta_common::bhash;
     use rand::Rng;
@@ -1467,12 +1522,15 @@ mod test {
     use super::ChainState;
     use super::DiskBlockHeader;
     use super::UpdatableChainstate;
+    use crate::extensions::WorkExt;
     use crate::prelude::HashMap;
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::utxo_data::UtxoData;
     use crate::AssumeValidArg;
     use crate::BlockchainError;
+    use crate::ChainStore;
     use crate::FlatChainStore;
+    use crate::FlatChainStoreConfig;
 
     fn setup_test_chain(
         network: Network,
@@ -1782,5 +1840,71 @@ mod test {
             read_lock!(chain).best_block.best_block,
             headers[1].prev_blockhash
         );
+    }
+
+    #[test]
+    fn test_calculate_chain_work() {
+        let mut chainstore = FlatChainStore::new(FlatChainStoreConfig::new(
+            "../../testdata/signet_headers.zst".to_string(),
+        ))
+        .unwrap();
+
+        let mut headers = vec![];
+        let genesis_header: BlockHeader = deserialize_hex("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap();
+        let mut prev_blockhash = genesis_header.block_hash();
+
+        chainstore
+            .save_header(&DiskBlockHeader::FullyValid(genesis_header, 0))
+            .unwrap();
+
+        chainstore.update_block_index(0, prev_blockhash).unwrap();
+        headers.push(genesis_header);
+
+        for i in 1..3_000 {
+            let header = BlockHeader {
+                time: 1231006505 + i * 600,
+                prev_blockhash,
+                ..genesis_header
+            };
+
+            headers.push(header);
+            let hash = header.block_hash();
+
+            chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, i))
+                .unwrap();
+            chainstore.update_block_index(i, hash).unwrap();
+
+            prev_blockhash = header.block_hash();
+        }
+
+        chainstore
+            .save_height(&crate::BestChain {
+                best_block: prev_blockhash,
+                depth: 3_000,
+                validation_index: prev_blockhash,
+                alternative_tips: vec![],
+            })
+            .unwrap();
+
+        let chainstate = ChainState::new(chainstore, Network::Bitcoin, AssumeValidArg::Disabled);
+        let header = headers[headers.len() - 1];
+        let fork = headers[headers.len() / 2];
+
+        let work = chainstate
+            .get_work(header.block_hash())
+            .expect("Failed to calculate chain work");
+
+        let fork_work = chainstate
+            .get_fork_work(header, fork.block_hash())
+            .expect("Failed to calculate fork work");
+
+        let expected_hex_string =
+            "00000000000000000000000000000000000000000000000000000bb80bb80bb8";
+        let expected_work = Work::from_hex(&format!("0x{expected_hex_string}")).unwrap();
+
+        assert_eq!(work.to_string_hex(), expected_hex_string);
+        assert_eq!(fork_work, work);
+        assert_eq!(work, expected_work);
     }
 }

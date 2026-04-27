@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use core::cmp::min;
 use core::error::Error;
-use core::ops::Add;
 
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
@@ -109,29 +107,9 @@ impl HeaderExt for Header {
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<Work, HeaderExtError> {
-        let block_height = self.get_height(chain)?;
-
-        let mut total_chainwork = Work::from_be_bytes([0u8; 32]);
-        for epoch_start_height in (0..=block_height).step_by(2016) {
-            // Calculate the number of blocks in this epoch
-            let epoch_end_height = min(epoch_start_height + 2015, block_height);
-            let blocks_in_epoch = epoch_end_height - epoch_start_height + 1;
-
-            // Get the block hash and header at the start of the epoch
-            let epoch_block_hash = chain
-                .get_block_hash(epoch_start_height)
-                .map_err(|e| HeaderExtError::Chain(Box::new(e)))?;
-            let epoch_block_header = chain
-                .get_block_header(&epoch_block_hash)
-                .map_err(|e| HeaderExtError::Chain(Box::new(e)))?;
-
-            let epoch_chainwork = epoch_block_header
-                .work()
-                .multiply_work_by_u32(blocks_in_epoch)?;
-            total_chainwork = total_chainwork.add(epoch_chainwork);
-        }
-
-        Ok(total_chainwork)
+        chain
+            .get_work(self.block_hash())
+            .map_err(|err| HeaderExtError::Chain(Box::new(err)))
     }
 
     fn get_next_block_hash(
@@ -355,6 +333,11 @@ mod tests {
             Ok(self.chain_height)
         }
 
+        fn get_work(&self, _tip: BlockHash) -> Result<Work, Self::Error> {
+            let work_hex = "00000000000000000000000000000000000000000000000000000bb80bb80bb8";
+            Ok(Work::from_hex(&format!("0x{work_hex}")).expect("hardcoded work"))
+        }
+
         fn get_tx(&self, _: &Txid) -> Result<Option<Transaction>, Self::Error> {
             unimplemented!()
         }
@@ -520,23 +503,6 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_chain_work() {
-        let (mock_chain, headers) = get_chain_and_headers(3000);
-        let header = headers[headers.len() - 1];
-
-        let work = header
-            .calculate_chain_work(&mock_chain)
-            .expect("Failed to calculate chain work");
-
-        let expected_hex_string =
-            "00000000000000000000000000000000000000000000000000000bb80bb80bb8";
-        let expected_work = Work::from_hex(&format!("0x{expected_hex_string}")).unwrap();
-
-        assert_eq!(work.to_string_hex(), expected_hex_string);
-        assert_eq!(work, expected_work);
-    }
-
-    #[test]
     fn test_get_next_block_hash() {
         let (mock_chain, headers) = get_chain_and_headers(5);
 
@@ -654,5 +620,22 @@ mod tests {
         let result = work.multiply_work_by_u32(factor);
 
         assert_eq!(result, Err(ChainWorkOverflow));
+    }
+
+    #[test]
+    fn test_calculate_chain_work() {
+        let (mock_chain, headers) = get_chain_and_headers(3000);
+        let header = headers[headers.len() - 1];
+
+        let work = header
+            .calculate_chain_work(&mock_chain)
+            .expect("Failed to calculate chain work");
+
+        let expected_hex_string =
+            "00000000000000000000000000000000000000000000000000000bb80bb80bb8";
+        let expected_work = Work::from_hex(&format!("0x{expected_hex_string}")).unwrap();
+
+        assert_eq!(work.to_string_hex(), expected_hex_string);
+        assert_eq!(work, expected_work);
     }
 }
