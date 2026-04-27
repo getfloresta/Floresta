@@ -6,6 +6,7 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 
 use axum::response::IntoResponse;
+use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
 use floresta_chain::extensions::HeaderExtError;
 use floresta_common::impl_error_from;
@@ -128,6 +129,13 @@ pub struct ScriptSigJson {
 pub enum GetBlockRes {
     Zero(String),
     One(Box<GetBlockVerboseOne>),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum GetBlockHeaderRes {
+    Raw(String),
+    Verbose(Box<GetBlockHeaderVerbose>),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
