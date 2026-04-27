@@ -27,6 +27,8 @@ class UtreexoDaemon(BaseDaemon):
         """
         return [
             "--regtest",
+            "--utreexoproofindex",
+            "--prune=0",
         ]
 
     def get_cmd_data_dir(self, data_dir: str) -> List[str]:

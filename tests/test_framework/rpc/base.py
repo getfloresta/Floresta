@@ -151,6 +151,7 @@ class BaseRPC(ABC):
 
         # If response isnt 200, raise an HTTPError
         if response.status_code != 200:
+            self.log(f"HTTP error {response.status_code}: {response.text}")
             raise HTTPError
 
         result = response.json()
@@ -333,3 +334,13 @@ class BaseRPC(ABC):
                 "disconnectnode", params=[node_address, node_id]
             )
         return self.perform_request("disconnectnode", params=[node_address])
+
+    def get_raw_transaction(self, txid: str, verbose: int | None = None):
+        """
+        Returns the raw transaction data for a given transaction ID.
+        """
+        params = [txid]
+        if verbose is not None:
+            params.append(int(verbose))
+
+        return self.perform_request("getrawtransaction", params=params)
