@@ -43,6 +43,7 @@ mod tests {
 
     use crate::jsonrpc_client::Client;
     use crate::rpc::FlorestaRPC;
+    use crate::rpc_types::GetBlockHeaderRes;
     use crate::rpc_types::GetBlockRes;
 
     struct Florestad {
@@ -226,9 +227,14 @@ mod tests {
         let (_proc, client) = start_florestad();
 
         let blockhash = client.get_block_hash(0).expect("rpc not working");
-        let block_header = client.get_block_header(blockhash).expect("rpc not working");
+        let block_header = client
+            .get_block_header(blockhash, Some(true))
+            .expect("rpc not working");
+        let GetBlockHeaderRes::Verbose(block_header) = block_header else {
+            panic!("Expected verbose block header");
+        };
 
-        assert_eq!(block_header.block_hash(), blockhash);
+        assert_eq!(block_header.hash, blockhash.to_string());
     }
 
     #[test]

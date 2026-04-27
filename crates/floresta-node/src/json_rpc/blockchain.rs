@@ -15,6 +15,7 @@ use bitcoin::ScriptBuf;
 use bitcoin::Txid;
 use bitcoin::VarInt;
 use corepc_types::v29::GetTxOut;
+use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
 use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
@@ -24,6 +25,7 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
+use super::res::GetBlockHeaderRes;
 use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
@@ -106,7 +108,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             at: u32,
         ) -> Result<u32, JsonRpcError> {
             let hash = provider.get_block_hash(at)?;
-            let block = provider.get_block_header(hash)?;
+            let block = provider.get_header(hash)?;
             Ok(block.time)
         }
 
@@ -182,20 +184,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Ok(GetBlockRes::Zero(hex));
         }
         if verbosity == 1 {
-            let header = &block.header;
-            let height = header.get_height(&self.chain)?;
-            let median_time = header.calculate_median_time_past(&self.chain)?;
-            let chain_work = header.calculate_chain_work(&self.chain)?.to_string_hex();
-            let confirmations = header.get_confirmations(&self.chain)? as i64;
-            let version_hex = header.get_version_hex();
-
-            let next_block_hash = header
-                .get_next_block_hash(&self.chain)?
-                .map(|h| h.to_string());
-
-            let bits = header.get_bits_hex();
-            let difficulty = header.get_difficulty();
-            let target = header.get_target_hex();
+            let header_fields = self.handle_get_block_header_verbose(&block)?;
 
             // Stripped size is the size of the block without witness data
             // Header + VarInt for number of transactions + sum of base sizes of each transaction
@@ -205,9 +194,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
             let stripped_size = Some(stripped_size_bytes as i64);
 
-            let previous_block_hash = (header.prev_blockhash != BlockHash::all_zeros())
-                .then_some(header.prev_blockhash.to_string());
-
             let tx = block
                 .txdata
                 .iter()
@@ -215,26 +201,26 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 .collect();
 
             let block = GetBlockVerboseOne {
-                bits,
-                chain_work,
-                confirmations,
-                difficulty,
-                hash: header.block_hash().to_string(),
-                height: height as i64,
-                merkle_root: header.merkle_root.to_string(),
-                nonce: header.nonce as i64,
-                previous_block_hash,
+                bits: header_fields.bits,
+                chain_work: header_fields.chain_work,
+                confirmations: header_fields.confirmations,
+                difficulty: header_fields.difficulty,
+                hash: header_fields.hash,
+                height: header_fields.height,
+                merkle_root: header_fields.merkle_root,
+                nonce: header_fields.nonce,
+                previous_block_hash: header_fields.previous_block_hash,
                 size: block.total_size() as i64,
-                time: header.time as i64,
+                time: header_fields.time,
                 tx,
-                version: header.version.to_consensus(),
-                version_hex,
+                version: header_fields.version,
+                version_hex: header_fields.version_hex,
                 weight: block.weight().to_wu(),
-                median_time: Some(median_time as i64),
-                n_tx: block.txdata.len() as i64,
-                next_block_hash,
+                median_time: Some(header_fields.median_time),
+                n_tx: header_fields.n_tx as i64,
+                next_block_hash: header_fields.next_block_hash,
                 stripped_size,
-                target,
+                target: header_fields.target,
             };
 
             return Ok(GetBlockRes::One(Box::new(block)));
@@ -302,10 +288,23 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     // getblockheader
-    pub(super) fn get_block_header(&self, hash: BlockHash) -> Result<Header, JsonRpcError> {
-        self.chain
-            .get_block_header(&hash)
-            .map_err(|_| JsonRpcError::BlockNotFound)
+    pub(super) async fn get_block_header(
+        &self,
+        hash: BlockHash,
+        verbosity: bool,
+    ) -> Result<GetBlockHeaderRes, JsonRpcError> {
+        let header = self.get_header(hash)?;
+
+        if !verbosity {
+            let hex = serialize_hex(&header);
+            return Ok(GetBlockHeaderRes::Raw(hex));
+        }
+
+        let block = self.get_block_inner(hash).await?;
+
+        let get_block_header = self.handle_get_block_header_verbose(&block)?;
+
+        Ok(GetBlockHeaderRes::Verbose(Box::new(get_block_header)))
     }
 
     // getblockstats
@@ -319,6 +318,57 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getmempoolentry
     // getmempoolinfo
     // getrawmempool
+
+    /// Formats block header data for JSON-RPC responses.
+    /// Computes all necessary header fields (height, confirmations, chain work, difficulty, etc.)
+    /// in the correct format ready for `getblockheader` and `getblock` RPC methods.
+    fn handle_get_block_header_verbose(
+        &self,
+        block: &Block,
+    ) -> Result<GetBlockHeaderVerbose, JsonRpcError> {
+        let header = &block.header;
+        let height = header.get_height(&self.chain)?;
+        let median_time = header.calculate_median_time_past(&self.chain)?;
+        let chain_work = header.calculate_chain_work(&self.chain)?.to_string_hex();
+        let confirmations = header.get_confirmations(&self.chain)? as i64;
+        let version_hex = header.get_version_hex();
+
+        let next_block_hash = header
+            .get_next_block_hash(&self.chain)?
+            .map(|h| h.to_string());
+
+        let bits = header.get_bits_hex();
+        let difficulty = header.get_difficulty();
+        let target = header.get_target_hex();
+        let previous_block_hash = (header.prev_blockhash != BlockHash::all_zeros())
+            .then_some(header.prev_blockhash.to_string());
+
+        Ok(GetBlockHeaderVerbose {
+            bits,
+            chain_work,
+            confirmations,
+            difficulty,
+            hash: header.block_hash().to_string(),
+            height: height as i64,
+            median_time: median_time as i64,
+            next_block_hash,
+            version: header.version.to_consensus(),
+            version_hex,
+            previous_block_hash,
+            merkle_root: header.merkle_root.to_string(),
+            time: header.time as i64,
+            target,
+            nonce: header.nonce as i64,
+            n_tx: block.txdata.len() as u32,
+        })
+    }
+
+    /// Helper method to get a block header by its hash, used by multiple rpcs.
+    fn get_header(&self, hash: BlockHash) -> Result<Header, JsonRpcError> {
+        self.chain
+            .get_block_header(&hash)
+            .map_err(|_| JsonRpcError::BlockNotFound)
+    }
 
     /// Check if the script is anchor type
     fn is_anchor_type(script: &Script) -> bool {
