@@ -1,0 +1,66 @@
+name: Linting
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  typos:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run typos
+        uses: crate-ci/typos@v1
+
+  rust-lint:
+    name: Rust Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-hack
+
+      - name: Install latest nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
+
+      - name: Run cargo fmt
+        run: cargo +nightly fmt --all --check
+
+      - name: Run cargo doc
+        run: |
+          RUSTDOCFLAGS="--cfg docsrs -D warnings" \
+          cargo +nightly doc --workspace --no-deps --lib --all-features --document-private-items
+
+      - name: Run cargo clippy
+        run: ./contrib/feature_matrix.sh clippy '-- -D warnings'
+        shell: bash # Ensure the script runs using bash on all platforms
+
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Prepare environment
+        run: uv sync --all-extras --dev
+
+      - name: Run black formatting
+        run: uv run black --check --verbose ./tests
+
+      - name: Run pylint linter
+        run: uv run pylint --verbose ./tests
