@@ -22,12 +22,14 @@ For more information about how to define a test, see
 
 import argparse
 import os
+import shutil
 import subprocess
 from collections import defaultdict
-from threading import Thread
 from queue import Queue
+from threading import Thread
 from time import time
 
+from test_framework.setup import get_temp_dir, prepare_binaries
 from test_framework.util import Utility
 
 INFO_EMOJI = "ℹ️"
@@ -205,17 +207,19 @@ def run_test_worker(task_queue: Queue, results_queue: Queue, args: argparse.Name
         cli_msg = " ".join(cli)
         print(f"\n{INFO_EMOJI} Running '{cli_msg}'")
 
+        env = os.environ.copy()
+        env["FLORESTA_TEST_TIMEOUT"] = str(args.timeout)
+
         start = time()
         with open(
             test_log_name, "wt", encoding="utf-8", buffering=args.log_buffer
         ) as log_file:
-
             # Avoid using 'with' for `subprocess.Popen` here, as we need the
             # process to start and stream output immediately for port detection
             # to work correctly. Using 'with' might delay output flushing,
             # which breaks log-based detection of random ports in tests.
             # pylint: disable=consider-using-with
-            test = subprocess.Popen(cli, stdout=log_file, stderr=log_file)
+            test = subprocess.Popen(cli, stdout=log_file, stderr=log_file, env=env)
             test.wait()
 
         results_queue.put(
@@ -224,12 +228,13 @@ def run_test_worker(task_queue: Queue, results_queue: Queue, args: argparse.Name
         task_queue.task_done()
 
 
-# pylint: disable=too-many-branches,line-too-long
+# pylint: disable=too-many-branches,too-many-locals,line-too-long
 def main():
     """
     Create a CLI called `test_runner` with calling arguments
 
     usage: test_runner [-h,-l] [-L DATA_DIR] [-t TEST_SUITE] [-k TEST_NAME] [-T THREADS] [-b BUFFER_SIZE]
+                       [--build] [--release] [--preserve-data-dir]
 
     Functional test runner for Floresta.
 
@@ -242,6 +247,9 @@ def main():
         -T, --threads THREADS         Number of threads to run tests in parallel (default: 4).
         -b, --log-buffer BUFFER_SIZE  Changes the `io.DEFAULT_BUFFER_SIZE` for log files (default: 1024).
                                       Small values may cause issues with large logs.
+        --force-rebuild               Force rebuilding all binaries even if already present.
+        --release                     Build florestad in release mode (default: debug).
+        --preserve-data-dir           Keep data/logs after a successful run.
     """
     start_time = time()
     # Define a global variable for the base log directory
@@ -251,12 +259,6 @@ def main():
 
     # Structure the CLI
     parser = argparse.ArgumentParser(prog="run_tests")
-    parser.add_argument(
-        "-L",
-        "--log-dir",
-        default=base_log_dir,
-        help="Data directory for functional test logs.",
-    )
     parser.add_argument(
         "-t",
         "--test-suite",
@@ -296,16 +298,58 @@ def main():
         default=1024,
         help="changes the `io.DEFAULT_BUFFER_SIZE` for log files (default: 1024). Small values may cause issues with large logs.",
     )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        default=False,
+        help="Force rebuilding all binaries even if already present.",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        default=False,
+        help="Build florestad in release mode (default: debug).",
+    )
+    parser.add_argument(
+        "--preserve-data-dir",
+        action="store_true",
+        default=False,
+        help="Keep data/logs after a successful run.",
+    )
+    parser.add_argument(
+        "-L",
+        "--log-dir",
+        default=None,
+        help="Data directory for functional test logs.",
+    )
+    parser.add_argument(
+        "-O",
+        "--timeout",
+        type=int,
+        default=15,
+        help="Timeout in seconds for RPC requests and socket waits (default: 15).",
+    )
 
     args = parser.parse_args()
-
-    args.log_dir = os.path.abspath(base_log_dir)
 
     test_dir = os.path.abspath(os.path.dirname(__file__))
 
     if args.list_suites:
         list_test_suites(test_dir)
         return
+
+    # Prepare binaries (build florestad, utreexod, bitcoind)
+    prepare_binaries(release=args.release, force_rebuild=args.force_rebuild)
+
+    temp_dir = get_temp_dir()
+    base_log_dir = os.path.normpath(os.path.join(temp_dir, "logs"))
+    args.log_dir = os.path.abspath(args.log_dir or base_log_dir)
+
+    # Clean data and logs from previous runs (e.g. a prior failure)
+    data_dir = os.path.join(temp_dir, "data")
+    for d in (data_dir, args.log_dir):
+        if os.path.exists(d):
+            shutil.rmtree(d)
 
     task_queue = setup_test_suite(args, test_dir)
     results = run_test_workers(task_queue, args)
@@ -327,6 +371,14 @@ def main():
         raise SystemExit(
             f"\n{FAILURE_EMOJI} Some tests failed. Check the logs in {args.log_dir}."
         )
+
+    # Clean up on success unless --preserve-data-dir
+    if not args.preserve_data_dir:
+        print(f"Tests passed, cleaning up data at {temp_dir}")
+        for d in (data_dir, os.path.join(temp_dir, "logs")):
+            if os.path.exists(d):
+                shutil.rmtree(d)
+
     end_time = time()
     print(
         f"\n{ALLDONE_EMOJI} ALL TESTS PASSED! GOOD JOB! (took {end_time - start_time:.2f}s)"

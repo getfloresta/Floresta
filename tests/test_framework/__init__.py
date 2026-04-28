@@ -12,29 +12,27 @@ The difference is that `florestad` will run under a `cargo run` subprocess, whic
 `add_node_settings`.
 """
 
-import os
-import re
-import sys
-import copy
-import random
-import socket
-import shutil
-import signal
 import contextlib
-import subprocess
+import copy
+import os
+import random
+import re
+import signal
+import socket
+import sys
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Pattern, Tuple, Optional
+from typing import Any, Dict, List, Optional, Pattern, Tuple
 
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
 )
 from test_framework.daemon import ConfigP2P
-from test_framework.rpc import ConfigRPC
 from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
+from test_framework.rpc import ConfigRPC
 from test_framework.util import Utility
 
 
@@ -164,9 +162,6 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         except Exception as err:
             processes = []
             for node in self._nodes:
-                if node.daemon.is_running:
-                    continue
-
                 # If the node has an RPC server, stop it gracefully
                 # otherwise (maybe the error occurred before the RPC server
                 # is started), try to kill the process with SIGTERM. If that
