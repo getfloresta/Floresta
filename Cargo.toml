@@ -83,3 +83,9 @@ metrics = { path = "metrics" }
 
 [workspace.lints.clippy]
 unused_async = "deny"
+
+[profile.release]
+opt-level = 3     # maximum optimization level
+strip = true      # strip symbol tables and metadata
+lto = true        # enable link-time optimizations
+codegen-units = 1 # compile a single codegen unit
