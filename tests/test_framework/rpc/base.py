@@ -323,7 +323,7 @@ class BaseRPC(ABC):
         """
         return self.perform_request("ping")
 
-    def disconnectnode(self, node_address: str, node_id: Optional[int] = None):
+    def disconnectnode(self, node_address: str = "", node_id: Optional[int] = None):
         """
         Disconnect from a peer by `node_address` or `node_id`
         """

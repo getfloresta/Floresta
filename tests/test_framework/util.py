@@ -3,6 +3,8 @@
 """Utility helpers used by the test framework (paths, ports, TLS helpers)."""
 
 import os
+import time
+import inspect
 import random
 import socket
 import subprocess
@@ -106,3 +108,48 @@ class Utility:
         )
 
         return (pk_path, cert_path)
+
+
+def wait_until_helper_internal(
+    predicate, *, timeout=60, lock=None, timeout_factor=1.0, check_interval=0.05
+):
+    """Sleep until the predicate resolves to be True.
+
+    Warning: Note that this method is not recommended to be used in tests as it is
+    not aware of the context of the test framework. Using the `wait_until()` members
+    from `BitcoinTestFramework` or `P2PInterface` class ensures the timeout is
+    properly scaled. Furthermore, `wait_until()` from `P2PInterface` class in
+    `p2p.py` has a preset lock.
+    """
+    timeout = timeout * timeout_factor
+    time_end = time.time() + timeout
+
+    while time.time() < time_end:
+        if lock:
+            with lock:
+                if predicate():
+                    return
+        else:
+            if predicate():
+                return
+        time.sleep(check_interval)
+
+    # Print the cause of the timeout
+    predicate_source = "''''\n" + inspect.getsource(predicate) + "'''"
+    print(f"wait_until() failed. Predicate: {predicate_source}")
+    raise AssertionError(
+        f"Predicate {predicate_source} not true after {timeout} seconds"
+    )
+
+
+def wait_until(predicate, timeout=30, interval=0.5, error_msg="Condition not met"):
+    """
+    Wait until a predicate returns True or timeout is reached.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if predicate():
+            return True
+        time.sleep(interval)
+
+    raise TimeoutError(f"{error_msg} after {timeout} seconds")

@@ -16,7 +16,6 @@ import os
 import re
 import sys
 import copy
-import random
 import socket
 import shutil
 import signal
@@ -35,7 +34,15 @@ from test_framework.daemon import ConfigP2P
 from test_framework.rpc import ConfigRPC
 from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
-from test_framework.util import Utility
+from test_framework.util import Utility, wait_until
+from test_framework.p2p import P2P_SERVICES, P2PInterface, NetworkThread
+from test_framework.messages import (
+    NODE_P2P_V2,
+    CAddress,
+    msg_generic,
+    MAX_PROTOCOL_MESSAGE_LENGTH,
+    MAX_MSG_PER_SECOND,
+)
 
 
 class FlorestaTestMetaClass(type):
@@ -111,6 +118,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.test_framework = test_framework
             self.expected_exception = expected_exception
             self.exception = None
+            self._network_thread = None
 
         def __enter__(self):
             """Enter the context manager."""
@@ -139,6 +147,7 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         Do not override this method. Instead, override the set_test_params() method
         """
         self._nodes = []
+        self._p2p_interface = []
 
     # pylint: disable=R0801
     def log(self, msg: str):
@@ -163,6 +172,14 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
             self.stop()
         except Exception as err:
             processes = []
+
+            if (
+                hasattr(self, "_network_thread")
+                and NetworkThread.network_event_loop is not None
+            ):
+                self._network_thread.close(timeout=1)
+                NetworkThread.network_event_loop = None
+
             for node in self._nodes:
                 if node.daemon.is_running:
                     continue
@@ -410,6 +427,13 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         for i in range(len(self._nodes)):
             self.stop_node(i)
 
+        if (
+            hasattr(self, "_network_thread")
+            and NetworkThread.network_event_loop is not None
+        ):
+            self._network_thread.close(timeout=1)
+            NetworkThread.network_event_loop = None
+
     def check_connection(self, peer_one: Node, peer_two: Node, is_connected: bool):
         """
         Check if two peers are connected/disconnected to each other.
@@ -501,6 +525,230 @@ class FlorestaTestFramework(metaclass=FlorestaTestMetaClass):
         self.assertIsNone(result)
 
         self.wait_for_peers_connections(peer_one, peer_two)
+
+    def add_p2p_connection(
+        self,
+        node: Node,
+        p2p_conn,
+        *,
+        wait_for_verack=True,
+        wait_for_disconnect=False,
+        p2p_idx,
+        connection_type="outbound-full-relay",
+        supports_v2_p2p=True,
+        advertise_v2_p2p=True,
+        method="onetry",
+        **kwargs,
+    ):
+        """Add an outbound p2p connection from node.
+
+        An outbound connection is made from Node -------> P2PConnection
+        - if P2PConnection doesn't advertise_v2_p2p, Node sends version message and v1 P2P is
+          followed
+        - if P2PConnection both supports_v2_p2p and advertise_v2_p2p, Node sends ellswift bytes and
+          v2 P2P is followed
+
+        Parameters:
+            p2p_conn: The P2PConnection object
+            p2p_idx: Index for the connection (must be different for simultaneous peers)
+            supports_v2_p2p: whether p2p_conn supports v2 P2P
+            advertise_v2_p2p: whether p2p_conn is advertised to support v2 P2P
+            connection_type: Type of connection ("outbound-full-relay", "block-relay-only",
+             "addr-fetch", "feeler")
+        """
+        node_peers = len(node.rpc.get_peerinfo())
+
+        if NetworkThread.network_event_loop is None:
+            network_thread = NetworkThread()
+            network_thread.start()
+            # pylint: disable=attribute-defined-outside-init
+            self._network_thread = network_thread
+
+        def addconnection_callback(address, port):
+            self.log(f"Connecting to {address}:{port} ({connection_type})")
+            node.connect_node_by_url(
+                url=f"{address}:{port}", method=method, v2transport=supports_v2_p2p
+            )
+
+        if supports_v2_p2p is None:
+            supports_v2_p2p = (
+                node.use_v2transport if hasattr(node, "use_v2transport") else False
+            )
+        if advertise_v2_p2p is None:
+            advertise_v2_p2p = (
+                node.use_v2transport if hasattr(node, "use_v2transport") else False
+            )
+
+        # Handle v2 P2P advertisement
+        if advertise_v2_p2p:
+            kwargs["services"] = kwargs.get("services", P2P_SERVICES) | NODE_P2P_V2
+
+        # If advertised v2 but doesn't support it, reconnection needed
+        reconnect = advertise_v2_p2p and not supports_v2_p2p
+        supports_v2_p2p = supports_v2_p2p and advertise_v2_p2p
+
+        p2p_conn.peer_accept_connection(
+            connect_cb=addconnection_callback,
+            connect_id=p2p_idx + 1,
+            net=node.chain if hasattr(node, "chain") else "regtest",
+            timeout_factor=1.0,
+            supports_v2_p2p=supports_v2_p2p,
+            reconnect=reconnect,
+            **kwargs,
+        )()
+
+        if reconnect:
+            p2p_conn.wait_for_reconnect()
+
+        if connection_type == "feeler" or wait_for_disconnect:
+            p2p_conn.wait_until(
+                lambda: p2p_conn.message_count.get("version", 0) == 1,
+                check_connected=False,
+            )
+            p2p_conn.wait_until(
+                lambda: not p2p_conn.is_connected, check_connected=False
+            )
+        else:
+            p2p_conn.wait_for_connect()
+            self._p2p_interface.append((node, p2p_conn))
+
+            if supports_v2_p2p:
+                p2p_conn.wait_until(lambda: p2p_conn.v2_state.tried_v2_handshake)
+            p2p_conn.wait_until(lambda: not p2p_conn.on_connection_send_msg)
+            if wait_for_verack:
+                p2p_conn.wait_for_verack()
+                p2p_conn.sync_with_ping()
+
+        wait_until(predicate=lambda: len(node.rpc.get_peerinfo()) == node_peers + 1)
+
+        return p2p_conn
+
+    def add_p2p_connection_default(
+        self,
+        node: Node,
+        *,
+        wait_for_verack=True,
+        p2p_idx,
+        connection_type="outbound-full-relay",
+        supports_v2_p2p=True,
+        advertise_v2_p2p=True,
+        method="onetry",
+        **kwargs,
+    ):
+        """Add an outbound p2p connection with a default P2PInterface.
+
+        This method creates a default P2PInterface and connects it to the first node.
+
+        Parameters:
+            p2p_idx: Index for the connection
+            connection_type: Type of connection
+            supports_v2_p2p: whether to support v2 P2P
+            advertise_v2_p2p: whether to advertise v2 P2P support
+
+        Returns:
+            The P2PInterface object
+        """
+        # Create default P2PInterface
+        p2p_interface = P2PInterface()
+
+        # Use the custom version to do the actual connection
+        return self.add_p2p_connection(
+            node=node,
+            p2p_conn=p2p_interface,
+            wait_for_verack=wait_for_verack,
+            p2p_idx=p2p_idx,
+            connection_type=connection_type,
+            supports_v2_p2p=supports_v2_p2p,
+            advertise_v2_p2p=advertise_v2_p2p,
+            method=method,
+            **kwargs,
+        )
+
+    def create_msg_random(self, msgtype, size: int = MAX_PROTOCOL_MESSAGE_LENGTH + 1):
+        """
+        Create a message of a given size.
+        """
+        oversized_payload = b"\x00" * size
+
+        # Create a generic message
+        return msg_generic(msgtype, oversized_payload)
+
+    def send_spam_p2p_messages(
+        self,
+        p2p_conn: P2PInterface,
+        msg,
+        timeout: int = 10,
+        range_msg=range(MAX_MSG_PER_SECOND * 2),
+        check_disconnection: bool = True,
+    ):
+        """
+        Flood a P2P connection with repeated message batches to test rate limiting.
+
+        This method sends batches of messages in rapid succession for a specified duration.
+        Each batch contains `range_msg` copies of the same message. The function continues
+        sending message batches until either:
+        - The timeout is reached (normal completion)
+        - The peer disconnects due to rate limit violations (if check_disconnection=True)
+        """
+        build_message = p2p_conn.build_message(msg)
+        msg_count = 0
+        start = time.time()
+        end_time = start + timeout
+
+        try:
+            while time.time() <= end_time:
+                for _ in range_msg:
+                    p2p_conn.send_raw_message(build_message)
+
+                msg_count += len(range_msg)
+
+        except IOError as e:
+            elapsed = time.time() - start
+            self.log(f"Sent {msg_count} messages in: {elapsed:.2f}s")
+
+            if check_disconnection:
+                self.log(f"Connection closed during spam (expected): {e}")
+                return
+
+            raise RuntimeError(
+                f"Connection closed during spam (unexpected): {e}"
+            ) from e
+
+        elapsed = time.time() - start
+        self.log(f"Sent {msg_count} messages in: {elapsed:.2f}s")
+
+        if check_disconnection:
+            p2p_conn.wait_for_disconnect()
+        elif not p2p_conn.is_connected:
+            raise RuntimeError("P2P connection was not disconnected as expected")
+
+    def create_node_address(self, quantity: int):
+        """
+        Create a list of node addresses.
+        """
+
+        i2p_addr = "c4gfnttsuwqomiygupdqqqyy5y5emnk5c73hrfvatri67prd7vyq.b32.i2p"
+        onion_addr = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+
+        address_list = []
+        for i in range(quantity):
+            addr = CAddress()
+            addr.time = int(time.time()) + i
+            addr.port = 8333 + i
+            addr.nServices = P2P_SERVICES
+            # Add one I2P and one onion V3 address at an arbitrary position.
+            if i % 5 == 0:
+                addr.net = addr.NET_I2P
+                addr.ip = i2p_addr
+                addr.port = 0
+            elif i % 3 == 0:
+                addr.net = addr.NET_TORV3
+                addr.ip = onion_addr
+            else:
+                addr.ip = f"123.123.123.{i % 256}"
+            address_list.append(addr)
+
+        return address_list
 
     # pylint: disable=invalid-name
     def assertTrue(self, condition: bool):
