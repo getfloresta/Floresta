@@ -53,6 +53,8 @@ use super::socks::Socks5StreamBuilder;
 use super::transport::TransportProtocol;
 use super::UtreexoNodeConfig;
 use crate::address_man::AddressState;
+use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+use crate::bitcoin_socket_addr::SystemResolver;
 use crate::node_context::PeerId;
 
 /// As per BIP 155, limit the number of addresses to 1,000
@@ -344,7 +346,11 @@ where
             .as_ref()
             .map(|address| {
                 Ok::<LocalAddress, WireError>(LocalAddress::new(
-                    Self::resolve_connect_host(address, config.network)?,
+                    BitcoinSocketAddr::parse_address(
+                        address,
+                        Some(config.network),
+                        SystemResolver,
+                    )?,
                     0,
                     AddressState::NeverTried,
                     ServiceFlags::NONE,

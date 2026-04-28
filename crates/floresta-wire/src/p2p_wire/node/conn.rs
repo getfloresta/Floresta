@@ -35,9 +35,6 @@ use super::UtreexoNode;
 use crate::address_man::AddressMan;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
-use crate::bitcoin_socket_addr::BitcoinSocketAddr;
-use crate::bitcoin_socket_addr::InvalidAddressError;
-use crate::bitcoin_socket_addr::SystemResolver;
 use crate::node_context::NodeContext;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::create_actors;
@@ -349,21 +346,6 @@ where
 
     // === BOOTSTRAPPING ===
 
-    /// Resolves a string address into a LocalAddress
-    ///
-    /// This function should get an address in the format `<address>[<:port>]` and return a
-    /// usable [`LocalAddress`]. It can be an ipv4, ipv6 or a hostname. In case of hostnames,
-    /// we resolve them using the system's DNS resolver and return an ip address. Errors if
-    /// the provided address is invalid, or we can't resolve it.
-    ///
-    /// TODO: Allow for non-clearnet addresses like onion services and i2p.
-    pub(crate) fn resolve_connect_host(
-        address: &str,
-        network: Network,
-    ) -> Result<BitcoinSocketAddr, InvalidAddressError> {
-        BitcoinSocketAddr::parse_address(address, Some(network), SystemResolver)
-    }
-
     // TODO(@luisschwab): get rid of this once
     // https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
     pub(crate) fn get_port(network: Network) -> u16 {
@@ -555,71 +537,5 @@ where
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use bitcoin::Network;
-    use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
-
-    use crate::node::running_ctx::RunningNode;
-    use crate::node::UtreexoNode;
-
-    fn check_address_resolving(address: &str, should_succeed: bool, description: &str) {
-        let result = UtreexoNode::<PartialChainState, RunningNode>::resolve_connect_host(
-            address,
-            Network::Bitcoin,
-        );
-        if should_succeed {
-            assert!(result.is_ok(), "Failed: {description}");
-        } else {
-            assert!(result.is_err(), "Unexpected success: {description}");
-        }
-    }
-
-    #[test]
-    fn test_parse_address() {
-        // IPv6 Tests
-        check_address_resolving("[::1]", true, "Valid IPv6 without port");
-        check_address_resolving("[::1", false, "Invalid IPv6 format");
-        check_address_resolving("[::1]:8333", true, "Valid IPv6 with port");
-        check_address_resolving("[::1]:8333:8333", false, "Invalid IPv6 with multiple ports");
-
-        // IPv4 Tests
-        check_address_resolving("127.0.0.1", true, "Valid IPv4 without port");
-        check_address_resolving("321.321.321.321", false, "Invalid IPv4 format");
-        check_address_resolving("127.0.0.1:8333", true, "Valid IPv4 with port");
-        check_address_resolving(
-            "127.0.0.1:8333:8333",
-            false,
-            "Invalid IPv4 with multiple ports",
-        );
-
-        // Hostname Tests
-        check_address_resolving("example.com", true, "Valid hostname without port");
-        check_address_resolving("example", false, "Invalid hostname");
-        check_address_resolving("example.com:8333", true, "Valid hostname with port");
-        check_address_resolving(
-            "example.com:8333:8333",
-            false,
-            "Invalid hostname with multiple ports",
-        );
-
-        // Edge Cases
-        // This could fail on windows but doesn't since inside `resolve_connect_host` we specify empty addresses as localhost for all OS`s.
-        check_address_resolving("", true, "Empty string address");
-        check_address_resolving(
-            " 127.0.0.1:8333 ",
-            false,
-            "Address with leading/trailing spaces",
-        );
-        check_address_resolving("127.0.0.1:0", true, "Valid address with port 0");
-        check_address_resolving("127.0.0.1:65535", true, "Valid address with maximum port");
-        check_address_resolving(
-            "127.0.0.1:65536",
-            false,
-            "Valid address with out-of-range port",
-        )
     }
 }

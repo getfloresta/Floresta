@@ -401,3 +401,86 @@ impl From<BitcoinSocketAddr> for AddrV2 {
         value.to_addrv2()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
+
+    use bitcoin::Network;
+
+    use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+    use crate::bitcoin_socket_addr::DnsResolver;
+
+    pub struct TestResolver;
+
+    impl DnsResolver for TestResolver {
+        type Error = io::Error;
+
+        fn resolve(&self, name: &str) -> Result<Vec<IpAddr>, Self::Error> {
+            // don't resolve the bad cases below
+            let bad_cases = ["321.321.321.321", "example"];
+            if bad_cases.contains(&name) {
+                return Ok(vec![]);
+            }
+
+            Ok(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        }
+    }
+
+    fn check_address_resolving(address: &str, should_succeed: bool, description: &str) {
+        let result =
+            BitcoinSocketAddr::parse_address(address, Some(Network::Bitcoin), TestResolver);
+        if should_succeed {
+            assert!(result.is_ok(), "Failed: {description}");
+        } else {
+            assert!(result.is_err(), "Unexpected success: {description}");
+        }
+    }
+
+    #[test]
+    fn test_parse_address() {
+        // IPv6 Tests
+        check_address_resolving("[::1]", true, "Valid IPv6 without port");
+        check_address_resolving("[::1", false, "Invalid IPv6 format");
+        check_address_resolving("[::1]:8333", true, "Valid IPv6 with port");
+        check_address_resolving("[::1]:8333:8333", false, "Invalid IPv6 with multiple ports");
+
+        // IPv4 Tests
+        check_address_resolving("127.0.0.1", true, "Valid IPv4 without port");
+        check_address_resolving("321.321.321.321", false, "Invalid IPv4 format");
+        check_address_resolving("127.0.0.1:8333", true, "Valid IPv4 with port");
+        check_address_resolving(
+            "127.0.0.1:8333:8333",
+            false,
+            "Invalid IPv4 with multiple ports",
+        );
+
+        // Hostname Tests
+        check_address_resolving("example.com", true, "Valid hostname without port");
+        check_address_resolving("example", false, "Invalid hostname");
+        check_address_resolving("example.com:8333", true, "Valid hostname with port");
+        check_address_resolving(
+            "example.com:8333:8333",
+            false,
+            "Invalid hostname with multiple ports",
+        );
+
+        // Edge Cases
+        // This could fail on windows but doesn't since inside `resolve_connect_host` we specify empty addresses as localhost for all OS`s.
+        check_address_resolving("", true, "Empty string address");
+        check_address_resolving(
+            " 127.0.0.1:8333 ",
+            false,
+            "Address with leading/trailing spaces",
+        );
+        check_address_resolving("127.0.0.1:0", true, "Valid address with port 0");
+        check_address_resolving("127.0.0.1:65535", true, "Valid address with maximum port");
+        check_address_resolving(
+            "127.0.0.1:65536",
+            false,
+            "Valid address with out-of-range port",
+        )
+    }
+}
