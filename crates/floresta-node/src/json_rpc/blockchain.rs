@@ -305,6 +305,19 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .map_err(|_| JsonRpcError::BlockNotFound)
     }
 
+    // getdifficulty
+    pub(super) fn get_difficulty(&self) -> Result<f64, JsonRpcError> {
+        let (_, hash) = self
+            .chain
+            .get_best_block()
+            .map_err(|_| JsonRpcError::Chain)?;
+        let header = self
+            .chain
+            .get_block_header(&hash)
+            .map_err(|_| JsonRpcError::BlockNotFound)?;
+        Ok(header.difficulty_float())
+    }
+
     // getblockfilter
     // getblockfrompeer (just call getblock)
     // getblockstats
@@ -312,7 +325,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getchaintips
     // getchaintxstats
     // getdeploymentinfo
-    // getdifficulty
     // getmempoolancestors
     // getmempooldescendants
     // getmempoolentry
