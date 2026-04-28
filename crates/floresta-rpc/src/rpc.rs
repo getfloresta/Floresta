@@ -74,6 +74,9 @@ pub trait FlorestaRPC {
 
     /// Returns the current height of the blockchain
     fn get_block_count(&self) -> Result<u32>;
+    /// Returns the proof-of-work difficulty as a multiple of the minimum difficulty.
+    #[doc = include_str!("../../../doc/rpc/getdifficulty.md")]
+    fn get_difficulty(&self) -> Result<f64>;
     /// Sends a hex-encoded transaction to the network
     ///
     /// This method sends a transaction to the network. The transaction should be encoded as a
@@ -259,6 +262,10 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_block_count(&self) -> Result<u32> {
         self.call("getblockcount", &[])
+    }
+
+    fn get_difficulty(&self) -> Result<f64> {
+        self.call("getdifficulty", &[])
     }
 
     fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut> {

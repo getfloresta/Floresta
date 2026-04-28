@@ -258,6 +258,12 @@ class BaseRPC(ABC):
         """
         return self.perform_request("getblockcount")
 
+    def get_difficulty(self) -> float:
+        """
+        Get the proof-of-work difficulty as a multiple of the minimum difficulty
+        """
+        return self.perform_request("getdifficulty")
+
     def get_blockheader(self, blockhash: str) -> dict:
         """
         Get the header of a block

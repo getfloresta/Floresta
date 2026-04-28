@@ -62,6 +62,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         }
         Methods::GetBestBlockHash => serde_json::to_string_pretty(&client.get_best_block_hash()?)?,
         Methods::GetBlockCount => serde_json::to_string_pretty(&client.get_block_count()?)?,
+        Methods::GetDifficulty => serde_json::to_string_pretty(&client.get_difficulty()?)?,
         Methods::GetTxOut { txid, vout } => {
             serde_json::to_string_pretty(&client.get_tx_out(txid, vout)?)?
         }
@@ -199,6 +200,15 @@ pub enum Methods {
         disable_help_subcommand = true
     )]
     GetBlockCount,
+
+    #[doc = include_str!("../../../doc/rpc/getdifficulty.md")]
+    #[command(
+        name = "getdifficulty",
+        about = "Returns the proof-of-work difficulty as a multiple of the minimum difficulty.",
+        long_about = Some(include_str!("../../../doc/rpc/getdifficulty.md")),
+        disable_help_subcommand = true
+    )]
+    GetDifficulty,
 
     /// Returns the proof that one or more transactions were included in a block
     #[command(name = "gettxoutproof")]
