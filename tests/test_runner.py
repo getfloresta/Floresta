@@ -70,6 +70,7 @@ BASE_TEST_SUITE = [
     ("floresta-cli", "getpeerinfo"),
     ("floresta-cli", "getconnectioncount"),
     ("floresta-cli", "getblockchaininfo"),
+    ("floresta-cli", "getchaintips"),
     ("floresta-cli", "getblockheader"),
     ("example", "bitcoin"),
     ("example", "utreexod"),

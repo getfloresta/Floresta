@@ -19,6 +19,7 @@ use corepc_types::v30::GetBlockVerboseOne;
 use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
+use floresta_chain::ChainTipStatus as ChainLevelStatus;
 use miniscript::descriptor::checksum;
 use serde_json::json;
 use serde_json::Value;
@@ -29,6 +30,8 @@ use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
+use crate::json_rpc::res::ChainTip;
+use crate::json_rpc::res::ChainTipStatus;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
 
@@ -310,7 +313,113 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getblockstats
     // getchainstates
-    // getchaintips
+
+    pub(super) fn get_chain_tips(&self) -> Result<Vec<ChainTip>, JsonRpcError> {
+        let tips = self
+            .chain
+            .get_chain_tips()
+            .map_err(|_| JsonRpcError::Chain)?;
+
+        let (best_height, _) = self
+            .chain
+            .get_best_block()
+            .map_err(|_| JsonRpcError::Chain)?;
+
+        tips.into_iter()
+            .map(|tip| {
+                let status = match tip.status {
+                    ChainLevelStatus::Active => ChainTipStatus::Active,
+                    ChainLevelStatus::ValidFork => ChainTipStatus::ValidFork,
+                    ChainLevelStatus::HeadersOnly => ChainTipStatus::HeadersOnly,
+                    ChainLevelStatus::Invalid => ChainTipStatus::Invalid,
+                };
+
+                if matches!(tip.status, ChainLevelStatus::Active) {
+                    return Ok(ChainTip {
+                        height: best_height,
+                        hash: tip.hash.to_string(),
+                        branchlen: 0,
+                        status,
+                    });
+                }
+
+                // For tips with known height (ValidFork, HeadersOnly), we
+                // can look up height and fork point directly.  For Invalid
+                // tips the DiskBlockHeader doesn't store the height, so we
+                // walk back through ancestors until we find one whose height
+                // is known and derive the tip height from the distance.
+                let tip_height = match self
+                    .chain
+                    .get_block_height(&tip.hash)
+                    .map_err(|_| JsonRpcError::Chain)?
+                {
+                    Some(h) => h,
+                    None => {
+                        // Walk ancestors to compute height
+                        let mut hash = tip.hash;
+                        let mut depth = 0u32;
+                        loop {
+                            let header = self
+                                .chain
+                                .get_block_header(&hash)
+                                .map_err(|_| JsonRpcError::Chain)?;
+                            let parent = header.prev_blockhash;
+                            depth += 1;
+                            if let Some(parent_h) = self
+                                .chain
+                                .get_block_height(&parent)
+                                .map_err(|_| JsonRpcError::Chain)?
+                            {
+                                break parent_h + depth;
+                            }
+                            hash = parent;
+                        }
+                    }
+                };
+
+                // Find the fork point: the most recent common ancestor with
+                // the active chain.  Walk back through ancestors and check
+                // whether each block is actually on the active chain by
+                // comparing get_block_hash(height) with the block's hash.
+                // This mirrors Bitcoin Core's FindFork behaviour.
+                let fork_height = {
+                    let mut hash = tip.hash;
+                    let mut h = tip_height;
+                    loop {
+                        // A block is on the active chain when its height is
+                        // within the active chain and the hash at that height
+                        // matches its own hash.
+                        if h <= best_height {
+                            if let Ok(active_hash) = self.chain.get_block_hash(h) {
+                                if active_hash == hash {
+                                    break h;
+                                }
+                            }
+                        }
+                        if h == 0 {
+                            break 0;
+                        }
+                        let header = match self.chain.get_block_header(&hash) {
+                            Ok(hdr) => hdr,
+                            Err(_) => break 0,
+                        };
+                        hash = header.prev_blockhash;
+                        h -= 1;
+                    }
+                };
+
+                let branchlen = tip_height.saturating_sub(fork_height);
+
+                Ok(ChainTip {
+                    height: tip_height,
+                    hash: tip.hash.to_string(),
+                    branchlen,
+                    status,
+                })
+            })
+            .collect()
+    }
+
     // getchaintxstats
     // getdeploymentinfo
     // getdifficulty

@@ -57,6 +57,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
     Ok(match cmd.methods.clone() {
         // Handle each possible RPC method and serialize the result to a pretty JSON string
         Methods::GetBlockchainInfo => serde_json::to_string_pretty(&client.get_blockchain_info()?)?,
+        Methods::GetChainTips => serde_json::to_string_pretty(&client.get_chain_tips()?)?,
         Methods::GetBlockHash { height } => {
             serde_json::to_string_pretty(&client.get_block_hash(height)?)?
         }
@@ -291,6 +292,15 @@ pub enum Methods {
         hash: BlockHash,
         verbosity: Option<u32>,
     },
+
+    #[doc = include_str!("../../../doc/rpc/getchaintips.md")]
+    #[command(
+        name = "getchaintips",
+        about = "Return information about all known tips in the block tree.",
+        long_about = Some(include_str!("../../../doc/rpc/getchaintips.md")),
+        disable_help_subcommand = true
+    )]
+    GetChainTips,
 
     /// Returns information about the peers we are connected to
     #[command(name = "getpeerinfo")]

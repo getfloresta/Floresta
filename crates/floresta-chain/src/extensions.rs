@@ -270,6 +270,7 @@ mod tests {
     use super::*;
     use crate::BlockConsumer;
     use crate::BlockchainError;
+    use crate::ChainTipInfo;
     use crate::UtxoData;
 
     #[derive(Debug)]
@@ -392,7 +393,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {
+        fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error> {
             unimplemented!()
         }
 

@@ -34,3 +34,7 @@ class FlorestaRPC(BaseRPC):
             raise ValueError(f"Invalid getmemoryinfo mode: '{mode}'")
 
         return self.perform_request("getmemoryinfo", params=[mode])
+
+    def get_chain_tips(self):
+        """Returns information about all known chain tips in the block tree"""
+        return self.perform_request("getchaintips")

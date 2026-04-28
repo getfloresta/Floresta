@@ -716,7 +716,7 @@ where
         let (height, _) = self.chain.get_best_block()?;
         let validation_index = self.chain.get_validation_index()?;
         if (validation_index + 100) < height {
-            let mut tips = self.chain.get_chain_tips()?;
+            let tips = self.chain.get_chain_tips()?;
             let (height, hash) = self.chain.get_best_block()?;
             let acc = self.find_accumulator_for_block(height, hash).await?;
 
@@ -728,13 +728,12 @@ where
                 );
 
                 self.context.state = ChainSelectorState::Done;
-                self.chain.mark_chain_as_assumed(acc, tips[0]).unwrap();
+                self.chain.mark_chain_as_assumed(acc, tips[0].hash).unwrap();
                 self.chain.toggle_ibd(false);
             }
             // if we have more than one tip, we need to check if our best chain has an invalid block
-            tips.remove(0); // no need to check our best one
-            for tip in tips {
-                self.is_our_chain_invalid(tip).await?;
+            for tip in tips.iter().skip(1) {
+                self.is_our_chain_invalid(tip.hash).await?;
             }
 
             return Ok(());
