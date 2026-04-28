@@ -15,11 +15,15 @@ use core::fmt::Formatter;
 use core::net::Ipv4Addr;
 use core::net::Ipv6Addr;
 use core::net::SocketAddr;
+use std::net::IpAddr;
 
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
+
+use crate::address_man::LocalAddress;
+use crate::p2p_wire::transport::TransportError;
 
 #[derive(Clone, Debug)]
 pub struct Socks5StreamBuilder {
@@ -43,8 +47,9 @@ const SOCKS_ADDR_TYPE_IPV6: u8 = 4;
 pub enum Socks5Addr {
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
-    Domain(Box<[u8]>),
+    Domain(String),
 }
+
 impl From<Socks5Addr> for u8 {
     fn from(val: Socks5Addr) -> Self {
         match val {
@@ -54,10 +59,28 @@ impl From<Socks5Addr> for u8 {
         }
     }
 }
+
+impl TryFrom<&LocalAddress> for Socks5Addr {
+    type Error = TransportError;
+
+    fn try_from(address: &LocalAddress) -> Result<Self, Self::Error> {
+        address
+            .get_net_address()
+            .map(|ip| match ip {
+                // Try to parse as an IP address first
+                IpAddr::V4(ipv4) => Socks5Addr::Ipv4(ipv4),
+                IpAddr::V6(ipv6) => Socks5Addr::Ipv6(ipv6),
+            })
+            // TODO(davidson): Support Tor, I2P...
+            .ok_or(TransportError::InvalidAddress)
+    }
+}
+
 impl Socks5StreamBuilder {
     pub fn new(address: SocketAddr) -> Self {
         Self { address }
     }
+
     pub async fn connect<Stream: AsyncRead + AsyncWrite + Unpin>(
         mut socket: Stream,
         address: &Socks5Addr,
@@ -65,17 +88,18 @@ impl Socks5StreamBuilder {
     ) -> Result<Stream, Socks5Error> {
         socket
             .write_all(&[SOCKS_VERSION, 1, SOCKS_AUTH_METHOD_NONE])
-            .await
-            .unwrap();
+            .await?;
+
         let address = match address {
             Socks5Addr::Ipv4(addr) => addr.octets().to_vec(),
             Socks5Addr::Ipv6(addr) => addr.octets().to_vec(),
             Socks5Addr::Domain(domain) => {
                 let mut buf = vec![domain.len() as u8];
-                buf.extend_from_slice(domain);
+                buf.extend_from_slice(domain.as_bytes());
                 buf
             }
         };
+
         let mut buf = [0_u8; 2];
         socket.read_exact(&mut buf).await?;
 
@@ -90,6 +114,7 @@ impl Socks5StreamBuilder {
         socket
             .write_all(&[SOCKS_VERSION, SOCKS_CMD_CONNECT, 0, SOCKS_ADDR_TYPE_IPV4])
             .await?;
+
         socket.write_all(&address).await?;
         socket.write_all(&port.to_be_bytes()).await?;
 
@@ -99,6 +124,7 @@ impl Socks5StreamBuilder {
         if buf[0] != SOCKS_VERSION {
             return Err(Socks5Error::InvalidVersion);
         }
+
         if buf[1] != 0 {
             return Err(Socks5Error::ConnectionFailed);
         }
@@ -123,6 +149,7 @@ impl Socks5StreamBuilder {
         Ok(socket)
     }
 }
+
 #[derive(Debug)]
 pub enum Socks5Error {
     InvalidVersion,

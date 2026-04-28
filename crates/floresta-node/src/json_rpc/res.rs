@@ -10,6 +10,7 @@ use corepc_types::v30::GetBlockVerboseOne;
 use floresta_chain::extensions::HeaderExtError;
 use floresta_common::impl_error_from;
 use floresta_mempool::mempool::MempoolError;
+use floresta_wire::bitcoin_socket_addr::InvalidAddressError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -186,7 +187,7 @@ pub enum JsonRpcError {
     Decode(String),
 
     /// The provided address is invalid, e.g., when it is not a valid IP address or hostname
-    InvalidAddress,
+    InvalidAddress(InvalidAddressError),
 
     /// This error is returned when there is an error with the node, e.g., if the node is not connected or when the node is not responding
     Node(String),
@@ -228,6 +229,7 @@ pub enum JsonRpcError {
 }
 
 impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
+impl_error_from!(JsonRpcError, InvalidAddressError, InvalidAddress);
 
 impl Display for JsonRpcError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -245,7 +247,7 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidDescriptor(e) =>  write!(f, "Invalid descriptor: {e}"),
             JsonRpcError::BlockNotFound =>  write!(f, "Block not found"),
             JsonRpcError::Chain => write!(f, "Chain error"),
-            JsonRpcError::InvalidAddress => write!(f, "Invalid address"),
+            JsonRpcError::InvalidAddress(e) => write!(f, "Invalid address {e:?}"),
             JsonRpcError::Node(e) => write!(f, "Node error: {e}"),
             JsonRpcError::NoBlockFilters => write!(f, "You don't have block filters enabled, please start florestad without --no-cfilters to run this RPC"),
             JsonRpcError::InInitialBlockDownload => write!(f, "Node is in initial block download, wait until it's finished"),

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use core::net::IpAddr;
 use core::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +7,6 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Network;
 use floresta_chain::ChainBackend;
@@ -37,8 +35,10 @@ use super::UtreexoNode;
 use crate::address_man::AddressMan;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
+use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+use crate::bitcoin_socket_addr::InvalidAddressError;
+use crate::bitcoin_socket_addr::SystemResolver;
 use crate::node_context::NodeContext;
-use crate::p2p_wire::error::AddrParseError;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::create_actors;
 use crate::p2p_wire::peer::Peer;
@@ -103,6 +103,7 @@ where
                 let net = self.network;
                 self.address_man.add_fixed_addresses(net);
             }
+
             return Err(WireError::NoAddressesAvailable);
         };
 
@@ -117,16 +118,11 @@ where
         self.address_man
             .update_set_state(peer_id, AddressState::Failed(now));
 
-        // Don't open duplicate connections to the same peer.
-        let is_peer_connected = |(_, old_peer): (_, &LocalPeerView)| {
-            peer_address.get_net_address() == old_peer.address
-                && peer_address.get_port() == old_peer.port
-        };
-        if self.peers.iter().any(is_peer_connected) {
-            return Err(WireError::PeerAlreadyExists(
-                peer_address.get_net_address(),
-                peer_address.get_port(),
-            ));
+        // Don't connect to the same peer twice
+        let is_connected = |(_, peer_addr): (_, &LocalPeerView)| peer_addr.address == peer_address;
+
+        if self.common.peers.iter().any(is_connected) {
+            return Err(WireError::PeerAlreadyExists(peer_address));
         }
 
         // Only allow P2PV1 fallback if the peer's connection kind is manual,
@@ -135,7 +131,7 @@ where
             matches!(conn_kind, ConnectionKind::Manual) || self.config.allow_v1_fallback;
 
         // Open a connection to the peer.
-        self.open_connection(conn_kind, peer_id, peer_address, allow_v1_fallback)?;
+        self.open_connection(conn_kind, peer_address, allow_v1_fallback)?;
 
         Ok(())
     }
@@ -167,7 +163,6 @@ where
     pub(crate) fn open_connection(
         &mut self,
         kind: ConnectionKind,
-        peer_id: usize,
         peer_address: LocalAddress,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
@@ -224,15 +219,13 @@ where
             peer_count,
             LocalPeerView {
                 message_times: Ema::with_half_life_50(),
-                address: peer_address.get_net_address(),
-                port: peer_address.get_port(),
+                address: peer_address,
                 user_agent: "".to_string(),
                 state: PeerStatus::Awaiting,
                 channel: requests_tx,
                 services: ServiceFlags::NONE,
                 _last_message: Instant::now(),
                 kind,
-                address_id: peer_id as u32,
                 height: 0,
                 banscore: 0,
                 // Will be downgraded to V1 if the V2 handshake fails, and we allow fallback
@@ -273,12 +266,13 @@ where
         our_best_block: u32,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
-        let (transport_reader, transport_writer, transport_protocol) = transport::connect(
-            (peer_address.get_net_address(), peer_address.get_port()),
-            network,
-            allow_v1_fallback,
-        )
-        .await?;
+        let ip_addr = peer_address
+            .get_net_address()
+            .ok_or(WireError::UnreachableNetwork)?;
+        let address = (ip_addr, peer_address.get_port());
+
+        let (transport_reader, transport_writer, transport_protocol) =
+            transport::connect(address, network, allow_v1_fallback).await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);
@@ -365,109 +359,9 @@ where
     /// TODO: Allow for non-clearnet addresses like onion services and i2p.
     pub(crate) fn resolve_connect_host(
         address: &str,
-        default_port: u16,
-    ) -> Result<LocalAddress, AddrParseError> {
-        // ipv6
-        if address.starts_with('[') {
-            if !address.contains(']') {
-                return Err(AddrParseError::InvalidIpv6);
-            }
-
-            let mut split = address.trim_end().split(']');
-            let hostname = split.next().ok_or(AddrParseError::InvalidIpv6)?;
-            let port = split
-                .next()
-                .filter(|x| !x.is_empty())
-                .map(|port| {
-                    port.trim_start_matches(':')
-                        .parse()
-                        .map_err(|_e| AddrParseError::InvalidPort)
-                })
-                .transpose()?
-                .unwrap_or(default_port);
-
-            let hostname = hostname.trim_start_matches('[');
-            let ip = hostname.parse().map_err(|_e| AddrParseError::InvalidIpv6)?;
-            return Ok(LocalAddress::new(
-                AddrV2::Ipv6(ip),
-                0,
-                AddressState::NeverTried,
-                ServiceFlags::NONE,
-                port,
-                rand::random(),
-            ));
-        }
-
-        // ipv4 - it's hard to differentiate between ipv4 and hostname without an actual regex
-        // simply try to parse it as an ip address and if it fails, assume it's a hostname
-
-        // this breaks the necessity of feature gate on windows
-        let mut address = address;
-        if address.is_empty() {
-            address = "127.0.0.1"
-        }
-
-        let mut split = address.split(':');
-        let ip = split
-            .next()
-            .ok_or(AddrParseError::InvalidIpv4)?
-            .parse()
-            .map_err(|_e| AddrParseError::InvalidIpv4);
-
-        match ip {
-            Ok(ip) => {
-                let port = split
-                    .next()
-                    .map(|port| port.parse().map_err(|_e| AddrParseError::InvalidPort))
-                    .transpose()?
-                    .unwrap_or(default_port);
-
-                if split.next().is_some() {
-                    return Err(AddrParseError::Inconclusive);
-                }
-
-                let id = rand::random();
-                Ok(LocalAddress::new(
-                    AddrV2::Ipv4(ip),
-                    0,
-                    AddressState::NeverTried,
-                    ServiceFlags::NONE,
-                    port,
-                    id,
-                ))
-            }
-
-            Err(_) => {
-                let mut split = address.split(':');
-                let hostname = split.next().ok_or(AddrParseError::InvalidHostname)?;
-                let port = split
-                    .next()
-                    .map(|port| port.parse().map_err(|_e| AddrParseError::InvalidPort))
-                    .transpose()?
-                    .unwrap_or(default_port);
-
-                if split.next().is_some() {
-                    return Err(AddrParseError::Inconclusive);
-                }
-
-                let ip = dns_lookup::lookup_host(hostname)
-                    .map_err(|_e| AddrParseError::InvalidHostname)?;
-                let id = rand::random();
-                let ip = match ip[0] {
-                    IpAddr::V4(ip) => AddrV2::Ipv4(ip),
-                    IpAddr::V6(ip) => AddrV2::Ipv6(ip),
-                };
-
-                Ok(LocalAddress::new(
-                    ip,
-                    0,
-                    AddressState::NeverTried,
-                    ServiceFlags::NONE,
-                    port,
-                    id,
-                ))
-            }
-        }
+        network: Network,
+    ) -> Result<BitcoinSocketAddr, InvalidAddressError> {
+        BitcoinSocketAddr::parse_address(address, Some(network), SystemResolver)
     }
 
     // TODO(@luisschwab): get rid of this once
@@ -586,7 +480,6 @@ where
         for address in anchors {
             self.open_connection(
                 ConnectionKind::Regular(service_flags::UTREEXO.into()),
-                address.id,
                 address,
                 // Using V1 transport fallback as utreexo nodes have limited support
                 true,
@@ -638,9 +531,10 @@ where
         }
         let peers_count = self.peer_id_count;
         for added_peer in self.added_peers.clone() {
-            let matching_peer = self.peers.values().find(|peer| {
-                self.to_addr_v2(peer.address) == added_peer.address && peer.port == added_peer.port
-            });
+            let matching_peer = self
+                .peers
+                .values()
+                .find(|peer| *peer.address.as_bitcoin_socket_addr() == added_peer.address);
 
             if matching_peer.is_none() {
                 let address = LocalAddress::new(
@@ -653,17 +547,11 @@ where
                             .as_secs(),
                     ),
                     ServiceFlags::NONE,
-                    added_peer.port,
                     peers_count as usize,
                 );
 
                 // Finally, open the connection with the node
-                self.open_connection(
-                    ConnectionKind::Manual,
-                    peers_count as usize,
-                    address,
-                    added_peer.v1_fallback,
-                )?
+                self.open_connection(ConnectionKind::Manual, address, added_peer.v1_fallback)?
             }
         }
         Ok(())
@@ -672,14 +560,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::Network;
     use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 
     use crate::node::running_ctx::RunningNode;
     use crate::node::UtreexoNode;
 
-    fn check_address_resolving(address: &str, port: u16, should_succeed: bool, description: &str) {
-        let result =
-            UtreexoNode::<PartialChainState, RunningNode>::resolve_connect_host(address, port);
+    fn check_address_resolving(address: &str, should_succeed: bool, description: &str) {
+        let result = UtreexoNode::<PartialChainState, RunningNode>::resolve_connect_host(
+            address,
+            Network::Bitcoin,
+        );
         if should_succeed {
             assert!(result.is_ok(), "Failed: {description}");
         } else {
@@ -690,57 +581,43 @@ mod tests {
     #[test]
     fn test_parse_address() {
         // IPv6 Tests
-        check_address_resolving("[::1]", 8333, true, "Valid IPv6 without port");
-        check_address_resolving("[::1", 8333, false, "Invalid IPv6 format");
-        check_address_resolving("[::1]:8333", 8333, true, "Valid IPv6 with port");
-        check_address_resolving(
-            "[::1]:8333:8333",
-            8333,
-            false,
-            "Invalid IPv6 with multiple ports",
-        );
+        check_address_resolving("[::1]", true, "Valid IPv6 without port");
+        check_address_resolving("[::1", false, "Invalid IPv6 format");
+        check_address_resolving("[::1]:8333", true, "Valid IPv6 with port");
+        check_address_resolving("[::1]:8333:8333", false, "Invalid IPv6 with multiple ports");
 
         // IPv4 Tests
-        check_address_resolving("127.0.0.1", 8333, true, "Valid IPv4 without port");
-        check_address_resolving("321.321.321.321", 8333, false, "Invalid IPv4 format");
-        check_address_resolving("127.0.0.1:8333", 8333, true, "Valid IPv4 with port");
+        check_address_resolving("127.0.0.1", true, "Valid IPv4 without port");
+        check_address_resolving("321.321.321.321", false, "Invalid IPv4 format");
+        check_address_resolving("127.0.0.1:8333", true, "Valid IPv4 with port");
         check_address_resolving(
             "127.0.0.1:8333:8333",
-            8333,
             false,
             "Invalid IPv4 with multiple ports",
         );
 
         // Hostname Tests
-        check_address_resolving("example.com", 8333, true, "Valid hostname without port");
-        check_address_resolving("example", 8333, false, "Invalid hostname");
-        check_address_resolving("example.com:8333", 8333, true, "Valid hostname with port");
+        check_address_resolving("example.com", true, "Valid hostname without port");
+        check_address_resolving("example", false, "Invalid hostname");
+        check_address_resolving("example.com:8333", true, "Valid hostname with port");
         check_address_resolving(
             "example.com:8333:8333",
-            8333,
             false,
             "Invalid hostname with multiple ports",
         );
 
         // Edge Cases
-        // This could fail on windows but doesnt since inside `resolve_connect_host` we specificate empty addresses as localhost for all OS`s.
-        check_address_resolving("", 8333, true, "Empty string address");
+        // This could fail on windows but doesn't since inside `resolve_connect_host` we specify empty addresses as localhost for all OS`s.
+        check_address_resolving("", true, "Empty string address");
         check_address_resolving(
             " 127.0.0.1:8333 ",
-            8333,
             false,
             "Address with leading/trailing spaces",
         );
-        check_address_resolving("127.0.0.1:0", 0, true, "Valid address with port 0");
-        check_address_resolving(
-            "127.0.0.1:65535",
-            65535,
-            true,
-            "Valid address with maximum port",
-        );
+        check_address_resolving("127.0.0.1:0", true, "Valid address with port 0");
+        check_address_resolving("127.0.0.1:65535", true, "Valid address with maximum port");
         check_address_resolving(
             "127.0.0.1:65536",
-            65535,
             false,
             "Valid address with out-of-range port",
         )

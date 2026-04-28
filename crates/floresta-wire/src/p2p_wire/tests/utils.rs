@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use core::net::IpAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +10,6 @@ use bitcoin::consensus::encode;
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::consensus::Decodable;
 use bitcoin::hex::FromHex;
-use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
@@ -175,16 +173,14 @@ pub fn create_peer(
 
     LocalPeerView {
         message_times: Ema::with_half_life_50(),
-        address: "127.0.0.1".parse().unwrap(),
+        address: "127.0.0.1:8333".parse().unwrap(),
         services: service_flags::UTREEXO.into(),
         user_agent: "/utreexo:0.1.0/".to_string(),
         height: 0,
         state: PeerStatus::Ready,
         channel: sender,
-        port: 8333,
         kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
         banscore: 0,
-        address_id: 0,
         _last_message: Instant::now(),
         transport_protocol: TransportProtocol::V2,
     }
@@ -342,7 +338,7 @@ pub async fn setup_node(
 
         // Add a fixed peer to avoid opening real P2P connections
         if i == 0 {
-            node.fixed_peer = Some(to_addr_v2(peer.address).into());
+            node.fixed_peer = Some(peer.address.clone());
         }
 
         node.peers.insert(peer_id, peer);
@@ -370,14 +366,6 @@ pub async fn setup_node(
         .unwrap();
 
     chain
-}
-
-// TODO: remove this after bitcoin-0.33.0
-fn to_addr_v2(addr: IpAddr) -> AddrV2 {
-    match addr {
-        IpAddr::V4(addr) => AddrV2::Ipv4(addr),
-        IpAddr::V6(addr) => AddrV2::Ipv6(addr),
-    }
 }
 
 #[cfg(test)]

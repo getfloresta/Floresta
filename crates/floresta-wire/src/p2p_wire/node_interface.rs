@@ -3,10 +3,9 @@
 //! node_interface, which holds [`NodeInterface`] and related methods
 //! that define the API to interact with the floresta node
 
-use core::net::IpAddr;
-use core::net::SocketAddr;
 use std::time::Instant;
 
+use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
@@ -23,6 +22,7 @@ use super::node::NodeNotification;
 use super::node::PeerStatus;
 use super::transport::TransportProtocol;
 use super::UtreexoNodeConfig;
+use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A request to addnode that can be made to the node.
@@ -33,13 +33,13 @@ use super::UtreexoNodeConfig;
 /// [Bitcoin Core]: (https://bitcoincore.org/en/doc/29.0.0/rpc/network/addnode/)
 pub enum AddNode {
     /// The `Add` variant is used to add a peer to the node's peer list
-    Add((IpAddr, u16)),
+    Add((AddrV2, u16)),
 
     /// The `Remove` variant is used to remove a peer from the node's peer list
-    Remove((IpAddr, u16)),
+    Remove((AddrV2, u16)),
 
     /// The `Onetry` variant is used to try a connection to the peer once, but not add it to the peer list.
-    Onetry((IpAddr, u16)),
+    Onetry((AddrV2, u16)),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -74,22 +74,22 @@ pub enum UserRequest {
     ///
     /// This function will add this peer to a special list of peers such that, if we lose the
     /// connection, we will keep trying to connect to it until we succeed.
-    Add((IpAddr, u16, bool)),
+    Add((BitcoinSocketAddr, bool)),
 
     /// Removes a node from the node's peer list.
     ///
     /// This function will remove a node that was added with [`AddNode::Add`]. This will **not**
     /// disconnect the peer, but if it disconnects, it will not be reconnected again.
-    Remove((IpAddr, u16)),
+    Remove(BitcoinSocketAddr),
 
     /// Attempts to connect to a peer once.
     ///
     /// Different from [`AddNode::Add`], this function will try to connect to the peer once, but
     /// will not add it to the node's added peers list.
-    Onetry((IpAddr, u16, bool)),
+    Onetry((BitcoinSocketAddr, bool)),
 
     /// Attempt to disconnect from a peer.
-    Disconnect((IpAddr, u16)),
+    Disconnect(BitcoinSocketAddr),
 
     /// Ping all connected peers to check if they are alive.
     Ping,
@@ -106,7 +106,8 @@ pub enum UserRequest {
 /// at, its state and the kind of connection it has with the node.
 pub struct PeerInfo {
     pub id: u32,
-    pub address: SocketAddr,
+    #[serde(serialize_with = "serialize_addr")]
+    pub address: BitcoinSocketAddr,
     #[serde(serialize_with = "serialize_service_flags")]
     pub services: ServiceFlags,
     pub user_agent: String,
@@ -220,12 +221,11 @@ impl NodeInterface {
     /// may be called multiple times, and may use hostnames or IP addresses.
     pub async fn add_peer(
         &self,
-        addr: IpAddr,
-        port: u16,
+        addr: BitcoinSocketAddr,
         v2transport: bool,
     ) -> Result<bool, oneshot::error::RecvError> {
         let val = self
-            .send_request(UserRequest::Add((addr, port, v2transport)))
+            .send_request(UserRequest::Add((addr, v2transport)))
             .await?;
 
         extract_variant!(Add, val);
@@ -236,10 +236,9 @@ impl NodeInterface {
     /// It may be called multiple times, and may use hostnames or IP addresses.
     pub async fn remove_peer(
         &self,
-        addr: IpAddr,
-        port: u16,
+        addr: BitcoinSocketAddr,
     ) -> Result<bool, oneshot::error::RecvError> {
-        let val = self.send_request(UserRequest::Remove((addr, port))).await?;
+        let val = self.send_request(UserRequest::Remove(addr)).await?;
         extract_variant!(Remove, val);
     }
 
@@ -248,12 +247,9 @@ impl NodeInterface {
     /// Returns a bool indicating whether the disconnection was successful.
     pub async fn disconnect_peer(
         &self,
-        addr: IpAddr,
-        port: u16,
+        addr: BitcoinSocketAddr,
     ) -> Result<bool, oneshot::error::RecvError> {
-        let val = self
-            .send_request(UserRequest::Disconnect((addr, port)))
-            .await?;
+        let val = self.send_request(UserRequest::Disconnect(addr)).await?;
 
         extract_variant!(Disconnect, val);
     }
@@ -265,12 +261,11 @@ impl NodeInterface {
     /// It may be called multiple times, and may use hostnames or IP addresses.
     pub async fn onetry_peer(
         &self,
-        addr: IpAddr,
-        port: u16,
+        addr: BitcoinSocketAddr,
         v2transport: bool,
     ) -> Result<bool, oneshot::error::RecvError> {
         let val = self
-            .send_request(UserRequest::Onetry((addr, port, v2transport)))
+            .send_request(UserRequest::Onetry((addr, v2transport)))
             .await?;
         extract_variant!(Onetry, val);
     }
@@ -327,6 +322,13 @@ impl NodeInterface {
 
         extract_variant!(Ping, val)
     }
+}
+
+fn serialize_addr<S>(local_addr: &BitcoinSocketAddr, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&local_addr.to_string())
 }
 
 fn serialize_service_flags<S>(flags: &ServiceFlags, serializer: S) -> Result<S::Ok, S::Error>

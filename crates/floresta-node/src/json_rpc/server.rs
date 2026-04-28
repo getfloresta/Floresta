@@ -442,7 +442,7 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
     match err {
         // you messed up
         JsonRpcError::InvalidHex
-        | JsonRpcError::InvalidAddress
+        | JsonRpcError::InvalidAddress(_)
         | JsonRpcError::InvalidScript
         | JsonRpcError::InvalidRequest
         | JsonRpcError::InvalidDescriptor(_)
@@ -483,7 +483,7 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
         // Invalid Request
         JsonRpcError::InvalidHex
         | JsonRpcError::MissingParameter(_)
-        | JsonRpcError::InvalidAddress
+        | JsonRpcError::InvalidAddress(_)
         | JsonRpcError::InvalidScript
         | JsonRpcError::MethodNotFound
         | JsonRpcError::InvalidRequest
