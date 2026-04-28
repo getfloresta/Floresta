@@ -60,7 +60,7 @@ class GetBlockCountTest(FlorestaTestFramework):
 
         for height in [
             0,
-            chain_floresta["height"],
+            chain_floresta["blocks"],
             chain_utreexod["blocks"],
             chain_bitcoind["blocks"],
             height_utreexod,
@@ -88,8 +88,8 @@ class GetBlockCountTest(FlorestaTestFramework):
         height_utreexod = self.utreexod.rpc.get_block_count()
 
         self.assertEqual(height_florestad, height_utreexod)
-        self.assertEqual(height_florestad, floresta_chain["validated"])
-        self.assertEqual(height_florestad, floresta_chain["height"])
+        self.assertEqual(height_florestad, floresta_chain["headers"])
+        self.assertEqual(height_florestad, floresta_chain["blocks"])
         self.assertEqual(height_florestad, utreexod_chain["blocks"])
 
         self.log("=== Check that florestad has the same blockcount as bitcoind...")

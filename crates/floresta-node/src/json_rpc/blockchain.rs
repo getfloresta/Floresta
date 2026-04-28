@@ -9,6 +9,7 @@ use bitcoin::Address;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::MerkleBlock;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Script;
 use bitcoin::ScriptBuf;
@@ -16,6 +17,7 @@ use bitcoin::Txid;
 use bitcoin::VarInt;
 use corepc_types::v29::GetTxOut;
 use corepc_types::v30::GetBlockVerboseOne;
+use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
@@ -24,7 +26,6 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
-use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
 use super::server::RpcChain;
@@ -243,7 +244,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     // getblockchaininfo
-    pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes, JsonRpcError> {
+    pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfo, JsonRpcError> {
         let (height, hash) = self.chain.get_best_block().unwrap();
         let validated = self.chain.get_validation_index().unwrap();
         let ibd = self.chain.is_in_ibd();
@@ -252,37 +253,47 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
         let latest_block_time = latest_header.time;
-        let leaf_count = self.chain.acc().leaves as u32;
-        let root_count = self.chain.acc().roots.len() as u32;
-        let root_hashes = self
-            .chain
-            .acc()
-            .roots
-            .into_iter()
-            .map(|r| r.to_string())
-            .collect();
-
-        let validated_blocks = self.chain.get_validation_index().unwrap();
 
         let validated_percentage = if height != 0 {
-            validated_blocks as f32 / height as f32
+            validated as f64 / height as f64
         } else {
             0.0
         };
 
-        Ok(GetBlockchainInfoRes {
-            best_block: hash.to_string(),
-            height,
-            ibd,
-            validated,
-            latest_work,
-            latest_block_time,
-            leaf_count,
-            root_count,
-            root_hashes,
-            chain: self.network.to_string(),
-            difficulty: latest_header.difficulty(self.chain.get_params()) as u64,
-            progress: validated_percentage,
+        let mediantime = latest_header.calculate_median_time_past(&self.chain)?;
+        let bits = latest_header.get_bits_hex();
+        let target = latest_header.get_target_hex();
+        let size_on_disk = self.chain.size_on_disk().map_err(|_| JsonRpcError::Chain)?;
+
+        let chain = match self.network {
+            Network::Bitcoin => "main",
+            Network::Testnet => "test",
+            Network::Signet => "signet",
+            Network::Regtest => "regtest",
+            _ => "unknown",
+        }
+        .to_string();
+
+        Ok(GetBlockchainInfo {
+            chain,
+            blocks: validated as i64,
+            headers: height as i64,
+            best_block_hash: hash.to_string(),
+            bits,
+            target,
+            difficulty: latest_header.get_difficulty(),
+            time: latest_block_time as i64,
+            median_time: mediantime as i64,
+            verification_progress: validated_percentage,
+            initial_block_download: ibd,
+            chain_work: latest_work,
+            size_on_disk,
+            pruned: true,
+            prune_height: Some((height as i64) + 1),
+            automatic_pruning: Some(true),
+            prune_target_size: Some(0),
+            signet_challenge: None,
+            warnings: vec![],
         })
     }
 

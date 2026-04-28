@@ -1122,6 +1122,16 @@ impl ChainStore for FlatChainStore {
         unsafe { self.do_flush() }
     }
 
+    fn size_on_disk(&self) -> Result<u64, Self::Error> {
+        let headers_size = self.headers.len() as u64;
+        let metadata_size = self.metadata.len() as u64;
+        let block_index_size = self.block_index.index_map.len() as u64;
+        let fork_headers_size = self.fork_headers.len() as u64;
+        let accumulator_size = self.accumulator_file.metadata()?.len();
+
+        Ok(headers_size + metadata_size + block_index_size + fork_headers_size + accumulator_size)
+    }
+
     fn save_roots_for_block(&mut self, roots: Vec<u8>, height: u32) -> Result<(), Self::Error> {
         let index = Index::new(height)?;
 
@@ -1374,6 +1384,7 @@ mod tests {
     use super::FlatChainStore;
     use super::FlatChainStoreConfig;
     use super::FlatChainstoreError;
+    use super::HashedDiskHeader;
     use super::Index;
     use super::FLAT_CHAINSTORE_MAGIC;
     use super::FLAT_CHAINSTORE_VERSION;
@@ -1666,6 +1677,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_size_on_disk() {
+        let store = get_test_chainstore(None).unwrap();
+
+        let size = store.size_on_disk().unwrap();
+
+        // Expected bytes from the config values in `get_test_chainstore`,
+        // block_index (32_768 × u32) + headers (32_768 × HashedDiskHeader)
+        // + fork_headers (10_000 rounds to 16_384 × HashedDiskHeader) + metadata + 0 (acc file).
+        let expected = (32_768 * size_of::<u32>()
+            + 32_768 * size_of::<HashedDiskHeader>()
+            + 16_384 * size_of::<HashedDiskHeader>()
+            + size_of::<Metadata>()) as u64;
+
+        assert_eq!(size, expected);
+        assert!(size > 0);
     }
 
     #[test]

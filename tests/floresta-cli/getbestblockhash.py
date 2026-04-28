@@ -67,14 +67,16 @@ class GetBestblockhashTest(FlorestaTestFramework):
         self.log("=== Check that floresta has the same chain as utreexod...")
         floresta_chain = self.florestad.rpc.get_blockchain_info()
         utreexo_chain = self.utreexod.rpc.get_blockchain_info()
-        self.assertEqual(floresta_chain["validated"], 10)
-        self.assertEqual(floresta_chain["best_block"], utreexo_chain["bestblockhash"])
-        self.assertEqual(floresta_chain["height"], utreexo_chain["blocks"])
+        self.assertEqual(floresta_chain["headers"], 10)
+        self.assertEqual(
+            floresta_chain["bestblockhash"], utreexo_chain["bestblockhash"]
+        )
+        self.assertEqual(floresta_chain["blocks"], utreexo_chain["blocks"])
 
         self.log("=== Get tip block in the most-work fully-validated chain")
         floresta_best_block = self.florestad.rpc.get_bestblockhash()
         self.assertNotEqual(floresta_best_block, genesis_block)
-        self.assertEqual(floresta_best_block, floresta_chain["best_block"])
+        self.assertEqual(floresta_best_block, floresta_chain["bestblockhash"])
         self.assertEqual(floresta_best_block, utreexo_chain["bestblockhash"])
 
 

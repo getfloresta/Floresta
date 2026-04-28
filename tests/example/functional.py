@@ -21,8 +21,7 @@ class FunctionalTest(FlorestaTestFramework):
 
     expected_height = 0
     expected_block = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
-    expected_difficulty = 1
-    expected_leaf_count = 0
+    expected_difficulty = 4.6565423739069247e-10
 
     def set_test_params(self):
         """
@@ -56,10 +55,9 @@ class FunctionalTest(FlorestaTestFramework):
         # Make assertions with our framework. Avoid usage of
         # native `assert` clauses. For more information, see
         # https://github.com/getfloresta/Floresta/issues/426
-        self.assertEqual(inf_response["height"], FunctionalTest.expected_height)
-        self.assertEqual(inf_response["best_block"], FunctionalTest.expected_block)
+        self.assertEqual(inf_response["blocks"], FunctionalTest.expected_height)
+        self.assertEqual(inf_response["bestblockhash"], FunctionalTest.expected_block)
         self.assertEqual(inf_response["difficulty"], FunctionalTest.expected_difficulty)
-        self.assertEqual(inf_response["leaf_count"], FunctionalTest.expected_leaf_count)
 
         # stop nodes
         self.stop()

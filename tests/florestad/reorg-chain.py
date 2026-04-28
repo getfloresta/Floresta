@@ -51,8 +51,10 @@ class ChainReorgTest(FlorestaTestFramework):
         self.log("=== Check that floresta has the same chain as utreexod.rpc...")
         floresta_chain = self.florestad.rpc.get_blockchain_info()
         utreexo_chain = self.utreexod.rpc.get_blockchain_info()
-        self.assertEqual(floresta_chain["best_block"], utreexo_chain["bestblockhash"])
-        self.assertEqual(floresta_chain["height"], utreexo_chain["blocks"])
+        self.assertEqual(
+            floresta_chain["bestblockhash"], utreexo_chain["bestblockhash"]
+        )
+        self.assertEqual(floresta_chain["blocks"], utreexo_chain["blocks"])
 
         self.log("=== Get a block hash from utreexod to invalidate")
         hash = self.utreexod.rpc.get_blockhash(5)
@@ -67,8 +69,10 @@ class ChainReorgTest(FlorestaTestFramework):
         self.log("=== Check that floresta has switched to the new chain")
         floresta_chain = self.florestad.rpc.get_blockchain_info()
         utreexo_chain = self.utreexod.rpc.get_blockchain_info()
-        self.assertEqual(floresta_chain["best_block"], utreexo_chain["bestblockhash"])
-        self.assertEqual(floresta_chain["height"], utreexo_chain["blocks"])
+        self.assertEqual(
+            floresta_chain["bestblockhash"], utreexo_chain["bestblockhash"]
+        )
+        self.assertEqual(floresta_chain["blocks"], utreexo_chain["blocks"])
 
         self.log("=== Compare the accumulator roots for each node")
         floresta_roots = self.florestad.rpc.get_roots()
