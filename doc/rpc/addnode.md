@@ -27,7 +27,7 @@ floresta-cli addnode 192.168.0.1 onetry false
 
 `command` - (string, required) 'add' to add a node to the list, 'remove' to remove a node from the list, 'onetry' to try a connection to the node once.
 
-`v2transport` - (boolean, optional) Only tries to connect with this address using BIP0324 P2P V2 protocol. ignored for 'remove' command.
+`v2transport` - (boolean, optional, default=set by --allow-v1-fallback) Only tries to connect with this address using BIP0324 P2P V2 protocol. Ignored for 'remove' command. Default: `true` unless `--allow-v1-fallback` is used (then defaults to `false`).
 
 ## Returns
 

@@ -83,6 +83,7 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    pub(super) default_connection_is_v2: bool,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -320,7 +321,7 @@ async fn handle_json_rpc_request(
             let vout = get_numeric(&params, 1, "vout")?;
             let script = get_string(&params, 2, "script")?;
             let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_numeric(&params, 3, "height")?;
+            let height = get_optional_field(&params, 3, "height", get_numeric)?.unwrap_or(0);
 
             let state = state.clone();
             state.find_tx_out(txid, vout, script, height).await
@@ -364,8 +365,7 @@ async fn handle_json_rpc_request(
         "addnode" => {
             let node = get_string(&params, 0, "node")?;
             let command = get_string(&params, 1, "command")?;
-            let v2transport =
-                get_optional_field(&params, 2, "V2transport", get_bool)?.unwrap_or(false);
+            let v2transport = get_optional_field(&params, 2, "V2transport", get_bool)?;
 
             state
                 .add_node(node, command, v2transport)
@@ -749,6 +749,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
+        default_connection_is_v2: bool,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -789,6 +790,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                default_connection_is_v2,
             }));
 
         axum::serve(listener, router)
