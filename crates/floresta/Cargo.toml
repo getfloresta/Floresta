@@ -1,8 +1,6 @@
 [package]
-name = "floresta"
-version = "0.5.0"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
-edition = "2021"
+categories = ["cryptography::cryptocurrencies"]
 description = """
     A modular and extensible framework for building Utreexo based Bitcoin nodes.
 
@@ -16,11 +14,13 @@ description = """
     See the examples directory for examples of how to use this library, and
     each crate's documentation for more information on how to use each module.
 """
-repository = "https://github.com/getfloresta/Floresta"
-license = "MIT"
-readme.workspace = true # Floresta/README.md
+edition = "2021"
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]
-categories = ["cryptography::cryptocurrencies"]
+license = "MIT"
+name = "floresta"
+readme.workspace = true # Floresta/README.md
+repository = "https://github.com/getfloresta/Floresta"
+version = "0.5.0"
 
 [dependencies]
 # Local dependencies
@@ -39,20 +39,25 @@ tokio = { workspace = true }
 
 # Local dependencies
 floresta = { path = "../floresta", features = [
-    "bitcoinkernel",
-    "memory-database",
-    "electrum-server",
-    "watch-only-wallet",
+  "bitcoinkernel",
+  "memory-database",
+  "electrum-server",
+  "watch-only-wallet",
 ] }
 
 [features]
-default = ["electrum-server", "watch-only-wallet", "bitcoinkernel", "flat-chainstore"]
-electrum-server = ["dep:floresta-electrum"]
 bitcoinkernel = ["floresta-chain/bitcoinkernel"]
+default = [
+  "electrum-server",
+  "watch-only-wallet",
+  "bitcoinkernel",
+  "flat-chainstore",
+]
+electrum-server = ["dep:floresta-electrum"]
 watch-only-wallet = ["dep:floresta-watch-only"]
 # Works only if `watch-only-wallet` is set
-memory-database = ["floresta-watch-only?/memory-database"]
 flat-chainstore = ["floresta-chain/flat-chainstore"]
+memory-database = ["floresta-watch-only?/memory-database"]
 
 [lib]
 crate-type = ["cdylib", "rlib", "staticlib"]

@@ -40,10 +40,10 @@ for crate in $crates; do
 
     # The default feature, if not used to conditionally compile code, can be skipped as the combinations already
     # include that case (see https://github.com/taiki-e/cargo-hack/issues/155#issuecomment-2474330839)
-    if [ "$crate" = "floresta-compact-filters" ] || \
-       [ "$crate" = "floresta-electrum" ] || \
-       [ "$crate" = "fuzz" ] || \
-       [ "$crate" = "metrics" ]; then
+    if [ "$crate" = "floresta-compact-filters" ] ||
+        [ "$crate" = "floresta-electrum" ] ||
+        [ "$crate" = "fuzz" ] ||
+        [ "$crate" = "metrics" ]; then
         # These crates don't have a default feature
         skip_default=""
     else
@@ -62,5 +62,5 @@ for crate in $crates; do
         cargo hack test --release --feature-powerset $skip_default -v $cargo_arg
     fi
 
-    cd - > /dev/null || exit 1
+    cd - >/dev/null || exit 1
 done

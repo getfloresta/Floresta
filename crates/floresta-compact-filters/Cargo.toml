@@ -1,14 +1,14 @@
 [package]
-name = "floresta-compact-filters"
-version = "0.5.0"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
-edition = "2018"
-homepage = "https://github.com/davidson-souza/floresta"
-repository = "https://github.com/davidson-souza/floresta"
 description = """
 BIP158 compact filters for easy rescan of the blockchain in light clients.
 """
+edition = "2018"
+homepage = "https://github.com/davidson-souza/floresta"
+name = "floresta-compact-filters"
 readme.workspace = true # Floresta/README.md
+repository = "https://github.com/davidson-souza/floresta"
+version = "0.5.0"
 
 [dependencies]
 bitcoin = { workspace = true }

@@ -70,6 +70,10 @@
               boost
               cmake
               typos
+              taplo
+              shellcheck
+              shfmt
+              hadolint
               python312
               uv
               gcc
@@ -100,10 +104,62 @@
                   enable = true;
                   stages = [ "pre-commit" ];
                 };
+                hadolint-hook = {
+                  enable = true;
+                  name = "hadolint-hook";
+                  entry = "${pkgs.just}/bin/just docker-lint";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "file" ];
+                  files = "Dockerfile";
+                  pass_filenames = false;
+                  verbose = true;
+                };
+                shfmt-hook = {
+                  enable = true;
+                  name = "shfmt-hook";
+                  entry = "${pkgs.just}/bin/just sh-fmt --check";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "shell" ];
+                  pass_filenames = false;
+                  verbose = true;
+                };
+                shellcheck-hook = {
+                  enable = true;
+                  name = "shellcheck-hook";
+                  entry = "${pkgs.just}/bin/just sh-lint";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "shell" ];
+                  pass_filenames = false;
+                  verbose = true;
+                };
+                tomlfmt-hook = {
+                  enable = true;
+                  name = "tomlfmt-hook";
+                  entry = "${pkgs.just}/bin/just toml-fmt --check";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "toml" ];
+                  pass_filenames = false;
+                  verbose = true;
+                };
+                justfmt-hook = {
+                  enable = true;
+                  name = "justfmt-hook";
+                  entry = "${pkgs.just}/bin/just just-fmt --check";
+                  language = "system";
+                  stages = [ "pre-commit" ];
+                  types = [ "file" ];
+                  files = "justfile";
+                  pass_filenames = false;
+                  verbose = true;
+                };
                 rustfmt-hook = {
                   enable = true;
                   name = "rustfmt-hook";
-                  entry = "${pkgs.just}/bin/just format";
+                  entry = "${pkgs.just}/bin/just fmt --check";
                   language = "system";
                   stages = [ "pre-commit" ];
                   types = [ "rust" ];

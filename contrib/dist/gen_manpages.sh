@@ -31,7 +31,8 @@ convert_single() {
     fi
 
     # Extract filename without extension
-    local basename=$(basename "$file" .md)
+    local basename
+    basename=$(basename "$file" .md)
 
     # Skip the template stub file
     if [[ "$basename" == "template" ]]; then

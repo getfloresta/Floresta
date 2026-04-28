@@ -1,18 +1,18 @@
 [package]
-name = "floresta-electrum"
-version = "0.5.0"
-edition = "2021"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
+categories = ["cryptography::cryptocurrencies"]
 description = """
     A simple Electrum server implementation for Floresta. It is based on the
     Electrum protocol specification and works out of the box with any wallet
     that supports Electrum servers.
 """
-repository = "https://github.com/getfloresta/Floresta"
-license = "MIT"
-readme.workspace = true # Floresta/README.md
+edition = "2021"
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]
-categories = ["cryptography::cryptocurrencies"]
+license = "MIT"
+name = "floresta-electrum"
+readme.workspace = true # Floresta/README.md
+repository = "https://github.com/getfloresta/Floresta"
+version = "0.5.0"
 
 [dependencies]
 bitcoin = { workspace = true }
@@ -26,8 +26,8 @@ tracing = { workspace = true }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["bitcoinkernel"] }
-floresta-compact-filters = { workspace = true }
 floresta-common = { workspace = true }
+floresta-compact-filters = { workspace = true }
 floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
 

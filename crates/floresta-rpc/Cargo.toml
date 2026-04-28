@@ -1,18 +1,18 @@
 [package]
-name = "floresta-rpc"
-version = "0.5.0"
-edition = "2021"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
-license = "MIT"
+categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 description = """
 floresta-rpc is a Rust library that provides a JSON-RPC interface for interacting with Floresta. It allows
 users to perform various operations such as querying blockchain data, managing wallets, and
 broadcasting transactions through a simple and efficient API.
 """
-repository = "https://github.com/getfloresta/Floresta"
-readme.workspace = true # Floresta/README.md
+edition = "2021"
 keywords = ["bitcoin", "utreexo", "node", "blockchain", "rust"]
-categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
+license = "MIT"
+name = "floresta-rpc"
+readme.workspace = true # Floresta/README.md
+repository = "https://github.com/getfloresta/Floresta"
+version = "0.5.0"
 
 [dependencies]
 bitcoin = { workspace = true }
@@ -27,9 +27,9 @@ rand = { workspace = true }
 rcgen = { workspace = true }
 
 [features]
+clap = ["dep:clap"]
 default = ["with-jsonrpc"]
 with-jsonrpc = ["dep:jsonrpc"]
-clap = ["dep:clap"]
 
 [lints]
 workspace = true

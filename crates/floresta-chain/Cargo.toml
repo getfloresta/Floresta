@@ -1,18 +1,18 @@
 [package]
-name = "floresta-chain"
-version = "0.5.0"
-edition = "2021"
 authors = ["Floresta Developers <contact@getfloresta.org>"]
+categories = ["cryptography::cryptocurrencies", "database"]
 description = """
     Reusable components for building consensus-critical Bitcoin applications.
     Using floresta-chain, you can create a Bitcoin node that validates blocks
     and transactions, according to the Bitcoin consensus rules.
 """
-repository = "https://github.com/getfloresta/Floresta"
-license = "MIT"
-readme.workspace = true # Floresta/README.md
+edition = "2021"
 keywords = ["bitcoin", "utreexo", "node", "consensus"]
-categories = ["cryptography::cryptocurrencies", "database"]
+license = "MIT"
+name = "floresta-chain"
+readme.workspace = true # Floresta/README.md
+repository = "https://github.com/getfloresta/Floresta"
+version = "0.5.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -27,11 +27,14 @@ serde = { workspace = true, optional = true }
 sha2 = { workspace = true, features = ["std"] }
 spin = { workspace = true }
 tracing = { workspace = true }
-twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "std"], optional = true }
+twox-hash = { version = "2.1", default-features = false, features = [
+  "xxhash3_64",
+  "std",
+], optional = true }
 
 # Local dependencies
 floresta-common = { workspace = true, features = ["std"] }
-metrics = { workspace = true,  optional = true }
+metrics = { workspace = true, optional = true }
 
 [dev-dependencies]
 bitcoin = { workspace = true, features = ["serde"] }
@@ -44,15 +47,15 @@ tempfile = { workspace = true }
 zstd = { workspace = true }
 
 [features]
-default = []
 bitcoinkernel = ["dep:bitcoinkernel"]
+default = []
+flat-chainstore = ["dep:memmap2", "dep:lru", "dep:twox-hash"]
 metrics = ["dep:metrics"]
 test-utils = ["dep:serde"]
-flat-chainstore = ["dep:memmap2", "dep:lru", "dep:twox-hash"]
 
 [[bench]]
-name = "chain_state_bench"
 harness = false
+name = "chain_state_bench"
 required-features = ["flat-chainstore", "test-utils"]
 
 [lints]

@@ -87,7 +87,12 @@ doc-check:
 
 # Format code and run configured linters
 lint:
-    @just fmt
+    @just fmt --check
+    @just just-fmt --check
+    @just toml-fmt --check
+    @just sh-fmt --check
+    @just sh-lint
+    @just docker-lint
     @just doc-check
 
     # 1) Run with no features
@@ -101,13 +106,41 @@ lint:
     # Lint the functional tests
     @just test-functional-uv-fmt
 
-# Format code
-fmt:
-    cargo +nightly fmt --all
+# Format Rust code (pass '--check' to verify without modifying)
+fmt *args="":
+    cargo +nightly fmt --all {{ args }}
 
-# Checks the formatting
-format:
-    cargo +nightly fmt --all --check
+# Format justfile (pass '--check' to verify without modifying)
+just-fmt *args="":
+    just --fmt --unstable {{ args }}
+
+# Format TOML files (pass '--check' to verify without modifying)
+toml-fmt *args="":
+    @just check-command taplo toml-fmt "https://github.com/tamasfe/taplo"
+    taplo fmt {{ args }}
+
+# Shell files managed by sh-fmt and sh-lint
+
+shell-files := "contrib/clean_data.sh contrib/feature_matrix.sh contrib/dist/gen_manpages.sh contrib/install.sh tests/prepare.sh tests/run.sh"
+
+# Format shell scripts (pass '--check' to verify without modifying)
+sh-fmt *args="":
+    @just check-command shfmt sh-fmt "https://github.com/mvdan/sh"
+    if echo "{{ args }}" | grep -q -- '--check'; then \
+        shfmt -d {{ shell-files }}; \
+    else \
+        shfmt -w {{ shell-files }}; \
+    fi
+
+# Lint shell scripts with shellcheck
+sh-lint:
+    @just check-command shellcheck sh-lint "https://github.com/koalaman/shellcheck"
+    shellcheck {{ shell-files }}
+
+# Lint Dockerfiles with hadolint
+docker-lint:
+    @just check-command hadolint docker-lint "https://github.com/hadolint/hadolint"
+    hadolint Dockerfile
 
 # Test all feature combinations in each crate (arg: optional, e.g., --quiet or --verbose)
 test-features arg="":
@@ -118,7 +151,12 @@ test-features arg="":
 lint-features arg="":
     @just check-command "cargo-hack" "lint-features" "cargo install cargo-hack --locked --version 0.6.34"
 
-    @just fmt
+    @just fmt --check
+    @just just-fmt --check
+    @just toml-fmt --check
+    @just sh-fmt --check
+    @just sh-lint
+    @just docker-lint
     @just doc-check
     @just spell-check
 

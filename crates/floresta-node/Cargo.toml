@@ -1,9 +1,9 @@
 [package]
-name = "floresta-node"
-version = "0.9.0"
-edition = "2021"
-readme.workspace = true # Floresta/README.md
 authors = ["Floresta Developers <contact@getfloresta.org>"]
+edition = "2021"
+name = "floresta-node"
+readme.workspace = true                                     # Floresta/README.md
+version = "0.9.0"
 
 [dependencies]
 axum = { workspace = true, optional = true }
@@ -24,13 +24,13 @@ zmq = { version = "0.10", optional = true, default-features = false }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["bitcoinkernel"] }
-floresta-compact-filters = { workspace = true, optional = true }
 floresta-common = { workspace = true }
+floresta-compact-filters = { workspace = true, optional = true }
 floresta-electrum = { workspace = true }
 floresta-mempool = { workspace = true }
 floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
-metrics = { workspace = true,  optional = true }
+metrics = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
@@ -43,10 +43,10 @@ libc = "0.2"
 
 [features]
 compact-filters = ["dep:floresta-compact-filters"]
-zmq-server = ["dep:zmq"]
-json-rpc = ["dep:axum", "dep:tower-http", "compact-filters"]
 default = ["json-rpc"]
+json-rpc = ["dep:axum", "dep:tower-http", "compact-filters"]
 metrics = ["dep:metrics", "floresta-wire/metrics", "floresta-chain/metrics"]
+zmq-server = ["dep:zmq"]
 
 [lints]
 workspace = true
