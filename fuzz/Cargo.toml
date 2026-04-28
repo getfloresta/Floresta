@@ -74,5 +74,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "bitcoin_socket_addr"
+path = "fuzz_targets/bitcoin_socket_addr.rs"
+test = false
+doc = false
+bench = false
+
 [lints]
 workspace = true
