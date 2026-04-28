@@ -27,7 +27,7 @@ use crate::extensions::ChainWorkOverflow;
 use crate::proof_util::UtreexoLeafError;
 use crate::pruned_utreexo::chain_state_builder::BlockchainBuilderError;
 
-pub trait DatabaseError: Debug + Send + Sync + 'static {}
+pub trait DatabaseError: Debug + Display + Send + Sync + 'static {}
 
 #[derive(Debug)]
 /// Errors that can happen whilst interacting with the local blockchain.
@@ -91,7 +91,7 @@ impl Display for BlockchainError {
                 "Failed to reconstruct a scriptpubkey from Compact Leaf Data: {e}"
             ),
             Self::Database(e) => {
-                write!(f, "Error whilst interacting with the the ChainState: {e:?}")
+                write!(f, "Error whilst interacting with the the ChainState: {e}")
             }
             Self::ChainNotInitialized => write!(f, "The ChainState is not initialized"),
             Self::InvalidTip(e) => write!(f, "The ChainState's tip is invalid: {e}"),
