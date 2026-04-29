@@ -90,6 +90,9 @@ pub enum WireError {
 
     /// Couldn't find the leaf data for a block
     LeafDataNotFound,
+
+    /// Peer is banned
+    PeerBanned(IpAddr),
 }
 
 impl Display for WireError {
@@ -134,6 +137,7 @@ impl Display for WireError {
                 "We tried to work on a block that we don't have a proof for yet"
             ),
             WireError::LeafDataNotFound => write!(f, "Couldn't find the leaf data for a block"),
+            WireError::PeerBanned(ip) => write!(f, "Peer {ip} is banned"),
         }
     }
 }

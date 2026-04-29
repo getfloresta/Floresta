@@ -106,6 +106,11 @@ where
             return Err(WireError::NoAddressesAvailable);
         };
 
+        let net_address = peer_address.get_net_address();
+        if self.ban_man.is_banned(net_address) {
+            return Err(WireError::PeerBanned(net_address));
+        }
+
         debug!("Attempting connection with address={peer_address:?} kind={conn_kind:?}",);
 
         let now = SystemTime::now()
@@ -135,7 +140,7 @@ where
             matches!(conn_kind, ConnectionKind::Manual) || self.config.allow_v1_fallback;
 
         // Open a connection to the peer.
-        self.open_connection(conn_kind, peer_id, peer_address, allow_v1_fallback)?;
+        self.open_connection(conn_kind, peer_address, allow_v1_fallback)?;
 
         Ok(())
     }
@@ -167,7 +172,6 @@ where
     pub(crate) fn open_connection(
         &mut self,
         kind: ConnectionKind,
-        peer_id: usize,
         peer_address: LocalAddress,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
@@ -232,7 +236,6 @@ where
                 services: ServiceFlags::NONE,
                 _last_message: Instant::now(),
                 kind,
-                address_id: peer_id as u32,
                 height: 0,
                 banscore: 0,
                 // Will be downgraded to V1 if the V2 handshake fails, and we allow fallback
@@ -576,6 +579,7 @@ where
 
     pub(crate) fn init_peers(&mut self) -> Result<(), WireError> {
         let anchors = self.common.address_man.start_addr_man(self.datadir.clone());
+        self.common.ban_man.load_bans(&self.common.datadir);
         let enough_addresses = self.common.address_man.enough_addresses();
 
         if !self.config.disable_dns_seeds && !enough_addresses {
@@ -586,7 +590,6 @@ where
         for address in anchors {
             self.open_connection(
                 ConnectionKind::Regular(service_flags::UTREEXO.into()),
-                address.id,
                 address,
                 // Using V1 transport fallback as utreexo nodes have limited support
                 true,
@@ -658,12 +661,7 @@ where
                 );
 
                 // Finally, open the connection with the node
-                self.open_connection(
-                    ConnectionKind::Manual,
-                    peers_count as usize,
-                    address,
-                    added_peer.v1_fallback,
-                )?
+                self.open_connection(ConnectionKind::Manual, address, added_peer.v1_fallback)?
             }
         }
         Ok(())

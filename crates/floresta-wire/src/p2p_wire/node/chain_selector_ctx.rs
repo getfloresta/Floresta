@@ -71,7 +71,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::address_man::AddressState;
 use crate::block_proof::Bitmap;
 use crate::node::periodic_job;
 use crate::node::try_and_log;
@@ -183,12 +182,6 @@ where
                 error!("Error while downloading headers from peer={peer} err={e}");
 
                 self.disconnect_and_ban(peer)?;
-
-                let peer = self.peers.get(&peer).unwrap();
-                self.common.address_man.update_set_state(
-                    peer.address_id as usize,
-                    AddressState::Banned(ChainSelector::BAN_TIME),
-                );
             }
         }
 
@@ -701,10 +694,6 @@ where
     fn ban_peers_on_tip(&mut self, tip: BlockHash) -> Result<(), WireError> {
         for peer in self.common.peers.clone() {
             if self.context.tip_cache.get(&peer.0).copied().eq(&Some(tip)) {
-                self.address_man.update_set_state(
-                    peer.1.address_id as usize,
-                    AddressState::Banned(ChainSelector::BAN_TIME),
-                );
                 self.disconnect_and_ban(peer.0)?;
             }
         }

@@ -8,6 +8,7 @@ use bitcoin::p2p::ServiceFlags;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::address_man::LocalAddress;
 use floresta_wire::address_man::SUPPORTED_NETWORKS;
+use floresta_wire::ban_man::BanMan;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -37,5 +38,5 @@ fuzz_target!(|data: &[u8]| {
     for flag in available_flags {
         address_man.get_address_to_connect(flag, false);
     }
-    address_man.rearrange_buckets();
+    address_man.rearrange_buckets(&BanMan::new());
 });
