@@ -1,0 +1,30 @@
+name: Signed Commits
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  signatures:
+    name: Assert all commits are signed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check commit signatures
+        run: |
+          TOTAL=$(git log --pretty='tformat:%H' origin/master..HEAD | wc -l | tr -d ' ')
+          UNSIGNED=$(git log --pretty='tformat:%H %G?' origin/master..HEAD | grep " N$" | wc -l | tr -d ' ')
+          if [ "$UNSIGNED" -gt 0 ]; then
+            echo "Unsigned commits in this branch [$UNSIGNED/$TOTAL]"
+            exit 1
+          else
+            echo "All commits in this branch are signed [$TOTAL/$TOTAL]"
+          fi
