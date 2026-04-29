@@ -46,6 +46,22 @@ to reuse the same client components across different applications and deployment
 Floresta is the Portuguese word for forest. It is a reference to the Utreexo accumulator,
 which is a forest of Merkle trees. It's pronounced _/floˈɾɛstɐ/_.
 
+## Running
+
+Currently, Floresta is only available for installation on Linux and MacOS via
+the [`brew`](https://formulae.brew.sh/formula/floresta) package manager.
+
+To install and run it:
+
+```shell
+~$ brew install floresta
+
+~$ florestad
+```
+
+Alternatively, you can build it from source. Refer to the build instructions
+for [Unix](doc/build-unix.md) or [MacOS](doc/build-macos.md).
+
 ## Architecture
 
 Floresta is written in Rust and implements modern Bitcoin validation techniques such as
@@ -60,10 +76,6 @@ reusable components that can be integrated into Bitcoin applications.
 [`florestad`](https://github.com/getfloresta/Floresta/tree/master/bin/florestad) builds on top of
 [`libfloresta`](https://github.com/getfloresta/Floresta/tree/master/crates) to provide a full node
 daemon, including a watch-only wallet and an Electrum server.
-
-If you only want to run a node, you can use
-[`florestad`](https://github.com/getfloresta/Floresta/tree/master/bin/florestad) by building it from
-source, following the instructions for [Unix](doc/build-unix.md) or [MacOS](doc/build-macos.md).
 
 ## Consensus Implementation
 
