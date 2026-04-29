@@ -165,8 +165,11 @@ pub struct Config {
     /// Whether we should write logs to `stdout`.
     pub log_to_stdout: bool,
 
-    /// Whether we should log to a fs file
-    pub log_to_file: bool,
+    /// The resolved absolute path to the debug log file, or `None` if file logging is disabled.
+    ///
+    /// When set, log output is appended to this file. When `None`, no log file is written.
+    /// By default this is `<data_dir>/debug.log`.
+    pub debug_log_file: Option<String>,
 
     /// Whether we should use assume utreexo
     pub assume_utreexo: bool,
@@ -238,7 +241,7 @@ impl Config {
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
             log_to_stdout: false,
-            log_to_file: false,
+            debug_log_file: None,
             assume_utreexo: false,
             debug: false,
             user_agent: String::new(),
@@ -477,7 +480,10 @@ impl Florestad {
                     .as_ref()
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
-                format!("{data_dir}/debug.log"),
+                self.config
+                    .debug_log_file
+                    .clone()
+                    .unwrap_or_default(),
             ));
 
             if self.json_rpc.set(server).is_err() {

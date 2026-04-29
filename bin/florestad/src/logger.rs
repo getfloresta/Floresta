@@ -4,8 +4,8 @@
 //!
 //! This module configures [`tracing_subscriber`](https://docs.rs/tracing_subscriber) with up to two output layers:
 //! - **stdout** – human-friendly, ANSI-coloured when attached to a real TTY.
-//! - **file** – plain-text, appended to [`LOG_FILE`] inside `data_dir` via a
-//!   non-blocking writer.
+//! - **file** – plain-text, appended to a caller-specified path (defaulting to
+//!   [`LOG_FILE`] inside the data directory) via a non-blocking writer.
 //!
 //! The active log level is controlled (in descending priority) by:
 //! 1. The `RUST_LOG` environment variable.
@@ -222,12 +222,11 @@ where
 ///
 /// # Arguments
 ///
-/// * `data_dir` – Directory in which [`LOG_FILE`] is created when
-///   `log_to_file` is `true`. The directory must already exist.
-/// * `log_to_file` – Append structured log output to `<data_dir>/`[`LOG_FILE`].
+/// * `log_file` – The absolute path to the log file. When `Some`, log output is
+///   appended to this file via a non-blocking writer. When `None`, file logging
+///   is disabled.
 /// * `log_to_stdout` – Emit log output to stdout.
-/// * `debug` – Set the default log level to `debug`. When `false` the
-///   level defaults to `info`. In both cases `RUST_LOG` overrides the default.
+/// * `log_level` – Set the default log level. `RUST_LOG` overrides this default.
 ///
 /// # Returns
 ///
@@ -238,16 +237,15 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if `log_to_file` is `true` and [`LOG_FILE`] cannot be
-/// created or opened for appending inside `data_dir`.
+/// Returns [`io::Error`] if `log_file` is `Some` and the file cannot be
+/// created or opened for appending.
 ///
 /// # Panics
 ///
 /// Panics if a global [`tracing`] subscriber has already been
 /// installed (e.g. if this function is called more than once).
 pub fn start_logger(
-    data_directory: &String,
-    log_to_file: bool,
+    log_file: Option<&str>,
     log_to_stdout: bool,
     log_level: Level,
 ) -> Result<Option<WorkerGuard>, io::Error> {
@@ -266,27 +264,30 @@ pub fn start_logger(
             .with_filter(make_filter())
     });
 
-    if log_to_file {
-        let file_path = format!("{}/{}", data_directory, LOG_FILE);
-
-        // Validate the log file path (`<data_directory>/<LOG_FILE>`).
+    if let Some(path) = log_file {
+        // Validate the log file path.
         let _ = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&file_path)
+            .open(path)
             .map_err(|e| {
-                eprintln!(
-                    "Failed to create log file at {}/{LOG_FILE}: {e}",
-                    data_directory
-                );
+                eprintln!("Failed to create log file at {path}: {e}");
                 exit(1)
             });
     }
 
     // Formatter for events destined to the log file.
     let mut guard = None;
-    let fmt_layer_logfile = log_to_file.then(|| {
-        let file_appender = tracing_appender::rolling::never(data_directory, LOG_FILE);
+    let fmt_layer_logfile = log_file.map(|path| {
+        let log_path = std::path::Path::new(path);
+        let directory = log_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let file_name = log_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(LOG_FILE);
+        let file_appender = tracing_appender::rolling::never(directory, file_name);
         let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
         guard = Some(file_guard);
         layer()
