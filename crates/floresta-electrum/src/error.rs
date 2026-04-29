@@ -20,6 +20,9 @@ pub enum Error {
     #[error("Mempool accept error")]
     Mempool(Box<dyn core::error::Error + Send + 'static>),
 
+    #[error("Watch-only cache error")]
+    WatchOnly(Box<dyn core::error::Error + Send + 'static>),
+
     #[error("Node isn't working")]
     NodeInterface(#[from] oneshot::error::RecvError),
 }
