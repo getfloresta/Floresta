@@ -6,10 +6,12 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use bitcoin::hashes::Hash;
 use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::ServiceFlags;
+use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
@@ -744,33 +746,39 @@ where
         peer: PeerId,
         read_at: Instant,
     ) -> Option<()> {
-        let sent_at = match notification {
+        let (sent_at, weight) = match notification {
             PeerMessages::Block(block) => {
                 let inflight = self
                     .inflight
                     .get(&InflightRequests::Blocks(block.block_hash()))?;
 
-                inflight.1
+                (inflight.1, NodeRequest::GetBlock(vec![]).weight())
             }
 
             PeerMessages::Ready(_) => {
                 let inflight = self.inflight.get(&InflightRequests::Connect(peer))?;
-                inflight.1
+                (inflight.1, NodeRequest::Ping.weight())
             }
 
             PeerMessages::Headers(_) => {
                 let inflight = self.inflight.get(&InflightRequests::Headers)?;
-                inflight.1
+                (inflight.1, NodeRequest::GetHeaders(vec![]).weight())
             }
 
             PeerMessages::BlockFilter((_, _)) => {
                 let inflight = self.inflight.get(&InflightRequests::GetFilters)?;
-                inflight.1
+                (
+                    inflight.1,
+                    NodeRequest::GetFilter((BlockHash::all_zeros(), 0)).weight(),
+                )
             }
 
             PeerMessages::UtreexoState(_) => {
                 let inflight = self.inflight.get(&InflightRequests::UtreexoState(peer))?;
-                inflight.1
+                (
+                    inflight.1,
+                    NodeRequest::GetUtreexoState((BlockHash::all_zeros(), 0)).weight(),
+                )
             }
 
             _ => return None,
@@ -778,7 +786,7 @@ where
 
         let elapsed = read_at.duration_since(sent_at).as_secs_f64();
         if let Some(peer) = self.peers.get_mut(&peer) {
-            peer.message_times.add(elapsed * 1_000.0); // milliseconds
+            peer.message_times.add((elapsed / weight) * 1_000.0); // milliseconds
         }
 
         #[cfg(feature = "metrics")]

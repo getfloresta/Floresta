@@ -109,6 +109,37 @@ pub enum NodeRequest {
     GetBlockProof((BlockHash, Bitmap, Bitmap)),
 }
 
+impl NodeRequest {
+    /// Returns the relative cost of the expected response for this request,
+    /// used to normalize peer latency measurements in [`register_message_time`].
+    pub fn weight(&self) -> f64 {
+        match self {
+            // 4 MB max per BIP 141
+            NodeRequest::GetBlock(_) => 25.0,
+
+            NodeRequest::GetBlockProof(_) => 25.0,
+
+            NodeRequest::GetUtreexoState(_) => 0.1,
+
+            // BIP 158 filters: ~20 KB per block empirically
+            NodeRequest::GetFilter(_) => 0.13,
+
+            // Baseline: 2000 × 80 bytes = 160 KB
+            NodeRequest::GetHeaders(_) => 1.0,
+
+            NodeRequest::MempoolTransaction(_) => 0.01,
+
+            // Returning 1.0 as a neutral fallback,
+            // because these variants are never registered as inflight
+            NodeRequest::GetAddresses
+            | NodeRequest::BroadcastTransaction(_)
+            | NodeRequest::SendAddresses(_)
+            | NodeRequest::Ping
+            | NodeRequest::Shutdown => 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub(crate) enum InflightRequests {
     /// Requests the peer to send us the next block headers in their main chain
