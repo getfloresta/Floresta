@@ -80,7 +80,8 @@ where
 
         // Get the peer's `ServiceFlags`.
         let required_services = match conn_kind {
-            ConnectionKind::Regular(services) => services,
+            ConnectionKind::OutboundFullRelay(services)
+            | ConnectionKind::BlockRelayOnly(services) => services,
             _ => ServiceFlags::NONE,
         };
 
@@ -157,7 +158,7 @@ where
     ///
     /// `kind` may or may not be a [`ConnectionKind::Feeler`], a special connection type
     /// that is used to learn about good peers, but are not kept after handshake
-    /// (others are [`ConnectionKind::Regular`], [`ConnectionKind::Manual`] and [`ConnectionKind::Extra`]).
+    /// (others are [`ConnectionKind::OutboundFullRelay`], [`ConnectionKind::Manual`] and [`ConnectionKind::Extra`]).
     ///
     /// We will always try to open a V2 connection first. If the `allow_v1_fallback` is set,
     /// we may retry the connection with the old V1 protocol if the V2 connection fails.
@@ -242,7 +243,9 @@ where
 
         match kind {
             ConnectionKind::Feeler => self.last_feeler = Instant::now(),
-            ConnectionKind::Regular(_) => self.last_connection = Instant::now(),
+            ConnectionKind::OutboundFullRelay(_) | ConnectionKind::BlockRelayOnly(_) => {
+                self.last_connection = Instant::now()
+            }
             // Note: Creating a manual peer intentionally doesn't affect the `last_connection`
             // timer, since they don't necessarily follow our connection logic, and we may still
             // need more utreexo/CBS peers
@@ -585,7 +588,7 @@ where
 
         for address in anchors {
             self.open_connection(
-                ConnectionKind::Regular(service_flags::UTREEXO.into()),
+                ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
                 address.id,
                 address,
                 // Using V1 transport fallback as utreexo nodes have limited support
@@ -608,7 +611,23 @@ where
             return Ok(());
         }
 
-        let connection_kind = ConnectionKind::Regular(required_service);
+        let full_relay_count = self
+            .peers
+            .values()
+            .filter(|p| matches!(p.kind, ConnectionKind::OutboundFullRelay(_)))
+            .count();
+        let block_relay_count = self
+            .peers
+            .values()
+            .filter(|p| matches!(p.kind, ConnectionKind::BlockRelayOnly(_)))
+            .count();
+        let connection_kind = if full_relay_count < T::MAX_FULL_RELAY_PEERS {
+            ConnectionKind::OutboundFullRelay(required_service)
+        } else if block_relay_count < T::MAX_BLOCKS_ONLY_PEERS {
+            ConnectionKind::BlockRelayOnly(required_service)
+        } else {
+            return Ok(());
+        };
 
         // If the user passes in a `--connect` cli argument, we only connect with
         // that particular peer.
@@ -636,6 +655,12 @@ where
         if self.added_peers.is_empty() {
             return Ok(());
         }
+
+        let connected_manual = self.peers.values().filter(|p| p.is_manual_peer()).count();
+        if connected_manual >= T::MAX_MANUAL_PEERS {
+            return Ok(());
+        }
+
         let peers_count = self.peer_id_count;
         for added_peer in self.added_peers.clone() {
             let matching_peer = self.peers.values().find(|peer| {
