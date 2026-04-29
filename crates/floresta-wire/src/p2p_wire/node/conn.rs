@@ -89,7 +89,19 @@ where
         let candidate_peer = self
             .fixed_peer
             .as_ref()
-            .map(|addr| (0, addr.clone()))
+            .and_then(|peers| {
+                // Pick the first fixed peer that we are not already connected to
+                peers.iter().find_map(|addr| {
+                    let already_connected = self.peers.values().any(|p| {
+                        p.address == addr.get_net_address() && p.port == addr.get_port()
+                    });
+                    if already_connected {
+                        None
+                    } else {
+                        Some((0, addr.clone()))
+                    }
+                })
+            })
             .or_else(|| {
                 self.address_man.get_address_to_connect(
                     required_services,
@@ -611,9 +623,10 @@ where
         let connection_kind = ConnectionKind::Regular(required_service);
 
         // If the user passes in a `--connect` cli argument, we only connect with
-        // that particular peer.
-        if self.fixed_peer.is_some() {
-            if self.peers.is_empty() {
+        // those peers.
+        if let Some(ref fixed_peers) = self.fixed_peer {
+            let num_fixed = fixed_peers.len();
+            if self.peers.len() < num_fixed {
                 self.create_connection(connection_kind)?;
             }
             return Ok(());

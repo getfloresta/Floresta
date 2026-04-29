@@ -93,11 +93,11 @@ pub struct Cli {
     pub zmq_address: Option<String>,
 
     #[arg(long, value_name = "address[:<port>]")]
-    /// A node to connect to
+    /// Nodes to connect to
     ///
-    /// If this option is provided, we'll connect **only** to this node. It should be an ipv4
-    /// address in the format `<address>[:<port>]`.
-    pub connect: Option<String>,
+    /// This option can be passed many times. If provided, we'll connect **only** to these
+    /// nodes. Each value should be an address in the format `<address>[:<port>]`.
+    pub connect: Option<Vec<String>>,
 
     #[arg(long, value_name = "address[:<port>]")]
     /// The address where our json-rpc server should listen to, in the format `<address>[:<port>]`
