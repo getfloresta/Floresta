@@ -17,7 +17,8 @@ fn main() {
     // the `AddressCacheDatabase` trait.
     let wallet_data = MemoryDatabase::new();
     // Then, we create the wallet itself.
-    let wallet = AddressCache::new(wallet_data);
+    let wallet = AddressCache::new(wallet_data)
+        .expect("AddressCache::new should never fail with a MemoryDatabase");
     // Now, we need to add the addresses we want to watch. We can add them one by one, or
     // we can add a descriptor that will generate the addresses for us. Here, we use a
     // descriptor that generates P2WPKH addresses. The descriptor is parsed using the
@@ -36,21 +37,25 @@ fn main() {
     // We can now add the descriptor to the wallet. This will generate the first 100 addresses
     // for us, and add them to the wallet.
     for i in 0..100 {
-        wallet.cache_address(bitcoin::ScriptBuf::from(
-            descriptor
-                .at_derivation_index(i)
-                .unwrap()
-                .explicit_script()
-                .unwrap()
-                .as_bytes()
-                .to_vec(),
-        ));
+        wallet
+            .cache_address(bitcoin::ScriptBuf::from(
+                descriptor
+                    .at_derivation_index(i)
+                    .unwrap()
+                    .explicit_script()
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec(),
+            ))
+            .unwrap();
     }
     // We can now process some blocks. Here, we process the first 11 blocks of a custom
     // regtest network. Each coinbase some of the addresses derived above.
     for block in BLOCKS.iter() {
         let block = Vec::from_hex(block).unwrap();
-        let _ = wallet.block_process(&deserialize(&block).unwrap(), 1);
+        wallet
+            .block_process(&deserialize(&block).unwrap(), 1)
+            .unwrap();
     }
     // We can now query the wallet for information about the addresses we added. For example,
     // we can get the history of the second address, the balance, and the UTXOs. To fetch the
@@ -69,9 +74,9 @@ fn main() {
         .map(|tx| tx.hash)
         .collect::<Vec<_>>();
     // Fetch the balance of the address.
-    let balance = wallet.get_address_balance(&hash);
+    let balance = wallet.get_address_balance(&hash).ok().flatten();
     // Fetch the UTXOs of the address.
-    let utxos = wallet.get_address_utxos(&hash);
+    let utxos = wallet.get_address_utxos(&hash).ok();
 
     // We can now print the information we fetched.
     println!("************** Wallet Summary *****************\n");

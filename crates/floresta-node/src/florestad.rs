@@ -710,7 +710,7 @@ impl Florestad {
     fn load_wallet(data_dir: &String) -> Result<AddressCache<KvDatabase>, FlorestadError> {
         let database =
             KvDatabase::new(data_dir.to_owned()).map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-        Ok(AddressCache::new(database))
+        AddressCache::new(database).map_err(FlorestadError::CouldNotInitializeWallet)
     }
 
     fn setup_wallet(
@@ -738,7 +738,9 @@ impl Florestad {
             }
         }
         for addresses in setup.addresses {
-            wallet.cache_address(addresses.script_pubkey());
+            wallet
+                .cache_address(addresses.script_pubkey())
+                .map_err(|e| FlorestadError::CouldNotSetupWallet(e.to_string()))?;
         }
 
         info!("Wallet setup completed!");

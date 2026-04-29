@@ -26,6 +26,7 @@ struct Inner {
 #[derive(Debug)]
 pub enum MemoryDatabaseError {
     PoisonedLock,
+    TransactionNotFound,
 }
 #[derive(Debug, Default)]
 pub struct MemoryDatabase {
@@ -53,14 +54,12 @@ impl MemoryDatabase {
 }
 impl AddressCacheDatabase for MemoryDatabase {
     type Error = MemoryDatabaseError;
-    fn save(&self, address: &CachedAddress) {
-        self.get_inner_mut()
-            .map(|mut inner| {
-                inner
-                    .addresses
-                    .insert(address.script_hash, address.to_owned())
-            })
-            .unwrap();
+    fn save(&self, address: &CachedAddress) -> Result<()> {
+        self.get_inner_mut().map(|mut inner| {
+            inner
+                .addresses
+                .insert(address.script_hash, address.to_owned());
+        })
     }
 
     fn load(&self) -> Result<Vec<CachedAddress>> {
@@ -78,15 +77,13 @@ impl AddressCacheDatabase for MemoryDatabase {
         Ok(())
     }
 
-    fn update(&self, address: &super::CachedAddress) {
-        self.get_inner_mut()
-            .map(|mut inner| {
-                inner
-                    .addresses
-                    .entry(address.script_hash)
-                    .and_modify(|addr| addr.clone_from(address));
-            })
-            .unwrap();
+    fn update(&self, address: &super::CachedAddress) -> Result<()> {
+        self.get_inner_mut().map(|mut inner| {
+            inner
+                .addresses
+                .entry(address.script_hash)
+                .and_modify(|addr| addr.clone_from(address));
+        })
     }
 
     fn get_cache_height(&self) -> Result<u32> {
@@ -112,7 +109,7 @@ impl AddressCacheDatabase for MemoryDatabase {
         if let Some(tx) = self.get_inner()?.transactions.get(txid) {
             return Ok(tx.clone());
         }
-        Err(MemoryDatabaseError::PoisonedLock)
+        Err(MemoryDatabaseError::TransactionNotFound)
     }
 
     fn save_transaction(&self, tx: &super::CachedTransaction) -> Result<()> {
