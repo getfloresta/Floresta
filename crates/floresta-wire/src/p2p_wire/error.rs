@@ -3,7 +3,6 @@
 use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
-use core::net::IpAddr;
 use std::io;
 
 use floresta_chain::BlockchainError;
@@ -13,6 +12,9 @@ use tokio::sync::mpsc::error::SendError;
 
 use super::peer::PeerError;
 use super::transport::TransportError;
+use crate::address_man::LocalAddress;
+use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+use crate::bitcoin_socket_addr::InvalidAddressError;
 use crate::node::NodeRequest;
 
 #[derive(Debug)]
@@ -24,6 +26,9 @@ pub enum WireError {
 
     /// Error while writing into a channel
     ChannelSend(SendError<NodeRequest>),
+
+    /// Attempted to connect with a network we can' reach
+    UnreachableNetwork,
 
     /// Peer error
     PeerError(PeerError),
@@ -44,10 +49,10 @@ pub enum WireError {
     AnchorFileNotFound,
 
     /// Peer already exists in our peers list
-    PeerAlreadyExists(IpAddr, u16),
+    PeerAlreadyExists(LocalAddress),
 
     /// Peer not found with this given address and port, in our peer list
-    PeerNotFoundAtAddress(IpAddr, u16),
+    PeerNotFoundAtAddress(BitcoinSocketAddr),
 
     /// Generic io error
     Io(std::io::Error),
@@ -71,7 +76,7 @@ pub enum WireError {
     PoisonedLock,
 
     /// We couldn't parse the provided address
-    InvalidAddress(AddrParseError),
+    InvalidAddress(InvalidAddressError),
 
     /// Transport error
     Transport(TransportError),
@@ -95,6 +100,9 @@ pub enum WireError {
 impl Display for WireError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            WireError::UnreachableNetwork => {
+                write!(f, "The provided network is invalid or unreachable")
+            }
             WireError::Blockchain(err) => write!(f, "Blockchain error: {err:?}"),
             WireError::ChannelSend(err) => write!(f, "Error while writing into channel: {err:?}"),
             WireError::PeerError(err) => write!(f, "Peer error: {err:?}"),
@@ -106,8 +114,8 @@ impl Display for WireError {
                 f,
                 "Failed to init Utreexo peers: anchors.json does not exist yet"
             ),
-            WireError::PeerAlreadyExists(ip, port) => write!(f, "Peer {ip}:{port} already exists"),
-            WireError::PeerNotFoundAtAddress(ip, port) => write!(f, "Peer {ip}:{port} not found"),
+            WireError::PeerAlreadyExists(address) => write!(f, "Peer {address} already exists"),
+            WireError::PeerNotFoundAtAddress(address) => write!(f, "Peer {address} not found"),
             WireError::Io(err) => write!(f, "Generic IO error: {err:?}"),
             WireError::Serde(err) => write!(f, "Serde error: {err:?}"),
             WireError::NoUtreexoPeersAvailable => write!(
@@ -145,7 +153,7 @@ impl_error_from!(
     IterableFilterStoreError,
     CompactBlockFiltersError
 );
-impl_error_from!(WireError, AddrParseError, InvalidAddress);
+impl_error_from!(WireError, InvalidAddressError, InvalidAddress);
 impl_error_from!(WireError, SendError<NodeRequest>, ChannelSend);
 impl_error_from!(WireError, serde_json::Error, Serde);
 impl_error_from!(WireError, io::Error, Io);

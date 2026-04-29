@@ -11,6 +11,7 @@ use core::net::SocketAddr;
 use core::str::FromStr;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::fs::read_to_string;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -28,6 +29,9 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+use crate::bitcoin_socket_addr::InvalidAddressError;
 
 /// How long we'll wait before trying to connect to a peer that failed
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
@@ -92,21 +96,34 @@ pub enum ReachableNetworks {
 /// How do we store peers locally
 pub struct LocalAddress {
     /// An actual address
-    address: AddrV2,
+    address: BitcoinSocketAddr,
+
     /// Last time we successfully connected to this peer, only relevant is state == State::Tried
     last_connected: u64,
+
     /// Our local state for this peer, as defined in AddressState
     state: AddressState,
+
     /// Network services announced by this peer
     services: ServiceFlags,
-    /// Network port this peers listens to
-    port: u16,
+
     /// Random id for this peer
     pub id: usize,
 }
 
-impl From<AddrV2> for LocalAddress {
-    fn from(value: AddrV2) -> Self {
+impl Display for LocalAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let addr: String = self
+            .get_net_address()
+            .map(|ip| ip.to_string())
+            .unwrap_or(String::from("unknown"));
+
+        write!(f, "{}:{}", addr, self.address.get_port())
+    }
+}
+
+impl From<BitcoinSocketAddr> for LocalAddress {
+    fn from(value: BitcoinSocketAddr) -> Self {
         LocalAddress {
             address: value,
             last_connected: SystemTime::now()
@@ -115,7 +132,6 @@ impl From<AddrV2> for LocalAddress {
                 .as_secs(),
             state: AddressState::NeverTried,
             services: ServiceFlags::NONE,
-            port: 8333,
             id: rand::random::<usize>(),
         }
     }
@@ -123,58 +139,42 @@ impl From<AddrV2> for LocalAddress {
 
 impl From<AddrV2Message> for LocalAddress {
     fn from(value: AddrV2Message) -> Self {
+        let socket_addr = BitcoinSocketAddr::new(value.addr, value.port);
         LocalAddress {
-            address: value.addr,
+            address: socket_addr,
             last_connected: value.time.into(),
             state: AddressState::NeverTried,
             services: value.services,
-            port: value.port,
             id: rand::random::<usize>(),
         }
     }
 }
 
 impl FromStr for LocalAddress {
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        LocalAddress::try_from(s)
-    }
-    type Err = core::net::AddrParseError;
-}
-
-// Note that, since we can't know the network we are operating in, this code
-// can't know what's the default port. Therefore, it will only work if you give
-// a SocketAddr, i.e. <IP:PORT>
-impl TryFrom<&str> for LocalAddress {
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let address = value.parse::<SocketAddr>()?;
-        let ip = match address {
-            SocketAddr::V4(ipv4) => AddrV2::Ipv4(*ipv4.ip()),
-            SocketAddr::V6(ipv6) => AddrV2::Ipv6(*ipv6.ip()),
-        };
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let address = value.parse::<BitcoinSocketAddr>()?;
 
         Ok(LocalAddress::new(
-            ip,
+            address,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
             super::address_man::AddressState::NeverTried,
             ServiceFlags::NONE,
-            address.port(),
             rand::random::<usize>(),
         ))
     }
 
-    type Error = core::net::AddrParseError;
+    type Err = InvalidAddressError;
 }
 
 impl LocalAddress {
     pub fn new(
-        address: AddrV2,
+        address: BitcoinSocketAddr,
         last_connected: u64,
         state: AddressState,
         services: ServiceFlags,
-        port: u16,
         id: usize,
     ) -> LocalAddress {
         LocalAddress {
@@ -182,32 +182,23 @@ impl LocalAddress {
             last_connected,
             state,
             services,
-            port,
             id,
         }
     }
 
-    /// Get the [`AddrV2`] for this [`LocalAddress`].
-    pub fn get_addrv2(&self) -> AddrV2 {
-        self.address.clone()
-    }
-
     /// Get the [`SocketAddr`] for this [`LocalAddress`].
-    pub fn get_socket_address(&self) -> SocketAddr {
-        let ip = self.get_net_address();
-        let port = self.get_port();
-
-        SocketAddr::new(ip, port)
+    pub fn as_bitcoin_socket_addr(&self) -> &BitcoinSocketAddr {
+        &self.address
     }
 
     /// Get the `port` for this [`LocalAddress`].
     pub fn get_port(&self) -> u16 {
-        self.port
+        self.address.get_port()
     }
 
     /// Set the `port` for this [`LocalAddress`].
     pub fn set_port(&mut self, port: u16) {
-        self.port = port;
+        self.address.set_port(port);
     }
 
     /// Get the [`ServiceFlags`] for this [`LocalAddress`].
@@ -220,15 +211,45 @@ impl LocalAddress {
         self.services = services;
     }
 
-    /// Get the [`IpAddr`] for with this [`LocalAddress`].
-    pub fn get_net_address(&self) -> IpAddr {
-        match self.address {
+    pub fn get_socket_addr(&self) -> Option<SocketAddr> {
+        let ip = match self.as_addrv2() {
+            AddrV2::Ipv6(ref ipv6) => IpAddr::V6(*ipv6),
+            AddrV2::Ipv4(ref ipv4) => IpAddr::V4(*ipv4),
+
+            _ => return None,
+        };
+
+        let port = self.get_port();
+        Some(SocketAddr::new(ip, port))
+    }
+
+    /// Return an IP address associated with this peer address, if any
+    ///
+    /// Note: For domain-based addresses such as Tor and I2P this function will return [`None`]
+    pub const fn get_net_address(&self) -> Option<IpAddr> {
+        match *self.address.as_addrv2() {
             // IPV4
-            AddrV2::Ipv4(ipv4) => IpAddr::V4(ipv4),
+            AddrV2::Ipv4(ipv4) => Some(IpAddr::V4(ipv4)),
+
             // IPV6
-            AddrV2::Ipv6(ipv6) => IpAddr::V6(ipv6),
-            _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            AddrV2::Ipv6(ipv6) => Some(IpAddr::V6(ipv6)),
+
+            // CJDNS
+            AddrV2::Cjdns(cjdns) => Some(IpAddr::V6(cjdns)),
+
+            // Others - These are domain-based, and can't be encoded as an IP address
+            _ => None,
         }
+    }
+
+    /// Returns a reference to the inner [`BitcoinSocketAddr`].
+    pub fn as_addrv2(&self) -> &AddrV2 {
+        self.address.as_addrv2()
+    }
+
+    /// Converts this [`LocalAddress`] into an [`AddrV2`]
+    pub fn to_addrv2(self) -> AddrV2 {
+        self.address.to_addrv2()
     }
 
     /// Return whether the address can be reached from our node
@@ -237,9 +258,9 @@ impl LocalAddress {
     /// those includes documentation, reserved and private ones ranges.
     /// Since we can't connect with them, there's no point into keeping them
     const fn is_routable(&self) -> bool {
-        match self.address {
-            AddrV2::Ipv4(ipv4) => Self::is_routable_ipv4(&ipv4),
-            AddrV2::Ipv6(ipv6) => Self::is_routable_ipv6(&ipv6),
+        match self.address.as_addrv2() {
+            AddrV2::Ipv4(ipv4) => Self::is_routable_ipv4(ipv4),
+            AddrV2::Ipv6(ipv6) => Self::is_routable_ipv6(ipv6),
             AddrV2::Cjdns(address) => {
                 let octets = address.octets();
                 // CJDNS addresses use a special range for local addresses (FC00::/8)
@@ -435,7 +456,7 @@ impl AddressMan {
 
     /// Check if we can reach this address based on our reachable networks
     fn is_net_reachable(&self, address: &LocalAddress) -> bool {
-        match address.address {
+        match address.address.as_addrv2() {
             AddrV2::Ipv4(_) => self.reachable_networks.contains(&ReachableNetworks::IPv4),
             AddrV2::Ipv6(_) => self.reachable_networks.contains(&ReachableNetworks::IPv6),
             AddrV2::TorV3(_) => self.reachable_networks.contains(&ReachableNetworks::TorV3),
@@ -533,10 +554,10 @@ impl AddressMan {
             .filter_map(|id| {
                 let address = self.addresses.get(id)?;
                 Some((
-                    address.address.clone(),
+                    address.address.as_addrv2().clone(),
                     address.last_connected,
                     address.services,
-                    address.port,
+                    address.get_port(),
                 ))
             })
             .collect();
@@ -572,7 +593,7 @@ impl AddressMan {
 
         let mut addresses = Vec::new();
         for ip in ips {
-            if let Ok(ip) = LocalAddress::try_from(format!("{ip}:{default_port}").as_str()) {
+            if let Ok(ip) = format!("{ip}:{default_port}").parse::<LocalAddress>() {
                 addresses.push(ip);
             }
         }
@@ -1040,7 +1061,7 @@ pub struct DiskLocalAddress {
 
 impl From<LocalAddress> for DiskLocalAddress {
     fn from(value: LocalAddress) -> Self {
-        let address = match value.address {
+        let address = match *value.address.as_addrv2() {
             AddrV2::Ipv4(ip) => Address::V4(ip),
             AddrV2::Ipv6(ip) => Address::V6(ip),
             AddrV2::Cjdns(ip) => Address::Cjdns(ip),
@@ -1064,11 +1085,12 @@ impl From<LocalAddress> for DiskLocalAddress {
                 value.state
             },
             services: value.services.to_u64(),
-            port: value.port,
+            port: value.get_port(),
             id: Some(value.id),
         }
     }
 }
+
 impl From<DiskLocalAddress> for LocalAddress {
     fn from(value: DiskLocalAddress) -> Self {
         let address = match value.address {
@@ -1080,12 +1102,13 @@ impl From<DiskLocalAddress> for LocalAddress {
             Address::OnionV3(ip) => AddrV2::TorV3(ip),
         };
         let services = ServiceFlags::from(value.services);
+        let sock_addr = BitcoinSocketAddr::new(address, value.port);
+
         LocalAddress {
-            address,
+            address: sock_addr,
             last_connected: value.last_connected,
             state: value.state,
             services,
-            port: value.port,
             id: value.id.unwrap_or_else(rand::random::<usize>),
         }
     }
@@ -1094,15 +1117,20 @@ impl From<DiskLocalAddress> for LocalAddress {
 pub enum Address {
     /// Regular ipv4 address
     V4(Ipv4Addr),
+
     /// Regular ipv6 address
     V6(Ipv6Addr),
+
     /// Tor v2 address, this may never be used, as OnionV2 is deprecated
     /// but we'll keep it here for completeness sake
     OnionV2([u8; 10]),
+
     /// Tor v3 address. This is the preferred way to connect to a tor node
     OnionV3([u8; 32]),
+
     /// Cjdns ipv6 address
     Cjdns(Ipv6Addr),
+
     /// I2p address, a 32 byte node key
     I2p([u8; 32]),
 }
@@ -1229,6 +1257,7 @@ mod test {
     use crate::address_man::DiskLocalAddress;
     use crate::address_man::ReachableNetworks;
     use crate::address_man::SUPPORTED_NETWORKS;
+    use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 
     fn load_addresses_from_json(file_path: &str) -> io::Result<Vec<LocalAddress>> {
         let mut contents = String::new();
@@ -1246,11 +1275,10 @@ mod test {
             };
 
             let local_address = LocalAddress {
-                address: seed.address.into(),
+                address: BitcoinSocketAddr::new(seed.address.into(), seed.port),
                 last_connected: seed.last_connected,
                 state,
                 services: ServiceFlags::from(seed.services),
-                port: seed.port,
                 id: rng.gen(),
             };
             addresses.push(local_address);
@@ -1275,14 +1303,16 @@ mod test {
         ];
 
         for addr_str in ips {
-            let local_address = LocalAddress::try_from(format!("{addr_str}:8333").as_str())
+            let local_address = format!("{addr_str}:8333")
+                .parse::<LocalAddress>()
                 .unwrap_or_else(|_| panic!("failed to parse {addr_str}"));
 
             assert_eq!(
-                local_address.address,
+                *local_address.address.as_addrv2(),
                 AddrV2::Ipv4(addr_str.parse().unwrap())
             );
-            assert_eq!(local_address.port, 8333);
+
+            assert_eq!(local_address.get_port(), 8333);
         }
 
         // v6
@@ -1300,14 +1330,16 @@ mod test {
         ];
 
         for addr_str in ips {
-            let local_address = LocalAddress::try_from(format!("[{addr_str}]:8333").as_str())
+            let local_address = format!("[{addr_str}]:8333")
+                .parse::<LocalAddress>()
                 .unwrap_or_else(|_| panic!("failed to parse {addr_str}"));
 
             assert_eq!(
-                local_address.address,
+                *local_address.address.as_addrv2(),
                 AddrV2::Ipv6(addr_str.parse().unwrap())
             );
-            assert_eq!(local_address.port, 8333);
+
+            assert_eq!(local_address.get_port(), 8333);
         }
     }
 
@@ -1427,7 +1459,8 @@ mod test {
         ]
         .into_iter()
         .map(|s| {
-            LocalAddress::try_from(s).unwrap_or_else(|_| panic!("Failed to parse address: {s}"))
+            s.parse::<LocalAddress>()
+                .unwrap_or_else(|_| panic!("Failed to parse address: {s}"))
         })
         .collect::<Vec<_>>();
 
@@ -1508,38 +1541,34 @@ mod test {
             AddressMan::new(None, &[ReachableNetworks::IPv4, ReachableNetworks::IPv6]);
 
         assert!(address_man.is_net_reachable(&LocalAddress {
-            address: addr_v4,
+            address: BitcoinSocketAddr::new(addr_v4, 8333),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::default(),
-            port: 8333,
             id: 0,
         }));
 
         assert!(address_man.is_net_reachable(&LocalAddress {
-            address: addr_v6,
+            address: BitcoinSocketAddr::new(addr_v6, 8333),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::default(),
-            port: 8333,
             id: 0,
         }));
 
         assert!(!address_man.is_net_reachable(&LocalAddress {
-            address: addr_onionv3,
+            address: BitcoinSocketAddr::new(addr_onionv3, 8333),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::default(),
-            port: 8333,
             id: 0,
         }));
 
         assert!(!address_man.is_net_reachable(&LocalAddress {
-            address: addr_i2p,
+            address: BitcoinSocketAddr::new(addr_i2p, 8333),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::default(),
-            port: 8333,
             id: 0,
         }));
     }
@@ -1548,60 +1577,57 @@ mod test {
     fn test_push_address() {
         let mut address_man = AddressMan::new(None, &[ReachableNetworks::IPv4]);
         let v4_no_witness = LocalAddress {
-            address: AddrV2::Ipv4("12.146.182.45".parse().unwrap()),
+            address: "12.146.182.45:8333".parse().unwrap(),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::NETWORK | ServiceFlags::NETWORK_LIMITED,
-            port: 8333,
             id: 0,
         };
 
         let v4_with_witness = LocalAddress {
-            address: AddrV2::Ipv4("12.146.182.45".parse().unwrap()),
+            address: "12.146.182.45:8333".parse().unwrap(),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::NETWORK | ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS,
-            port: 8333,
             id: 1,
         };
 
         let v6_with_witness = LocalAddress {
-            address: AddrV2::Ipv6("fd3a:9f2b:4c10:1a2b::1".parse().unwrap()),
+            address: "[fd3a:9f2b:4c10:1a2b::1]:8333".parse().unwrap(),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::NETWORK_LIMITED | ServiceFlags::NETWORK | ServiceFlags::WITNESS,
-            port: 8333,
             id: 2,
         };
 
         let v4_not_routable = LocalAddress {
-            address: AddrV2::Ipv4("127.0.0.1".parse().unwrap()),
+            address: "127.0.0.1:8333".parse().unwrap(),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::NETWORK_LIMITED | ServiceFlags::NETWORK | ServiceFlags::WITNESS,
-            port: 8333,
             id: 3,
         };
 
         let v6_not_routable = LocalAddress {
-            address: AddrV2::Ipv6("::1".parse().unwrap()),
+            address: "[::1]:8333".parse().unwrap(),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::NETWORK_LIMITED | ServiceFlags::NETWORK | ServiceFlags::WITNESS,
-            port: 8333,
             id: 4,
         };
 
         let onion = LocalAddress {
-            address: AddrV2::TorV3([
-                0x89, 0x6c, 0x6a, 0x71, 0x70, 0x6b, 0x67, 0x61, 0x62, 0x67, 0x34, 0x68, 0x72, 0x63,
-                0x68, 0x62, 0x6f, 0x7a, 0x77, 0x6f, 0x76, 0x66, 0x66, 0x79, 0x6b, 0x37, 0x66, 0x6f,
-                0x62, 0x70, 0x6f, 0x76,
-            ]),
+            address: BitcoinSocketAddr::new(
+                AddrV2::TorV3([
+                    0x89, 0x6c, 0x6a, 0x71, 0x70, 0x6b, 0x67, 0x61, 0x62, 0x67, 0x34, 0x68, 0x72,
+                    0x63, 0x68, 0x62, 0x6f, 0x7a, 0x77, 0x6f, 0x76, 0x66, 0x66, 0x79, 0x6b, 0x37,
+                    0x66, 0x6f, 0x62, 0x70, 0x6f, 0x76,
+                ]),
+                8333,
+            ),
             last_connected: 0,
             state: AddressState::NeverTried,
             services: ServiceFlags::NETWORK_LIMITED | ServiceFlags::NETWORK | ServiceFlags::WITNESS,
-            port: 8333,
             id: 5,
         };
 

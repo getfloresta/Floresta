@@ -785,10 +785,8 @@ pub(super) mod peer_utils {
         let sender_address = Address::new(&fake_socket, services);
 
         // The remote peer's `Address`.
-        let receiver_address = Address::new(
-            &peer_address.get_socket_address(),
-            peer_address.get_services(),
-        );
+        let peer_addr = peer_address.get_socket_addr().unwrap_or(fake_socket);
+        let receiver_address = Address::new(&peer_addr, peer_address.get_services());
 
         // Generate a per-message nonce.
         let mut prng = thread_rng();
@@ -885,6 +883,7 @@ mod tests {
 
     use crate::address_man::AddressState;
     use crate::address_man::LocalAddress;
+    use crate::bitcoin_socket_addr::BitcoinSocketAddr;
     use crate::node::ConnectionKind;
     use crate::node::NodeNotification;
     use crate::node::NodeRequest;
@@ -921,11 +920,10 @@ mod tests {
         let (cancellation_sender, _) = oneshot::channel();
 
         let address = LocalAddress::new(
-            AddrV2::Ipv4(Ipv4Addr::new(127, 0, 0, 1)),
+            BitcoinSocketAddr::new(AddrV2::Ipv4(Ipv4Addr::new(127, 0, 0, 1)), 8333),
             0,
             AddressState::NeverTried,
             ServiceFlags::NONE,
-            18444,
             0,
         );
 

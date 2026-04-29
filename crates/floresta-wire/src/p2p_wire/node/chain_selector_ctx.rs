@@ -186,7 +186,7 @@ where
 
                 let peer = self.peers.get(&peer).unwrap();
                 self.common.address_man.update_set_state(
-                    peer.address_id as usize,
+                    peer.address.id,
                     AddressState::Banned(ChainSelector::BAN_TIME),
                 );
             }
@@ -702,7 +702,7 @@ where
         for peer in self.common.peers.clone() {
             if self.context.tip_cache.get(&peer.0).copied().eq(&Some(tip)) {
                 self.address_man.update_set_state(
-                    peer.1.address_id as usize,
+                    peer.1.address.id,
                     AddressState::Banned(ChainSelector::BAN_TIME),
                 );
                 self.disconnect_and_ban(peer.0)?;

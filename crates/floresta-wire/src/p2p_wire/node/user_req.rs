@@ -96,10 +96,10 @@ where
                 return;
             }
 
-            UserRequest::Add((addr, port, v2transport)) => {
-                let node_response = match self.handle_addnode_add_peer(addr, port, v2transport) {
+            UserRequest::Add((addr, v2transport)) => {
+                let node_response = match self.handle_addnode_add_peer(addr.clone(), v2transport) {
                     Ok(_) => {
-                        info!("Added peer {addr}:{port}");
+                        info!("Added peer {addr}");
                         NodeResponse::Add(true)
                     }
                     Err(err) => {
@@ -112,10 +112,10 @@ where
                 return;
             }
 
-            UserRequest::Remove((addr, port)) => {
-                let node_response = match self.handle_addnode_remove_peer(addr, port) {
+            UserRequest::Remove(addr) => {
+                let node_response = match self.handle_addnode_remove_peer(addr.clone()) {
                     Ok(_) => {
-                        info!("Removed peer {addr}:{port}");
+                        info!("Removed peer {addr}");
                         NodeResponse::Remove(true)
                     }
                     Err(err) => {
@@ -128,10 +128,11 @@ where
                 return;
             }
 
-            UserRequest::Onetry((addr, port, v2transport)) => {
-                let node_response = match self.handle_addnode_onetry_peer(addr, port, v2transport) {
+            UserRequest::Onetry((addr, v2transport)) => {
+                let node_response = match self.handle_addnode_onetry_peer(addr.clone(), v2transport)
+                {
                     Ok(_) => {
-                        info!("Connected to peer {addr}:{port}");
+                        info!("Connected to peer {addr}");
                         NodeResponse::Onetry(true)
                     }
                     Err(err) => {
@@ -144,14 +145,14 @@ where
                 return;
             }
 
-            UserRequest::Disconnect((addr, port)) => {
-                let node_response = match self.handle_disconnect_peer(addr, port) {
+            UserRequest::Disconnect(addr) => {
+                let node_response = match self.handle_disconnect_peer(addr.clone()) {
                     Ok(_) => {
-                        info!("Disconnected from peer {addr}:{port}");
+                        info!("Disconnected from peer {addr}");
                         NodeResponse::Disconnect(true)
                     }
                     Err(err) => {
-                        warn!("Failed to disconnect from peer {addr}:{port}: {err:?}");
+                        warn!("Failed to disconnect from peer {addr}: {err:?}");
                         NodeResponse::Disconnect(false)
                     }
                 };

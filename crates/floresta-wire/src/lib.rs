@@ -25,6 +25,7 @@ pub use rustreexo;
 mod p2p_wire;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::address_man;
+pub use p2p_wire::bitcoin_socket_addr;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::block_proof;
 #[cfg(not(target_arch = "wasm32"))]
