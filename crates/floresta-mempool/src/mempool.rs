@@ -222,12 +222,17 @@ impl Mempool {
             .iter()
             .map(|tx| {
                 let short_txid = self.hasher.hash_one(tx.compute_txid());
-                if let Some(removed) = self
-                    .transactions
-                    .remove(&short_txid)
-                    .map(|tx| tx.transaction)
-                {
-                    self.mempool_size -= removed.total_size();
+
+                // Remove this transaction from the mempool, and also remove it from the depends list of all
+                // its children, since they don't depend on it anymore.
+                if let Some(removed) = self.transactions.remove(&short_txid) {
+                    self.mempool_size -= removed.transaction.total_size();
+
+                    for child in &removed.children {
+                        if let Some(child_tx) = self.transactions.get_mut(child) {
+                            child_tx.depends.retain(|depend| *depend != short_txid);
+                        }
+                    }
                 }
                 tx.compute_txid()
             })
@@ -379,16 +384,22 @@ mod tests {
     use std::collections::HashSet;
 
     use bitcoin::absolute;
-    use bitcoin::block;
+    use bitcoin::block::Header;
+    use bitcoin::block::{self};
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::OutPoint;
+    use bitcoin::Script;
     use bitcoin::Sequence;
     use bitcoin::Target;
     use bitcoin::Transaction;
+    use bitcoin::TxIn;
+    use bitcoin::TxMerkleNode;
+    use bitcoin::TxOut;
     use bitcoin::Txid;
     use bitcoin::Witness;
     use floresta_common::bhash;
@@ -660,5 +671,78 @@ mod tests {
             "mempool_size was {} before consume_block and it is {} after but it should be 0",
             size_before_consume, mempool.mempool_size
         );
+    }
+
+    #[test]
+    // Tests that when we consume a block, transactions that depended on the transactions
+    // included in the block should no longer reference them, since they are now confirmed.
+    fn test_consume_block_removes_depends() {
+        let mut mempool = Mempool::new(10_000_000);
+
+        let parent = Transaction {
+            version: Version::ONE,
+            lock_time: absolute::LockTime::from_consensus(0),
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: Script::new().into(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: Script::from_bytes(&[]).into(),
+            }],
+        };
+        let parent_txid = parent.compute_txid();
+
+        let child = Transaction {
+            version: Version::ONE,
+            lock_time: absolute::LockTime::from_consensus(0),
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: parent_txid,
+                    vout: 0,
+                },
+                script_sig: Script::new().into(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(49_000),
+                script_pubkey: Script::from_bytes(&[]).into(),
+            }],
+        };
+        let child_txid = child.compute_txid();
+
+        mempool.accept_to_mempool(parent.clone()).unwrap();
+        mempool.accept_to_mempool(child).unwrap();
+
+        // Sanity check: child currently depends on parent
+        let parent_short_txid = mempool.hasher.hash_one(parent_txid);
+        let child_short_txid = mempool.hasher.hash_one(child_txid);
+        assert!(mempool.transactions[&child_short_txid]
+            .depends
+            .contains(&parent_short_txid));
+
+        let block = Block {
+            header: Header {
+                version: block::Version::ONE,
+                prev_blockhash: BlockHash::all_zeros(),
+                merkle_root: TxMerkleNode::all_zeros(),
+                time: 0,
+                bits: Target::MAX_ATTAINABLE_REGTEST.to_compact_lossy(),
+                nonce: 0,
+            },
+            txdata: vec![parent],
+        };
+        mempool.consume_block(&block);
+
+        assert!(!mempool.transactions.contains_key(&parent_short_txid));
+        assert!(!mempool.transactions[&child_short_txid]
+            .depends
+            .contains(&parent_short_txid));
     }
 }
