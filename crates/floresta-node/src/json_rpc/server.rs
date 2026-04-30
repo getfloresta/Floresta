@@ -2,7 +2,6 @@
 
 use core::net::SocketAddr;
 use std::collections::HashMap;
-use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -29,7 +28,6 @@ use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use floresta_chain::ThreadSafeChain;
-use floresta_common::parse_descriptors;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::kv_database::KvDatabase;
@@ -104,22 +102,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        let desc = slice::from_ref(&descriptor);
-        let mut parsed = parse_descriptors(desc)?;
-
-        // It's ok to unwrap because we know there is at least one element in the vector
-        let addresses = parsed.pop().unwrap();
-        let addresses = (0..100)
-            .map(|index| {
-                let address = addresses
-                    .at_derivation_index(index)
-                    .unwrap()
-                    .script_pubkey();
-                self.wallet.cache_address(address.clone());
-                address
-            })
-            .collect::<Vec<_>>();
-
+        let addresses = self.wallet.push_descriptor(&descriptor)?;
+        debug!("Descriptor pushed: {descriptor}");
         debug!("Rescanning with block filters for addresses: {addresses:?}");
 
         let addresses = self.wallet.get_cached_addresses();
@@ -135,9 +119,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         tokio::task::spawn(Self::rescan_with_block_filters(
             addresses, chain, wallet, cfilters, node, None, None,
         ));
-
-        self.wallet.push_descriptor(&descriptor)?;
-        debug!("Descriptor pushed: {descriptor}");
 
         Ok(true)
     }
