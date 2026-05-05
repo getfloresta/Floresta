@@ -55,6 +55,12 @@ pub struct GetBlockchainInfoRes {
     /// On average, miners needs to make `difficulty` hashes before finding one that
     /// solves a block's PoW
     pub difficulty: u64,
+    /// Height up to which compact block filters have been downloaded.
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub filters: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub filters_start: Option<u32>,
 }
 
 /// The information returned by a get_raw_tx

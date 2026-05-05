@@ -397,6 +397,21 @@ impl Florestad {
         #[cfg(not(feature = "compact-filters"))]
         let cfilters = None;
 
+        // Resolve the configured filter start height to an absolute block height for the RPC
+        // context. Negative values are tip-relative
+        let resolved_filters_start: Option<u32> = if self.config.cfilters {
+            match self.config.filters_start_height {
+                None | Some(0) => None,
+                Some(h) if h > 0 => Some(h as u32),
+                Some(h) => {
+                    let tip = blockchain_state.get_height().unwrap_or(0);
+                    Some(tip.saturating_sub((-h) as u32))
+                }
+            }
+        } else {
+            None
+        };
+
         // If this network already allows pow fraud proofs, we should use it instead of assumeutreexo
         let assume_utreexo = match self.config.assume_utreexo {
             true => Some(ChainParams::get_assume_utreexo(self.config.network)),
@@ -478,6 +493,7 @@ impl Florestad {
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
                 format!("{data_dir}/debug.log"),
+                resolved_filters_start,
             ));
 
             if self.json_rpc.set(server).is_err() {

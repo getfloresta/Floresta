@@ -83,6 +83,8 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    /// Resolved absolute height at which compact filter download started.
+    pub(super) filters_start_height: Option<u32>,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -749,6 +751,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
+        filters_start_height: Option<u32>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -789,6 +792,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                filters_start_height,
             }));
 
         axum::serve(listener, router)

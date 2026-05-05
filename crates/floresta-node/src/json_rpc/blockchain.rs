@@ -270,6 +270,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             0.0
         };
 
+        let filters = self
+            .block_filter_storage
+            .as_ref()
+            .and_then(|s| s.get_height().ok());
+
         Ok(GetBlockchainInfoRes {
             best_block: hash.to_string(),
             height,
@@ -283,6 +288,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             chain: self.network.to_string(),
             difficulty: latest_header.difficulty(self.chain.get_params()) as u64,
             progress: validated_percentage,
+            filters,
+            filters_start: self.filters_start_height,
         })
     }
 

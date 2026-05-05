@@ -27,6 +27,12 @@ pub struct GetBlockchainInfoRes {
     pub chain: String,
     pub progress: f32,
     pub difficulty: u64,
+    /// Height up to which compact block filters have been downloaded.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub filters: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub filters_start: Option<u32>,
 }
 
 /// A confidence enum to auxiliate rescan timestamp values.
