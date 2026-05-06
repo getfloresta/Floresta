@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Number;
 use serde_json::Value;
 
+use crate::rpc_interfaces::RpcMethods;
 use crate::rpc_types;
 use crate::rpc_types::*;
 
@@ -21,13 +22,6 @@ type Result<T> = std::result::Result<T, rpc_types::Error>;
 
 /// A trait specifying all possible methods for floresta's json-rpc
 pub trait FlorestaRPC {
-    /// Get the BIP158 filter for a given block height
-    ///
-    /// BIP158 filters are a compact representation of the set of transactions in a block,
-    /// designed for efficient light client synchronization. This method returns the filter
-    /// for a given block height, encoded as a hexadecimal string.
-    /// You need to have enabled block filters by setting the `blockfilters=1` option
-    fn get_block_filter(&self, height: u32) -> Result<String>;
     /// Returns general information about the chain we are on
     ///
     /// This method returns a bunch of information about the chain we are on, including
@@ -190,20 +184,20 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
             height_hint.into(),
         ]);
 
-        self.call("findtxout", &params)
+        self.call(&RpcMethods::FindTxOut, &params)
     }
 
     fn uptime(&self) -> Result<u32> {
-        self.call("uptime", &[])
+        self.call(&RpcMethods::Uptime, &[])
     }
 
     fn get_memory_info(&self, mode: Option<String>) -> Result<GetMemInfoRes> {
         let params = rpc_params([mode.into()]);
-        self.call("getmemoryinfo", &params)
+        self.call(&RpcMethods::GetMemoryInfo, &params)
     }
 
     fn get_rpc_info(&self) -> Result<GetRpcInfoRes> {
-        self.call("getrpcinfo", &[])
+        self.call(&RpcMethods::GetRpcInfo, &[])
     }
 
     fn add_node(
@@ -214,17 +208,17 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     ) -> Result<Value> {
         let params = rpc_params([node.into(), command.to_string().into(), v2transport.into()]);
 
-        self.call("addnode", &params)
+        self.call(&RpcMethods::AddNode, &params)
     }
 
     fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<Value> {
         let params = rpc_params([node_address.into(), node_id.into()]);
 
-        self.call("disconnectnode", &params)
+        self.call(&RpcMethods::DisconnectNode, &params)
     }
 
     fn stop(&self) -> Result<String> {
-        self.call("stop", &[])
+        self.call(&RpcMethods::Stop, &[])
     }
 
     fn rescanblockchain(
@@ -243,36 +237,36 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                 .into(),
         ]);
 
-        self.call("rescanblockchain", &params)
+        self.call(&RpcMethods::RescanBlockchain, &params)
     }
 
     fn get_roots(&self) -> Result<Vec<String>> {
-        self.call("getroots", &[])
+        self.call(&RpcMethods::GetRoots, &[])
     }
 
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
         let params = rpc_params([hash.into(), verbosity.into()]);
 
-        self.call("getblock", &params)
+        self.call(&RpcMethods::GetBlock, &params)
     }
 
     fn get_block_count(&self) -> Result<u32> {
-        self.call("getblockcount", &[])
+        self.call(&RpcMethods::GetBlockCount, &[])
     }
 
     fn get_deployment_info(&self, blockhash: Option<BlockHash>) -> Result<GetDeploymentInfo> {
         let params = rpc_params([blockhash.into()]);
-        self.call("getdeploymentinfo", &params)
+        self.call(&RpcMethods::GetDeploymentInfo, &params)
     }
 
     fn get_difficulty(&self) -> Result<f64> {
-        self.call("getdifficulty", &[])
+        self.call(&RpcMethods::GetDifficulty, &[])
     }
 
     fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut> {
         let params = rpc_params([tx_id.into(), outpoint.into()]);
 
-        let result: serde_json::Value = self.call("gettxout", &params)?;
+        let result: serde_json::Value = self.call(&RpcMethods::GetTxOut, &params)?;
         if result.is_null() {
             return Err(Error::TxOutNotFound);
         }
@@ -282,28 +276,28 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Result<String> {
         let params = rpc_params([txids.into(), blockhash.into()]);
-        self.call("gettxoutproof", &params)
+        self.call(&RpcMethods::GetTxOutProof, &params)
     }
 
     fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
-        self.call("getpeerinfo", &[])
+        self.call(&RpcMethods::GetPeerInfo, &[])
     }
 
     fn get_connection_count(&self) -> Result<usize> {
-        self.call("getconnectioncount", &[])
+        self.call(&RpcMethods::GetConnectionCount, &[])
     }
 
     fn get_network_info(&self) -> Result<GetNetworkInfo> {
-        self.call("getnetworkinfo", &[])
+        self.call(&RpcMethods::GetNetworkInfo, &[])
     }
 
     fn get_best_block_hash(&self) -> Result<BlockHash> {
-        self.call("getbestblockhash", &[])
+        self.call(&RpcMethods::GetBestBlockHash, &[])
     }
 
     fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
         let params = rpc_params([height.into()]);
-        self.call("getblockhash", &params)
+        self.call(&RpcMethods::GetBlockHash, &params)
     }
 
     fn get_raw_transaction(
@@ -313,17 +307,12 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     ) -> Result<GetRawTransactionRes> {
         let params = rpc_params([tx_id.into(), verbosity.into()]);
 
-        self.call("getrawtransaction", &params)
+        self.call(&RpcMethods::GetRawTransaction, &params)
     }
 
     fn load_descriptor(&self, descriptor: String) -> Result<bool> {
         let params = rpc_params([descriptor.into()]);
-        self.call("loaddescriptor", &params)
-    }
-
-    fn get_block_filter(&self, height: u32) -> Result<String> {
-        let params = rpc_params([height.into()]);
-        self.call("getblockfilter", &params)
+        self.call(&RpcMethods::LoadDescriptor, &params)
     }
 
     fn get_block_header(
@@ -332,28 +321,28 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         verbosity: Option<bool>,
     ) -> Result<GetBlockHeaderRes> {
         let params = rpc_params([hash.into(), verbosity.into()]);
-        self.call("getblockheader", &params)
+        self.call(&RpcMethods::GetBlockHeader, &params)
     }
 
     fn get_blockchain_info(&self) -> Result<GetBlockchainInfo> {
-        self.call("getblockchaininfo", &[])
+        self.call(&RpcMethods::GetBlockchainInfo, &[])
     }
 
     fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
         let params = rpc_params([tx.into()]);
-        self.call("sendrawtransaction", &params)
+        self.call(&RpcMethods::SendRawTransaction, &params)
     }
 
     fn list_descriptors(&self) -> Result<Vec<String>> {
-        self.call("listdescriptors", &[])
+        self.call(&RpcMethods::ListDescriptors, &[])
     }
 
     fn ping(&self) -> Result<()> {
-        self.call("ping", &[])
+        self.call(&RpcMethods::Ping, &[])
     }
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
-        self.call("getaddrmaninfo", &[])
+        self.call(&RpcMethods::GetAddrManInfo, &[])
     }
 }
 
@@ -478,24 +467,6 @@ mod tests {
             serde_json::from_value(result)
                 .map_err(|_| Error::Api(Value::String("Result parsing error".to_string())))
         }
-    }
-
-    #[test]
-    fn test_get_block_filter_params() {
-        let client = MockRpcClient::new();
-        let expected_result = "abcdef1234567890".to_string();
-        client.set_result(Value::String(expected_result.clone()));
-
-        let height = 500u32;
-
-        let result = client.get_block_filter(height).unwrap();
-        assert_eq!(result, expected_result);
-
-        let expected_params = rpc_params([height.into()]);
-
-        assert_eq!(*client.method.borrow(), "getblockfilter");
-        assert_eq!(client.params.borrow().len(), 1);
-        assert_eq!(*client.params.borrow(), expected_params);
     }
 
     #[test]
