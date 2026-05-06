@@ -4,6 +4,7 @@ use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -32,6 +33,7 @@ use bitcoin::hex::DisplayHex;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_rpc::rpc_interfaces::RpcMethods;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
@@ -225,106 +227,12 @@ async fn handle_json_rpc_request(
             when: Instant::now(),
         },
     );
-
-    // Methods that don't require params
-    match method.as_str() {
-        "getbestblockhash" => {
-            return state
-                .get_best_block_hash()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getblockchaininfo" => {
-            return state
-                .get_blockchain_info()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getblockcount" => {
-            return state
-                .get_block_count()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getconnectioncount" => {
-            return state
-                .get_connection_count()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getnetworkinfo" => {
-            return state
-                .get_network_info()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getpeerinfo" => {
-            return state
-                .get_peer_info()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getroots" => {
-            return state
-                .get_roots()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getrpcinfo" => {
-            return state
-                .get_rpc_info()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "listdescriptors" => {
-            return state
-                .list_descriptors()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "ping" => {
-            state.ping().await?;
-            return Ok(serde_json::json!(null));
-        }
-        "stop" => {
-            return state
-                .stop()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "uptime" => {
-            return Ok(serde_json::to_value(state.uptime()).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        _ => {}
-    }
-
-    // Methods that do require parameters.
-    //
-    // Here we use `unwrap_or_default()` because there are methods with only optional
-    // parameters.
-    // Therefore, even if the request is parsed and the `params` field was omitted it's nice
-    // to turn it into `Some(Value)` so the job of gathering inputs for calling the inner
-    // rpc method goes to the getters under request.rs.
+    let method = RpcMethods::from_str(&method).map_err(|_| JsonRpcError::MethodNotFound)?;
     let params = params.unwrap_or_default();
 
-    match method.as_str() {
-        "addnode" => {
-            let node = get_at(&params, 0, "node")?;
-            let command = get_at(&params, 1, "command")?;
-            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
-
-            state
-                .add_node(node, command, v2transport)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "disconnectnode" => {
-            let node_address = get_at(&params, 0, "node_address")?;
-            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
-
-            state
-                .disconnect_node(node_address, node_id)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "findtxout" => {
+    match method {
+        // Blockchain
+        RpcMethods::FindTxOut => {
             let txid = get_at(&params, 0, "txid")?;
             let vout = get_at(&params, 1, "vout")?;
             let script: String = get_at(&params, 2, "script")?;
@@ -333,8 +241,10 @@ async fn handle_json_rpc_request(
 
             state.clone().find_tx_out(txid, vout, script, height).await
         }
-
-        "getblock" => {
+        RpcMethods::GetBestBlockHash => state
+            .get_best_block_hash()
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetBlock => {
             let hash = get_at(&params, 0, "block_hash")?;
             let verbosity = get_with_default(&params, 1, "verbosity", 1)?;
 
@@ -343,23 +253,27 @@ async fn handle_json_rpc_request(
                 .await
                 .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
         }
-
-        "getblockfrompeer" => {
+        RpcMethods::GetBlockFromPeer => {
             let hash = get_at(&params, 0, "block_hash")?;
 
             state.get_block(hash, 0).await?;
 
             Ok(Value::Null)
         }
-
-        "getblockhash" => {
+        RpcMethods::GetBlockchainInfo => state
+            .get_blockchain_info()
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetBlockCount => state
+            .get_block_count()
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetBlockHash => {
             let height = get_at(&params, 0, "block_height")?;
             state
                 .get_block_hash(height)
                 .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
         }
 
-        "getblockheader" => {
+        RpcMethods::GetBlockHeader => {
             let hash = get_at(&params, 0, "block_hash")?;
             let verbosity = get_with_default(&params, 1, "verbosity", true)?;
 
@@ -368,41 +282,17 @@ async fn handle_json_rpc_request(
                 .await
                 .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "getmemoryinfo" => {
-            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
-
-            state
-                .get_memory_info(&mode)
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "getrawtransaction" => {
-            let txid = get_at(&params, 0, "txid")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", false)?;
-
-            state
-                .get_transaction(txid, verbosity)
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "getdeploymentinfo" => {
+        RpcMethods::GetDeploymentInfo => {
             let blockhash = try_into_optional(get_at(&params, 0, "blockhash"))?;
 
             state
                 .get_deployment_info(blockhash)
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "getdifficulty" => state
+        RpcMethods::GetDifficulty => state
             .get_difficulty()
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        "getaddrmaninfo" => state
-            .get_addrman_info()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-
-        "gettxout" => {
+        RpcMethods::GetTxOut => {
             let txid = get_at(&params, 0, "txid")?;
             let vout = get_at(&params, 1, "vout")?;
             let include_mempool = get_with_default(&params, 2, "include_mempool", false)?;
@@ -411,8 +301,7 @@ async fn handle_json_rpc_request(
                 .get_tx_out(txid, vout, include_mempool)
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "gettxoutproof" => {
+        RpcMethods::GetTxOutProof => {
             let txids: Vec<Txid> = get_at(&params, 0, "txids")?;
             let block_hash = try_into_optional(get_at(&params, 1, "block_hash"))?;
 
@@ -421,16 +310,22 @@ async fn handle_json_rpc_request(
                 .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
+        RpcMethods::GetRoots => state
+            .get_roots()
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
 
-        "loaddescriptor" => {
+        // Wallet
+        RpcMethods::LoadDescriptor => {
             let descriptor = get_at(&params, 0, "descriptor")?;
 
             state
                 .load_descriptor(descriptor)
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "rescanblockchain" => {
+        RpcMethods::ListDescriptors => state
+            .list_descriptors()
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::RescanBlockchain => {
             let start_height = get_with_default(&params, 0, "start_height", 0)?;
             let stop_height = get_with_default(&params, 1, "stop_height", 0)?;
             let use_timestamp = get_with_default(&params, 2, "use_timestamp", false)?;
@@ -441,15 +336,83 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
-        "sendrawtransaction" => {
+        // Network
+        RpcMethods::AddNode => {
+            let node = get_at(&params, 0, "node")?;
+            let command = get_at(&params, 1, "command")?;
+            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
+
+            state
+                .add_node(node, command, v2transport)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::DisconnectNode => {
+            let node_address = get_at(&params, 0, "node_address")?;
+            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
+
+            state
+                .disconnect_node(node_address, node_id)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::GetAddrManInfo => state
+            .get_addrman_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetConnectionCount => state
+            .get_connection_count()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetNetworkInfo => state
+            .get_network_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetPeerInfo => state
+            .get_peer_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::Ping => {
+            state.ping().await?;
+            Ok(serde_json::json!(null))
+        }
+
+        // RawTransactions
+        RpcMethods::SendRawTransaction => {
             let tx = get_at(&params, 0, "hex")?;
             state
                 .send_raw_transaction(tx)
                 .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
+        RpcMethods::GetRawTransaction => {
+            let txid = get_at(&params, 0, "txid")?;
+            let verbosity = get_with_default(&params, 1, "verbosity", false)?;
 
-        _ => Err(JsonRpcError::MethodNotFound),
+            state
+                .get_transaction(txid, verbosity)
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
+        // Control
+        RpcMethods::Stop => state
+            .stop()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::Uptime => {
+            Ok(serde_json::to_value(state.uptime()).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::GetMemoryInfo => {
+            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
+
+            state
+                .get_memory_info(&mode)
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::GetRpcInfo => state
+            .get_rpc_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
     }
 }
 
