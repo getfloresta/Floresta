@@ -1156,6 +1156,7 @@ dependencies = [
  "floresta-compact-filters",
  "floresta-electrum",
  "floresta-mempool",
+ "floresta-rpc",
  "floresta-watch-only",
  "floresta-wire",
  "libc",
