@@ -12,6 +12,7 @@ use corepc_types::v30::GetDeploymentInfo;
 use serde_json::Number;
 use serde_json::Value;
 
+use crate::rpc_interfaces::RpcMethods;
 use crate::rpc_types;
 use crate::rpc_types::*;
 
@@ -19,13 +20,6 @@ type Result<T> = std::result::Result<T, rpc_types::Error>;
 
 /// A trait specifying all possible methods for floresta's json-rpc
 pub trait FlorestaRPC {
-    /// Get the BIP158 filter for a given block height
-    ///
-    /// BIP158 filters are a compact representation of the set of transactions in a block,
-    /// designed for efficient light client synchronization. This method returns the filter
-    /// for a given block height, encoded as a hexadecimal string.
-    /// You need to have enabled block filters by setting the `blockfilters=1` option
-    fn get_block_filter(&self, height: u32) -> Result<String>;
     /// Returns general information about the chain we are on
     ///
     /// This method returns a bunch of information about the chain we are on, including
@@ -177,7 +171,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         height_hint: u32,
     ) -> Result<Value> {
         self.call(
-            "findtxout",
+            &RpcMethods::FindTxOut,
             &[
                 Value::String(tx_id.to_string()),
                 Value::Number(Number::from(outpoint)),
@@ -188,20 +182,20 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn uptime(&self) -> Result<u32> {
-        self.call("uptime", &[])
+        self.call(&RpcMethods::Uptime, &[])
     }
 
     fn get_memory_info(&self, mode: String) -> Result<GetMemInfoRes> {
-        self.call("getmemoryinfo", &[Value::String(mode)])
+        self.call(&RpcMethods::GetMemoryInfo, &[Value::String(mode)])
     }
 
     fn get_rpc_info(&self) -> Result<GetRpcInfoRes> {
-        self.call("getrpcinfo", &[])
+        self.call(&RpcMethods::GetRpcInfo, &[])
     }
 
     fn add_node(&self, node: String, command: AddNodeCommand, v2transport: bool) -> Result<Value> {
         self.call(
-            "addnode",
+            &RpcMethods::AddNode,
             &[
                 Value::String(node),
                 Value::String(command.to_string()),
@@ -213,18 +207,18 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value> {
         match node_id {
             Some(node_id) => self.call(
-                "disconnectnode",
+                &RpcMethods::DisconnectNode,
                 &[
                     Value::String(node_address),
                     Value::Number(Number::from(node_id)),
                 ],
             ),
-            None => self.call("disconnectnode", &[Value::String(node_address)]),
+            None => self.call(&RpcMethods::DisconnectNode, &[Value::String(node_address)]),
         }
     }
 
     fn stop(&self) -> Result<String> {
-        self.call("stop", &[])
+        self.call(&RpcMethods::Stop, &[])
     }
 
     fn rescanblockchain(
@@ -239,7 +233,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         let stop_height = stop_height.unwrap_or(0u32);
 
         self.call(
-            "rescanblockchain",
+            &RpcMethods::RescanBlockchain,
             &[
                 Value::Number(Number::from(start_height)),
                 Value::Number(Number::from(stop_height)),
@@ -250,14 +244,14 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_roots(&self) -> Result<Vec<String>> {
-        self.call("getroots", &[])
+        self.call(&RpcMethods::GetRoots, &[])
     }
 
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
         let verbosity = verbosity.unwrap_or(1);
 
         self.call(
-            "getblock",
+            &RpcMethods::GetBlock,
             &[
                 Value::String(hash.to_string()),
                 Value::Number(Number::from(verbosity)),
@@ -266,7 +260,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
     }
 
     fn get_block_count(&self) -> Result<u32> {
-        self.call("getblockcount", &[])
+        self.call(&RpcMethods::GetBlockCount, &[])
     }
 
     fn get_deployment_info(&self, blockhash: Option<BlockHash>) -> Result<GetDeploymentInfo> {
@@ -274,16 +268,16 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
             Some(h) => vec![Value::String(h.to_string())],
             None => vec![],
         };
-        self.call("getdeploymentinfo", &params)
+        self.call(&RpcMethods::GetDeploymentInfo, &params)
     }
 
     fn get_difficulty(&self) -> Result<f64> {
-        self.call("getdifficulty", &[])
+        self.call(&RpcMethods::GetDifficulty, &[])
     }
 
     fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut> {
         let result: serde_json::Value = self.call(
-            "gettxout",
+            &RpcMethods::GetTxOut,
             &[
                 Value::String(tx_id.to_string()),
                 Value::Number(Number::from(outpoint)),
@@ -308,27 +302,30 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                 vec![txids]
             }
         };
-        self.call("gettxoutproof", &params)
+        self.call(&RpcMethods::GetTxOutProof, &params)
     }
 
     fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
-        self.call("getpeerinfo", &[])
+        self.call(&RpcMethods::GetPeerInfo, &[])
     }
 
     fn get_connection_count(&self) -> Result<usize> {
-        self.call("getconnectioncount", &[])
+        self.call(&RpcMethods::GetConnectionCount, &[])
     }
 
     fn get_network_info(&self) -> Result<GetNetworkInfo> {
-        self.call("getnetworkinfo", &[])
+        self.call(&RpcMethods::GetNetworkInfo, &[])
     }
 
     fn get_best_block_hash(&self) -> Result<BlockHash> {
-        self.call("getbestblockhash", &[])
+        self.call(&RpcMethods::GetBestBlockHash, &[])
     }
 
     fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
-        self.call("getblockhash", &[Value::Number(Number::from(height))])
+        self.call(
+            &RpcMethods::GetBlockHash,
+            &[Value::Number(Number::from(height))],
+        )
     }
 
     fn get_raw_transaction(
@@ -342,15 +339,11 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
             params.push(Value::Number(Number::from(verbosity)));
         }
 
-        self.call("getrawtransaction", &params)
+        self.call(&RpcMethods::GetRawTransaction, &params)
     }
 
     fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        self.call("loaddescriptor", &[Value::String(descriptor)])
-    }
-
-    fn get_block_filter(&self, height: u32) -> Result<String> {
-        self.call("getblockfilter", &[Value::Number(Number::from(height))])
+        self.call(&RpcMethods::LoadDescriptor, &[Value::String(descriptor)])
     }
 
     fn get_block_header(
@@ -362,26 +355,26 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         if let Some(verbosity) = verbosity {
             params.push(Value::Bool(verbosity));
         }
-        self.call("getblockheader", &params)
+        self.call(&RpcMethods::GetBlockHeader, &params)
     }
 
     fn get_blockchain_info(&self) -> Result<GetBlockchainInfo> {
-        self.call("getblockchaininfo", &[])
+        self.call(&RpcMethods::GetBlockchainInfo, &[])
     }
 
     fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        self.call("sendrawtransaction", &[Value::String(tx)])
+        self.call(&RpcMethods::SendRawTransaction, &[Value::String(tx)])
     }
 
     fn list_descriptors(&self) -> Result<Vec<String>> {
-        self.call("listdescriptors", &[])
+        self.call(&RpcMethods::ListDescriptors, &[])
     }
 
     fn ping(&self) -> Result<()> {
-        self.call("ping", &[])
+        self.call(&RpcMethods::Ping, &[])
     }
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
-        self.call("getaddrmaninfo", &[])
+        self.call(&RpcMethods::GetAddrManInfo, &[])
     }
 }
