@@ -521,49 +521,6 @@ pub mod jsonrpc_interface {
     }
 }
 
-/// A confidence enum to auxiliate rescan timestamp values.
-///
-/// Serves to tell how much confidence you need in such a rescan request. That is, the need for a high confidence rescan
-/// will make the rescan to start in a block that have an lower timestamp than the given in order to be more secure
-/// about finding addresses and relevant transactions, a lower confidence will make the rescan to be closer to the given value.
-///
-/// This input is necessary to cover network variancy specially in testnet, for mainnet you can safely use low or medium confidences
-/// depending on how much sure you are about the given timestamp covering the addresses you need.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "lowercase")]
-pub enum RescanConfidence {
-    /// `high`: 99% confidence interval. Returning 46 minutes in seconds for `val`.
-    High,
-
-    /// `medium` (default): 95% confidence interval. Returning 30 minutes in seconds for `val`.
-    Medium,
-
-    /// `low`: 90% confidence interval. Returning 23 minutes in seconds for `val`.
-    Low,
-
-    /// `exact`: Removes any lookback addition. Returning 0 for `val`
-    Exact,
-}
-
-impl RescanConfidence {
-    /// In cases where `use_timestamp` is set, tells how much confidence the user wants for finding its addresses from this rescan request, a higher confidence will add more lookback seconds to the targeted timestamp and rescanning more blocks.
-    /// Under the hood this uses an [Exponential distribution](https://en.wikipedia.org/wiki/Exponential_distribution) [cumulative distribution function (CDF)](https:///en.wikipedia.org/wiki/Cumulative_distribution_function) where the parameter $\lambda$ (rate) is $\frac{1}{600}$ (1 block every 600 seconds, 10 minutes).
-    ///   The supplied string can be one of:
-    ///
-    ///   - `high`: 99% confidence interval. Returning 46 minutes in seconds for `val`.
-    ///   - `medium` (default): 95% confidence interval. Returning 30 minutes in seconds for `val`.
-    ///   - `low`: 90% confidence interval. Returning 23 minutes in seconds for `val`.
-    ///   - `exact`: Removes any lookback addition. Returning 0 for `val`
-    pub const fn as_secs(&self) -> u32 {
-        match self {
-            Self::Exact => 0,
-            Self::Low => 1_380,
-            Self::Medium => 1_800,
-            Self::High => 2_760,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum GetRawTransactionRes {
