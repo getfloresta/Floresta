@@ -35,12 +35,12 @@ use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
+use floresta_rpc::rpc_interfaces::WalletRpc;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
-use floresta_wire::node_interface::ChainMethods;
 use floresta_wire::node_interface::MempoolMethods;
 use serde_json::Value;
 use serde_json::json;
@@ -60,7 +60,6 @@ use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
 use crate::json_rpc::request::arg_parser::get_with_default;
 use crate::json_rpc::request::arg_parser::try_into_optional;
-use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::res::jsonrpc_interface::Response;
 
 /// Expect message for `serde_json` serialization of types that implement `Serialize`.
@@ -118,78 +117,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .and_then(|v| serde_json::to_value(v).ok())
             })
             .ok_or(JsonRpcError::TxNotFound)
-    }
-
-    fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        let addresses = self.wallet.push_descriptor(&descriptor)?;
-        info!("Descriptor pushed: {descriptor}");
-        debug!("Rescanning with block filters for addresses: {addresses:?}");
-
-        let addresses = self.wallet.get_cached_addresses();
-        let wallet = self.wallet.clone();
-        let cfilters = self
-            .block_filter_storage
-            .as_ref()
-            .ok_or(JsonRpcError::NoBlockFilters)?
-            .clone();
-        let node = self.node.clone();
-        let chain = self.chain.clone();
-
-        tokio::task::spawn(Self::rescan_with_block_filters(
-            addresses, chain, wallet, cfilters, node, None, None,
-        ));
-
-        Ok(true)
-    }
-
-    fn rescan_blockchain(
-        &self,
-        start: u32,
-        stop: u32,
-        use_timestamp: bool,
-        confidence: RescanConfidence,
-    ) -> Result<bool> {
-        let (start_height, stop_height) =
-            self.get_rescan_interval(use_timestamp, start, stop, confidence)?;
-
-        if stop_height != 0 && start_height >= stop_height {
-            // When stop height is a non zero value it needs atleast to be greater than start_height.
-            return Err(JsonRpcError::InvalidRescanVal);
-        }
-
-        // if we are on ibd, we don't have any filters to rescan
-        if self.chain.is_in_ibd() {
-            return Err(JsonRpcError::InInitialBlockDownload);
-        }
-
-        let addresses = self.wallet.get_cached_addresses();
-
-        if addresses.is_empty() {
-            return Err(JsonRpcError::NoAddressesToRescan);
-        }
-
-        let wallet = self.wallet.clone();
-
-        let cfilters = self
-            .block_filter_storage
-            .as_ref()
-            .ok_or(JsonRpcError::NoBlockFilters)?
-            .clone();
-
-        let node = self.node.clone();
-
-        let chain = self.chain.clone();
-
-        tokio::task::spawn(Self::rescan_with_block_filters(
-            addresses,
-            chain,
-            wallet,
-            cfilters,
-            node,
-            (start_height != 0).then_some(start_height), // Its ugly but to maintain the API here its necessary to recast to a Option.
-            (stop_height != 0).then_some(stop_height),
-        ));
-        Ok(true)
     }
 
     async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
@@ -322,19 +249,24 @@ async fn handle_json_rpc_request(
 
             state
                 .load_descriptor(descriptor)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-        RpcMethods::ListDescriptors => state
-            .list_descriptors()
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::ListDescriptors => {
+            return state
+                .list_descriptors()
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
+        }
         RpcMethods::RescanBlockchain => {
-            let start_height = get_with_default(&params, 0, "start_height", 0)?;
-            let stop_height = get_with_default(&params, 1, "stop_height", 0)?;
+            let start_height = try_into_optional(get_at(&params, 0, "start_height"))?;
+            let stop_height = try_into_optional(get_at(&params, 1, "stop_height"))?;
             let use_timestamp = get_with_default(&params, 2, "use_timestamp", false)?;
-            let confidence = get_with_default(&params, 3, "confidence", RescanConfidence::Medium)?;
+            let confidence = try_into_optional(get_at(&params, 3, "confidence"))?;
 
             state
                 .rescan_blockchain(start_height, stop_height, use_timestamp, confidence)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
@@ -466,40 +398,6 @@ async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<Value> {
 }
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    async fn rescan_with_block_filters(
-        addresses: Vec<ScriptBuf>,
-        chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
-        cfilters: Arc<NetworkFilters<FlatFiltersStore>>,
-        node: NodeHandle,
-        start_height: Option<u32>,
-        stop_height: Option<u32>,
-    ) -> Result<()> {
-        let blocks = cfilters
-            .match_any(
-                addresses.iter().map(|a| a.as_bytes()).collect(),
-                start_height,
-                stop_height,
-                chain.clone(),
-            )
-            .map_err(|e| JsonRpcError::Filters(e.to_string()))?;
-
-        info!("rescan filter hits: {blocks:?}");
-
-        for block in blocks {
-            if let Ok(Some(block)) = node.get_block(block).await {
-                let height = chain
-                    .get_block_height(&block.block_hash())
-                    .map_err(|_| JsonRpcError::Chain)?
-                    .ok_or(JsonRpcError::BlockNotFound)?;
-
-                wallet.block_process(&block, height);
-            }
-        }
-
-        Ok(())
-    }
-
     fn make_vin(&self, input: TxIn) -> TxInJson {
         let txid = serialize_hex(&input.previous_output.txid);
         let vout = input.previous_output.vout;

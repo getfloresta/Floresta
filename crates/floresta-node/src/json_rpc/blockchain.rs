@@ -29,7 +29,6 @@ use floresta_wire::node_interface::ChainMethods;
 use miniscript::descriptor::checksum;
 use serde_json::Value;
 use serde_json::json;
-use tracing::debug;
 
 use super::res::GetBlockHeaderRes;
 use super::res::GetBlockchainInfoRes;
@@ -38,7 +37,6 @@ use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
-use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::server::SERIALIZATION_EXPECT_MSG;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
@@ -78,99 +76,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         self.chain
             .get_block(&blockhash)
             .map_err(|_| JsonRpcError::BlockNotFound)
-    }
-
-    pub fn get_rescan_interval(
-        &self,
-        use_timestamp: bool,
-        start: u32,
-        stop: u32,
-        confidence: RescanConfidence,
-    ) -> Result<(u32, u32), JsonRpcError> {
-        if use_timestamp {
-            let start_height = self.get_block_height_by_timestamp(start, &confidence)?;
-
-            let stop_height = self.get_block_height_by_timestamp(stop, &RescanConfidence::Exact)?;
-
-            return Ok((start_height, stop_height));
-        }
-
-        let (tip, _) = self
-            .chain
-            .get_best_block()
-            .map_err(|_| JsonRpcError::Chain)?;
-
-        if stop > tip {
-            return Err(JsonRpcError::InvalidRescanVal);
-        }
-
-        Ok((start, stop))
-    }
-
-    /// Retrieves the height of the block that was mined in the given timestamp.
-    ///
-    /// `timestamp` has an alias, 0 will directly refer to the network's genesis timestamp.
-    pub fn get_block_height_by_timestamp(
-        &self,
-        timestamp: u32,
-        confidence: &RescanConfidence,
-    ) -> Result<u32, JsonRpcError> {
-        /// Simple helper to avoid code reuse.
-        fn get_block_time<BlockChain: RpcChain>(
-            provider: &RpcImpl<BlockChain>,
-            at: u32,
-        ) -> Result<u32, JsonRpcError> {
-            let hash = provider.get_block_hash(at)?;
-            let block = provider.get_block_header_inner(hash)?;
-            Ok(block.time)
-        }
-
-        let genesis_timestamp = genesis_block(self.network).header.time;
-
-        if timestamp == 0 || timestamp == genesis_timestamp {
-            return Ok(0);
-        };
-
-        let (tip_height, _) = self
-            .chain
-            .get_best_block()
-            .map_err(|_| JsonRpcError::BlockNotFound)?;
-
-        let tip_time = get_block_time(self, tip_height)?;
-
-        if timestamp < genesis_timestamp || timestamp > tip_time {
-            return Err(JsonRpcError::InvalidTimestamp);
-        }
-
-        let adjusted_target = timestamp.saturating_sub(confidence.as_secs());
-
-        let mut high = tip_height;
-        let mut low = 0;
-        let max_iters = tip_height.ilog2() + 1;
-        for _ in 0..max_iters {
-            let cut = (high + low) / 2;
-
-            let block_timestamp = get_block_time(self, cut)?;
-
-            if block_timestamp == adjusted_target {
-                debug!("found a precise block; returning {cut}");
-                return Ok(cut);
-            }
-
-            if high - low <= 2 {
-                debug!("didn't find a precise block; returning {low}");
-                return Ok(low);
-            }
-
-            if block_timestamp > adjusted_target {
-                high = cut;
-            } else {
-                low = cut;
-            }
-        }
-
-        // This is pretty much unreachable.
-        Err(JsonRpcError::BlockNotFound)
     }
 }
 
@@ -442,7 +347,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     /// Helper method to get a block header by its hash, used by multiple rpcs.
-    fn get_block_header_inner(&self, hash: BlockHash) -> Result<Header, JsonRpcError> {
+    pub(super) fn get_block_header_inner(&self, hash: BlockHash) -> Result<Header, JsonRpcError> {
         self.chain
             .get_block_header(&hash)
             .map_err(|_| JsonRpcError::BlockNotFound)
@@ -784,13 +689,5 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub(super) fn get_roots(&self) -> Result<Vec<String>, JsonRpcError> {
         let hashes = self.chain.get_root_hashes();
         Ok(hashes.iter().map(|h| h.to_string()).collect())
-    }
-
-    pub(super) fn list_descriptors(&self) -> Result<Vec<String>, JsonRpcError> {
-        let descriptors = self
-            .wallet
-            .get_descriptors()
-            .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
-        Ok(descriptors)
     }
 }

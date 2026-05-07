@@ -250,6 +250,17 @@ pub enum RescanConfidence {
     Exact,
 }
 
+impl RescanConfidence {
+    pub const fn as_secs(&self) -> u32 {
+        match self {
+            Self::Exact => 0,
+            Self::Low => 1_380,
+            Self::Medium => 1_800,
+            Self::High => 2_760,
+        }
+    }
+}
+
 #[derive(Debug)]
 /// All possible errors returned by the jsonrpc
 pub enum Error {
