@@ -1,6 +1,21 @@
 _default:
     @just --list
 
+# List of crates of floresta
+_crates := `cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.source == null) | .name' | tr '\n' ' '`
+
+# Generic recipe to run a command for each crate
+# Usage: just run-each "cargo build" ""
+#        just run-each "cargo test --lib" "-- --nocapture"
+run-each before_p after_p:
+    #!/usr/bin/env bash
+    set -e
+    echo "Crates {{ _crates }} "
+    for crate in {{ _crates }}; do
+        echo "Running: {{ before_p }} -p $crate {{ after_p }}"
+        {{ before_p }} -p "$crate" {{ after_p }} || exit 1
+    done
+
 # Checks whether a command is available.
 check-command cmd recipe="check-command" link_to_package="":
     @if ! command -v "{{ cmd }}" >/dev/null; then \
@@ -21,11 +36,11 @@ run-release:
 
 # Compile project with debug options
 build:
-    cargo build
+    @just run-each "cargo build" ""
 
 # Compile project with release options
 build-release:
-    cargo build --release
+    @just run-each "cargo build --release" ""
 
 # Clean project build directory
 clean:
@@ -47,7 +62,7 @@ test-unit crate="": build
 
 # Execute workspace-related tests
 test-wkspc: build
-    cargo test --workspace -- --nocapture
+    @just run-each "cargo test" "-- --nocapture"
 
 # Execute tests/prepare.sh.
 test-functional-prepare arg="":
@@ -91,10 +106,10 @@ lint:
     @just doc-check
 
     # 1) Run with no features
-    cargo +nightly clippy --workspace --all-targets --no-default-features
+    @just run-each "cargo +nightly clippy --all-targets" "--no-default-features"
 
     # 2) Run with all features
-    cargo +nightly clippy --workspace --all-targets --all-features
+    @just run-each "cargo +nightly clippy --all-targets" "--all-features"
 
     @just spell-check
 
