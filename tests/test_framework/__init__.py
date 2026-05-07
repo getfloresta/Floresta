@@ -12,30 +12,57 @@ The difference is that `florestad` will run under a `cargo run` subprocess, whic
 `add_node_settings`.
 """
 
-import os
-import re
-import sys
+import contextlib
 import copy
+import inspect
+import os
 import random
-import socket
+import re
 import shutil
 import signal
-import contextlib
+import socket
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Pattern, Tuple, Optional
+from typing import Any, Dict, List, Optional, Pattern, Tuple
 
+from requests.exceptions import RequestException
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
 )
 from test_framework.daemon import ConfigP2P
-from test_framework.rpc import ConfigRPC
 from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
+from test_framework.rpc import ConfigRPC
 from test_framework.util import Utility
+
+SYNC_TIMEOUT = float(os.environ.get("FLORESTA_SYNC_TIMEOUT", "120"))
+PEER_CONNECTION_TIMEOUT = float(
+    os.environ.get("FLORESTA_PEER_CONNECTION_TIMEOUT", "30")
+)
+
+
+def wait_until(predicate, *, timeout=SYNC_TIMEOUT, interval=0.5):
+    """Wait until ``predicate()`` returns True, or raise after *timeout* seconds.
+
+    This is a general-purpose primitive inspired by Bitcoin Core's
+    ``wait_until_helper_internal``.  Domain-specific helpers such as
+    ``FlorestaTestFramework.wait_for_sync`` build on top of this for
+    cases that need stale-state detection or RPC error tolerance.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+
+    source = inspect.getsource(predicate)
+    raise AssertionError(
+        f"wait_until() timed out after {timeout}s. Predicate:\n{source}"
+    )
 
 
 # pylint: disable=too-many-public-methods
@@ -293,8 +320,8 @@ class FlorestaTestFramework:
         Wait for two peers to connect/disconnect to each other.
         """
         attempts = 0
-        timeout = time.time() + 30
-        while time.time() < timeout:
+        deadline = time.time() + PEER_CONNECTION_TIMEOUT
+        while time.time() < deadline:
             if self.check_connection(peer_one, peer_two, is_connected):
                 self.log.debug(
                     f"Peers {peer_one.variant} and {peer_two.variant} are in the expected "
@@ -328,6 +355,103 @@ class FlorestaTestFramework:
             f"Peers {peer_one.variant} and {peer_two.variant} failed to reach the expected "
             f"connection state within the timeout. Expected connected: {is_connected}."
         )
+
+    def wait_for_sync(
+        self, node: Node, target_height: int, stale_timeout: float = SYNC_TIMEOUT
+    ):
+        """
+        Wait until a node is synced to the target height and out of IBD with stale detection.
+
+        If the node stops making progress for ``stale_timeout`` seconds, the test fails.
+        """
+        last_progress_time = time.time()
+        prev_height = None
+        prev_validated = None
+
+        while True:
+            try:
+                info = node.rpc.get_blockchain_info()
+            except RequestException as exc:
+                self.log.debug(f"Node '{node.variant}' RPC error (will retry): {exc}")
+                stale_elapsed = time.time() - last_progress_time
+                if stale_elapsed >= stale_timeout:
+                    raise AssertionError(
+                        f"Node '{node.variant}' RPC unreachable for {stale_timeout}s "
+                        f"trying to sync to height {target_height}: {exc}"
+                    ) from exc
+                time.sleep(1)
+                continue
+
+            if info["height"] == target_height and not info["ibd"]:
+                self.log.debug(
+                    f"Node '{node.variant}' synced to height {target_height}"
+                )
+                return
+
+            cur_height = info["height"]
+            cur_validated = info.get("validated")
+
+            if cur_height != prev_height or cur_validated != prev_validated:
+                last_progress_time = time.time()
+                prev_height = cur_height
+                prev_validated = cur_validated
+
+            stale_elapsed = time.time() - last_progress_time
+            if stale_elapsed >= stale_timeout:
+                raise AssertionError(
+                    f"Node '{node.variant}' stalled for {stale_timeout}s trying to "
+                    f"sync to height {target_height}: height={info['height']}, "
+                    f"validated={cur_validated}, ibd={info['ibd']}"
+                )
+
+            time.sleep(1)
+
+    def wait_for_height(
+        self, node: Node, target_height: int, stale_timeout: float = SYNC_TIMEOUT
+    ):
+        """
+        Wait until a node reaches the target height, regardless of IBD state.
+
+        Use this instead of ``wait_for_sync`` when the node only needs headers
+        sync(e.g. syncing from bitcoind which doesn't offer utreexo proofs).
+
+        Uses the same stale-state detection as ``wait_for_sync``.
+        """
+        last_progress_time = time.time()
+        prev_height = None
+
+        while True:
+            try:
+                info = node.rpc.get_blockchain_info()
+            except RequestException as exc:
+                self.log.debug(f"Node '{node.variant}' RPC error (will retry): {exc}")
+                stale_elapsed = time.time() - last_progress_time
+                if stale_elapsed >= stale_timeout:
+                    raise AssertionError(
+                        f"Node '{node.variant}' RPC unreachable for {stale_timeout}s "
+                        f"trying to reach height {target_height}: {exc}"
+                    ) from exc
+                time.sleep(1)
+                continue
+
+            cur_height = info["height"]
+            if cur_height == target_height:
+                self.log.debug(f"Node '{node.variant}' reached height {target_height}")
+                return
+
+            if cur_height != prev_height:
+                last_progress_time = time.time()
+                prev_height = cur_height
+
+            stale_elapsed = time.time() - last_progress_time
+            if stale_elapsed >= stale_timeout:
+                raise AssertionError(
+                    f"Node '{node.variant}' stalled for {stale_timeout}s trying to "
+                    f"reach height {target_height}: height={cur_height}, "
+                    f"ibd={info['ibd']}"
+                )
+
+            time.sleep(1)
 
     def connect_nodes(
         self,

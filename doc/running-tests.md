@@ -46,6 +46,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ## Testing Options
+
 There's a set of unit and integration Rust tests that you can run with:
 
 ```bash
@@ -63,11 +64,13 @@ Next sections will cover the Python functional tests.
 ### Setting Functional Tests Binaries
 
 We provide three way for running functional tests:
-* from `just` tool that abstracts what is necessary to run the tests before doing a commit;
-* from helper scripts — [prepare.sh](https://github.com/getfloresta/Floresta/blob/master/tests/prepare.sh) and [run.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run.sh) — to automatically build and run the tests;
-* from python utility directly: the most laborious, but you can run a specific test suite.
+
+- from `just` tool that abstracts what is necessary to run the tests before doing a commit;
+- from helper scripts — [prepare.sh](https://github.com/getfloresta/Floresta/blob/master/tests/prepare.sh) and [run.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run.sh) — to automatically build and run the tests;
+- from python utility directly: the most laborious, but you can run a specific test suite.
 
 #### From `just` tool
+
 It abstracts all things that will be explained in the next sections, and for that
 reason, we recommend to use it before doing a commit when changes only the functional tests.
 
@@ -98,9 +101,9 @@ just test-functional-run "-t floresta-cli -k getblock"
 
 We provide two helper scripts to support our functional tests in this process and guarantee isolation and reproducibility.
 
-* [prepare.sh](https://github.com/getfloresta/Floresta/blob/master/tests/prepare.sh) checks for build dependencies for both `utreexod` and `florestad`, builds them, and sets the `$FLORESTA_TEMP_DIR` environment variable. This variable points to where our functional tests will look for the binaries — specifically at `$FLORESTA_TEMP_DIR/binaries`.
+- [prepare.sh](https://github.com/getfloresta/Floresta/blob/master/tests/prepare.sh) checks for build dependencies for both `utreexod` and `florestad`, builds them, and sets the `$FLORESTA_TEMP_DIR` environment variable. This variable points to where our functional tests will look for the binaries — specifically at `$FLORESTA_TEMP_DIR/binaries`.
 
-* [run.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run.sh) adds the binaries found at `$FLORESTA_TEMP_DIR/binaries` to your `$PATH` and runs the tests in that environment.
+- [run.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run.sh) adds the binaries found at `$FLORESTA_TEMP_DIR/binaries` to your `$PATH` and runs the tests in that environment.
 
 So a basic usage would be:
 
@@ -119,19 +122,23 @@ UTREEXO_REVISION=0.1.0 ./tests/prepare.sh && ./tests/run.sh
 ```
 
 ##### Bitcoin-core
+
 By default, the `prepare.sh` script will obtain a runnable `bitcoind` binary in one of three exclusive ways. The default Bitcoin Core version is `30.2`, but you can override this by setting the `BITCOIN_REVISION` environment variable. The three methods are:
 
 1. **Using a user-provided binary**: If the `BITCOIND_EXE` environment variable is set and points to an executable, that exact binary is used. No download or build is attempted, and any `BITCOIN_REVISION` or build-parallelism settings are ignored.
+
 ```bash
     BITCOIND_EXE=/path/to/bitcoind ./tests/prepare.sh
 ```
 
 2. **Downloading a prebuilt binary**: If `BITCOIND_EXE` is not set, the script will try to download a prebuilt Bitcoin Core tarball for the specified `BITCOIN_REVISION`. Prebuilt binaries are available for all platforms and operating systems supported by Bitcoin Core. The supported versions are `30.2`, `29.2`, `28.3` and `27.2`.
+
 ```bash
     BITCOIN_REVISION=28.3 ./tests/prepare.sh
 ```
 
 3. **Building from source**: If no prebuilt binary is available for the platform, operating system, or specified version, the script will clone the Bitcoin Core repository and build `bitcoind` from the specified `BITCOIN_REVISION`. This can be a version tag (e.g., `29.1`) or a branch(e.g., `master`) from the remote repository.
+
 ```bash
     BITCOIN_REVISION=master ./tests/prepare.sh
 ```
@@ -168,16 +175,36 @@ Furthermore, you can run a set of specific tests, rather than all at once.
 ./tests/run.sh -t floresta-cli -k getblock
 ```
 
+#### Environment Variables
+
+| Variable                           | Default        | Description                                                                                                 |
+| ---------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `FLORESTA_SYNC_TIMEOUT`            | `120`          | Stale-state timeout for `wait_for_sync`. The countdown resets on progress; fires only when the node stalls. |
+| `FLORESTA_PEER_CONNECTION_TIMEOUT` | `30`           | Timeout in seconds for `wait_for_peers_connections` when waiting for nodes to discover each other.          |
+| `FLORESTA_REQUEST_TIMEOUT`         | `15`           | Timeout in seconds for individual RPC requests and socket wait operations.                                  |
+| `FLORESTA_REQUEST_STALE_TIMEOUT`   | `60`           | How long to retry transient RPC errors (read timeouts, connection errors) before giving up.                 |
+| `FLORESTA_TEMP_DIR`                | —              | Directory where functional tests look for binaries (at `$FLORESTA_TEMP_DIR/binaries`).                      |
+| `UTREEXO_REVISION`                 | latest release | Tag (without `v` prefix) of `utreexod` to build.                                                            |
+| `BITCOIN_REVISION`                 | `30.2`         | Version tag or branch of Bitcoin Core to use.                                                               |
+| `BITCOIND_EXE`                     | —              | Path to a user-provided `bitcoind` binary, skipping download/build.                                         |
+
+Example:
+
+```bash
+FLORESTA_SYNC_TIMEOUT=300 FLORESTA_PEER_CONNECTION_TIMEOUT=60 just test-functional-run
+```
+
 #### From python utility directly
+
 Additional functional tests are available (minimum python version: 3.12).
 It's not recommended to run them directly, since you will need to manually
 build the binaries yourself and place them at `$FLORESTA_TEMP_DIR/binaries`.
 The advantage is that you can run a specific test suite. For this you'll need to:
 
-* Setup `floresta`/`utreexod` environment;
-* Setup python utility;
-* Run tests from python utility directly;
-* Clean up the environment.
+- Setup `floresta`/`utreexod` environment;
+- Setup python utility;
+- Run tests from python utility directly;
+- Clean up the environment.
 
 ##### Setup `floresta`/`utreexod` environment
 
@@ -186,9 +213,10 @@ a `FLORESTA_TEMP_DIR` environment variable. This variable points to where
 our functional tests will look for the binaries.
 
 ##### Setup python utility
-* Recommended: install [uv: a rust-based python package and project manager](https://docs.astral.sh/uv/).
 
-* Configure an isolated environment:
+- Recommended: install [uv: a rust-based python package and project manager](https://docs.astral.sh/uv/).
+
+- Configure an isolated environment:
 
 ```bash
 # create a virtual environment
@@ -205,7 +233,7 @@ source .venv/bin/activate
 which python
 ```
 
-* Install module dependencies:
+- Install module dependencies:
 
 ```bash
 # installs dependencies listed in pyproject.toml.
@@ -224,7 +252,8 @@ uv pip install -r tests/requirements.txt
 uv sync
 ```
 
-* Format code
+- Format code
+
 ```bash
 uv run black ./tests
 
@@ -232,8 +261,8 @@ uv run black ./tests
 uv run black --check --verbose ./tests
 ```
 
+- Lint code
 
-* Lint code
 ```bash
 uv run pylint ./tests
 ```

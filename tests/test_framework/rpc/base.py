@@ -8,18 +8,23 @@ Define a base class for making RPC calls to a
 """
 
 import json
+import os
+import re
 import socket
 import time
-import re
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
-from abc import ABC, abstractmethod
 
 from requests import post
-from requests.exceptions import HTTPError
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import HTTPError, ReadTimeout
 from requests.models import HTTPBasicAuth
-from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
+from test_framework.rpc.exceptions import JSONRPCError
+
+REQUEST_TIMEOUT = int(os.environ.get("FLORESTA_REQUEST_TIMEOUT", "15"))
+REQUEST_STALE_TIMEOUT = int(os.environ.get("FLORESTA_REQUEST_STALE_TIMEOUT", "60"))
 
 
 # pylint: disable=too-many-public-methods
@@ -39,7 +44,8 @@ class BaseRPC(ABC):
     Subclasses should use `perform_request` to implement RPC calls.
     """
 
-    TIMEOUT: int = 15  # seconds
+    REQUEST_TIMEOUT: int = REQUEST_TIMEOUT  # seconds
+    REQUEST_STALE_TIMEOUT: int = REQUEST_STALE_TIMEOUT  # seconds
 
     def __init__(self, config: ConfigRPC, log):
         self._config = config
@@ -116,7 +122,7 @@ class BaseRPC(ABC):
                     "params": params,
                 }
             ),
-            "timeout": self.TIMEOUT,
+            "timeout": self.REQUEST_TIMEOUT,
         }
         if self._config.user is not None and self._config.password is not None:
             request["auth"] = HTTPBasicAuth(self._config.user, self._config.password)
@@ -146,26 +152,42 @@ class BaseRPC(ABC):
         )
 
         self.log.debug(self.log_msg(logmsg))
-        response = post(**request)
 
-        # If response isnt 200, raise an HTTPError
-        if response.status_code != 200:
-            raise HTTPError
+        deadline = time.time() + self.REQUEST_STALE_TIMEOUT
+        last_exc = None
+        while time.time() < deadline:
+            try:
+                response = post(**request)
+            except (ReadTimeout, RequestsConnectionError) as exc:
+                last_exc = exc
+                self.log.debug(
+                    self.log_msg(f"Transient error on {method}, retrying: {exc}")
+                )
+                time.sleep(1)
+                continue
 
-        result = response.json()
-        # Error could be None or a str
-        # If in the future this change,
-        # cast the resulted error to str
-        if "error" in result and result["error"] is not None:
-            raise JSONRPCError(
-                data=result["error"] if isinstance(result["error"], str) else None,
-                rpc_id=result["id"],
-                code=result["error"]["code"],
-                message=result["error"]["message"],
-            )
+            # If response isnt 200, raise an HTTPError
+            if response.status_code != 200:
+                raise HTTPError
 
-        self.log.debug(self.log_msg(result["result"]))
-        return result["result"]
+            result = response.json()
+            # Error could be None or a str
+            # If in the future this change,
+            # cast the resulted error to str
+            if "error" in result and result["error"] is not None:
+                raise JSONRPCError(
+                    data=result["error"] if isinstance(result["error"], str) else None,
+                    rpc_id=result["id"],
+                    code=result["error"]["code"],
+                    message=result["error"]["message"],
+                )
+
+            self.log.debug(self.log_msg(result["result"]))
+            return result["result"]
+
+        if last_exc is not None:
+            raise last_exc
+        raise TimeoutError(f"RPC deadline for '{method}' expired without a response")
 
     def is_socket_listening(self) -> bool:
         """Check if the socket is listening for connections on the specified port."""
@@ -196,7 +218,7 @@ class BaseRPC(ABC):
         Ensure the RPC connection reaches the desired state within a timeout.
         Raises TimeoutError if the state is not reached.
         """
-        timeout = self.TIMEOUT
+        timeout = self.REQUEST_TIMEOUT
         success = self.try_wait_on_socket(opened, timeout)
         if not success:
             state = "open" if opened else "closed"
