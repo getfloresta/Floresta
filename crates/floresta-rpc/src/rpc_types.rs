@@ -7,6 +7,7 @@ use core::fmt::Formatter;
 use std::path::PathBuf;
 
 pub use corepc_types::ScriptPubKey;
+pub use corepc_types::ScriptSig;
 pub use corepc_types::v30::GetAddrManInfo;
 pub use corepc_types::v30::GetBlockHeaderVerbose;
 pub use corepc_types::v30::GetBlockVerboseOne;
@@ -18,6 +19,8 @@ pub use corepc_types::v31::AddrManInfoNetwork;
 pub use corepc_types::v31::DeploymentInfo;
 pub use corepc_types::v31::GetNetworkInfoNetwork;
 pub use corepc_types::v31::GetRawTransactionVerbose;
+pub use corepc_types::v31::RawTransactionInput;
+pub use corepc_types::v31::RawTransactionOutput;
 use floresta_proc_macro::enum_str_map;
 use serde::Deserialize;
 use serde::Serialize;

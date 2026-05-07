@@ -21,10 +21,6 @@
 //! [`RpcError`]: jsonrpc_interface::RpcError
 //! [`JsonRpcError`]: jsonrpc_interface::JsonRpcError
 
-use corepc_types::v31::GetRawTransactionVerbose;
-use serde::Deserialize;
-use serde::Serialize;
-
 /// Types and methods implementing the [JSON-RPC 2.0 spec](https://www.jsonrpc.org/specification),
 /// tailored for floresta's RPC server. Requests using JSON-RPC 1.0 (or omitting the version
 /// field) are also accepted, but responses always follow the 2.0 format.
@@ -515,12 +511,4 @@ pub mod jsonrpc_interface {
             }
         }
     }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetRawTransactionRes {
-    Zero(String),
-
-    One(Box<GetRawTransactionVerbose>),
 }
