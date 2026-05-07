@@ -40,6 +40,7 @@ use floresta_chain::ThreadSafeChain;
 use floresta_common::NetworkExt;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_rpc::rpc_interfaces::NetworkRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;

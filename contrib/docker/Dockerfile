@@ -27,11 +27,14 @@ COPY crates/ crates/
 COPY fuzz/ fuzz/
 COPY doc/ doc/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    echo "Building florestad..." && \
     if [ -n "$BUILD_FEATURES" ]; then \
-    cargo build --release --features "$BUILD_FEATURES"; \
+        cargo build --release -p florestad --features "$BUILD_FEATURES"; \
     else \
-    cargo build --release; \
-    fi
+        cargo build --release -p florestad; \
+    fi && \
+    echo "Building floresta-cli..." && \
+    cargo build --release -p floresta-cli
 
 FROM debian:13.2-slim@sha256:18764e98673c3baf1a6f8d960b5b5a1ec69092049522abac4e24a7726425b016
 

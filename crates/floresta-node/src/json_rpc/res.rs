@@ -236,9 +236,6 @@ pub mod jsonrpc_interface {
         /// the u32 timestamp range that block headers use.
         InvalidSystemTime,
 
-        /// Invalid `addnode` command or parameters.
-        InvalidAddnodeCommand,
-
         /// Invalid `disconnectnode` command (both address and node ID were provided).
         InvalidDisconnectNodeCommand,
 
@@ -262,6 +259,17 @@ pub mod jsonrpc_interface {
     impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
     impl_error_from!(JsonRpcError, InvalidAddressError, InvalidNetAddress);
 
+    impl Display for JsonRpcError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            let rpc_error = self.rpc_error();
+            let msg = match &rpc_error.data {
+                Some(data) => format!("{}: {}", rpc_error.message, data),
+                None => rpc_error.message.clone(),
+            };
+            write!(f, "{}", msg)
+        }
+    }
+
     impl JsonRpcError {
         pub fn http_code(&self) -> StatusCode {
             match self {
@@ -275,7 +283,6 @@ pub mod jsonrpc_interface {
                 | Self::Decode(_)
                 | Self::MempoolAccept(_)
                 | Self::InvalidMemInfoMode
-                | Self::InvalidAddnodeCommand
                 | Self::InvalidDisconnectNodeCommand
                 | Self::InvalidTimestamp
                 | Self::InvalidRescanVal
@@ -358,11 +365,6 @@ pub mod jsonrpc_interface {
                 Self::InvalidMemInfoMode => RpcError {
                     code: INVALID_METHOD_PARAMETERS,
                     message: "Invalid meminfo mode".into(),
-                    data: None,
-                },
-                Self::InvalidAddnodeCommand => RpcError {
-                    code: INVALID_METHOD_PARAMETERS,
-                    message: "Invalid addnode command".into(),
                     data: None,
                 },
                 Self::InvalidDisconnectNodeCommand => RpcError {

@@ -36,7 +36,7 @@ floresta-mempool = { workspace = true }
 floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
 floresta-metrics = { workspace = true, optional = true }
-floresta-rpc = { workspace = true}
+floresta-rpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
 pretty_assertions = { version = "=1.4.1" }

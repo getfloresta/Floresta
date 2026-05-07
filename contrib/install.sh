@@ -368,9 +368,13 @@ build_floresta() {
     cd "$bdlDir" || exit
     export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C target-cpu=native"
     cargo build --release \
-        --bin florestad \
-        --bin floresta-cli \
+        -p florestad \
         --features json-rpc \
+        --locked
+
+    echo "🦀 Building floresta-cli $defaultTag..."
+    cargo build --release \
+        -p floresta-cli \
         --locked
 
     echo "🌳 Copying binaries to /usr/local/bin (need sudo)..."

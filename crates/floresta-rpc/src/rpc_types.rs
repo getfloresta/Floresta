@@ -14,7 +14,10 @@ pub use corepc_types::v30::GetBlockchainInfo;
 pub use corepc_types::v30::GetDeploymentInfo;
 pub use corepc_types::v30::GetNetworkInfo;
 pub use corepc_types::v30::GetTxOut;
+pub use corepc_types::v31::AddrManInfoNetwork;
+pub use corepc_types::v31::GetNetworkInfoNetwork;
 pub use corepc_types::v31::GetRawTransactionVerbose;
+use floresta_proc_macro::enum_str_map;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -222,6 +225,7 @@ pub struct GetRpcInfoRes {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
+#[enum_str_map(case = "lower", separator = "")]
 /// Enum to represent the different subcommands for the addnode command
 pub enum AddNodeCommand {
     /// Add a node to the addnode list (but not connect to it)
