@@ -99,6 +99,7 @@ pub trait BlockchainRpc {
     ) -> Result<GetBlockHeaderRes, Self::Error>;
 }
 
+#[floresta_proc_macro::maybe_async]
 pub trait WalletRpc {
     type Error: Display + Debug;
 
