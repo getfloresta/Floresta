@@ -18,6 +18,7 @@
 #[cfg(feature = "with-jsonrpc")]
 pub mod jsonrpc_client;
 
+#[cfg(not(feature = "async"))]
 pub mod rpc;
 
 pub mod rpc_interfaces;
@@ -26,7 +27,12 @@ pub mod rpc_types;
 // Those tests doesn't work on windows
 // TODO (Davidson): work on windows?
 
-#[cfg(all(test, feature = "with-jsonrpc", not(target_os = "windows")))]
+#[cfg(all(
+    test,
+    feature = "with-jsonrpc",
+    not(feature = "async"),
+    not(target_os = "windows")
+))]
 mod tests {
     use core::str::FromStr;
     use std::fs;

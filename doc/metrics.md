@@ -3,7 +3,9 @@
 This project uses [`Prometheus`](https://prometheus.io/) as a monitoring system. To enable it you must build the project with the `metrics` feature enabled:
 
 ```sh
-cargo build --release --features metrics
+# Build florestad and floresta-cli separately
+cargo build --release -p florestad --features metrics
+cargo build --release -p floresta-cli
 ```
 
 The easiest way to visualize those metrics is by using some observability graphic tool like [Grafana](https://grafana.com/). To make it easier, you can also straight away use the `docker-compose.yml` file to spin up an infrastructure that will run the project with Prometheus and Grafana.

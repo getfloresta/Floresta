@@ -5,14 +5,17 @@ use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 pub use corepc_types::ScriptPubkey;
+pub use corepc_types::v26::AddrManInfoNetwork;
 pub use corepc_types::v30::GetAddrManInfo;
 pub use corepc_types::v30::GetBlockHeaderVerbose;
 pub use corepc_types::v30::GetBlockVerboseOne;
 pub use corepc_types::v30::GetBlockchainInfo;
 pub use corepc_types::v30::GetDeploymentInfo;
 pub use corepc_types::v30::GetNetworkInfo;
+pub use corepc_types::v30::GetNetworkInfoNetwork;
 pub use corepc_types::v30::GetTxOut;
 use serde::Deserialize;
 use serde::Serialize;
@@ -329,6 +332,19 @@ impl Display for AddNodeCommand {
             Self::Onetry => "onetry",
         };
         write!(f, "{cmd}")
+    }
+}
+
+impl FromStr for AddNodeCommand {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "add" => Ok(Self::Add),
+            "remove" => Ok(Self::Remove),
+            "onetry" => Ok(Self::Onetry),
+            _ => Err(format!("Invalid command: {}", s)),
+        }
     }
 }
 

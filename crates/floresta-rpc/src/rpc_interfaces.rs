@@ -124,6 +124,7 @@ pub trait WalletRpc {
     ) -> Result<bool, Self::Error>;
 }
 
+#[maybe_async::maybe_async]
 pub trait NetworkRpc {
     type Error: Display + Debug;
 

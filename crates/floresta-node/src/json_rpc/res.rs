@@ -257,6 +257,17 @@ pub mod jsonrpc_interface {
     impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
     impl_error_from!(JsonRpcError, InvalidAddressError, InvalidNetAddress);
 
+    impl Display for JsonRpcError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            let rpc_error = self.rpc_error();
+            let msg = match &rpc_error.data {
+                Some(data) => format!("{}: {}", rpc_error.message, data),
+                None => rpc_error.message.clone(),
+            };
+            write!(f, "{}", msg)
+        }
+    }
+
     impl JsonRpcError {
         pub fn http_code(&self) -> StatusCode {
             match self {
