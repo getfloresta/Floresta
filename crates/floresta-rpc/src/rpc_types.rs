@@ -5,13 +5,16 @@ use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 pub use corepc_types::ScriptPubkey;
+pub use corepc_types::v26::AddrManInfoNetwork;
 pub use corepc_types::v30::GetAddrManInfo;
 pub use corepc_types::v30::GetBlockHeaderVerbose;
 pub use corepc_types::v30::GetBlockVerboseOne;
 pub use corepc_types::v30::GetDeploymentInfo;
 pub use corepc_types::v30::GetNetworkInfo;
+pub use corepc_types::v30::GetNetworkInfoNetwork;
 pub use corepc_types::v30::GetTxOut;
 use serde::Deserialize;
 use serde::Serialize;
@@ -359,17 +362,35 @@ pub enum AddNodeCommand {
     Onetry,
 }
 
+impl AddNodeCommand {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Remove => "remove",
+            Self::Onetry => "onetry",
+        }
+    }
+}
+
 /// A simple implementation to convert the enum to a string.
 /// Useful for get the subcommand name of addnode with
 /// command.to_string()
 impl Display for AddNodeCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let cmd = match self {
-            AddNodeCommand::Add => "add",
-            AddNodeCommand::Remove => "remove",
-            AddNodeCommand::Onetry => "onetry",
-        };
-        write!(f, "{cmd}")
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for AddNodeCommand {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "add" => Ok(Self::Add),
+            "remove" => Ok(Self::Remove),
+            "onetry" => Ok(Self::Onetry),
+            _ => Err(format!("Invalid command: {}", s)),
+        }
     }
 }
 

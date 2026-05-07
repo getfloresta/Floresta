@@ -30,7 +30,9 @@ cd Floresta/
 compile com:
 
 ```bash
-cargo build --release
+# Build florestad and floresta-cli separately
+cargo build --release -p florestad
+cargo build --release -p floresta-cli
 ```
 
 se tudo estiver ok, irá compilar o programa e salvar o executável em `./target/release/`.
