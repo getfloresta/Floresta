@@ -171,6 +171,7 @@ pub trait NetworkRpc {
     fn ping(&self) -> Result<bool, Self::Error>;
 }
 
+#[maybe_async::maybe_async]
 pub trait RawTransactionRpc {
     type Error: Display + Debug;
 
