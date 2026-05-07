@@ -4,158 +4,22 @@ use core::fmt::Debug;
 
 use bitcoin::BlockHash;
 use bitcoin::Txid;
-use corepc_types::v29::GetTxOut;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetBlockchainInfo;
-use corepc_types::v30::GetDeploymentInfo;
 use serde::Serialize;
 use serde::de::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Number;
 use serde_json::Value;
 
+use crate::rpc_interfaces::BlockchainRpc;
+use crate::rpc_interfaces::ControlRpc;
+use crate::rpc_interfaces::NetworkRpc;
+use crate::rpc_interfaces::RawTransactionRpc;
 use crate::rpc_interfaces::RpcMethods;
+use crate::rpc_interfaces::WalletRpc;
 use crate::rpc_types;
 use crate::rpc_types::*;
 
 type Result<T> = std::result::Result<T, rpc_types::Error>;
-
-/// A trait specifying all possible methods for floresta's json-rpc
-pub trait FlorestaRPC {
-    /// Returns general information about the chain we are on
-    ///
-    /// This method returns a bunch of information about the chain we are on, including
-    /// the current height, the best block hash, the difficulty, and whether we are
-    /// currently in IBD (Initial Block Download) mode.
-    fn get_blockchain_info(&self) -> Result<GetBlockchainInfo>;
-    /// Returns the hash of the best (tip) block in the most-work fully-validated chain.
-    fn get_best_block_hash(&self) -> Result<BlockHash>;
-    /// Returns the hash of the block at the given height
-    ///
-    /// This method returns the hash of the block at the given height. If the height is
-    /// invalid, an error is returned.
-    fn get_block_hash(&self, height: u32) -> Result<BlockHash>;
-    /// Returns the block header for the given block hash
-    ///
-    /// This method returns the block header for the given block hash, as defined
-    /// in the Bitcoin protocol specification. A header contains the block's version,
-    /// the previous block hash, the merkle root, the timestamp, the difficulty target,
-    /// and the nonce.
-    #[doc = include_str!("../../../doc/rpc/getblockheader.md")]
-    fn get_block_header(
-        &self,
-        hash: BlockHash,
-        verbosity: Option<bool>,
-    ) -> Result<GetBlockHeaderRes>;
-
-    #[doc = include_str!("../../../doc/rpc/getdeploymentinfo.md")]
-    fn get_deployment_info(&self, blockhash: Option<BlockHash>) -> Result<GetDeploymentInfo>;
-
-    /// Gets a transaction from the blockchain
-    ///
-    /// This method returns a transaction that's cached in our wallet. If the verbosity flag is
-    /// set to 0, the transaction is returned as a hexadecimal string. If the verbosity
-    /// flag is set to 1, the transaction is returned as a json object.
-    fn get_raw_transaction(
-        &self,
-        tx_id: Txid,
-        verbosity: Option<u8>,
-    ) -> Result<GetRawTransactionRes>;
-    /// Returns the proof that one or more transactions were included in a block
-    ///
-    /// This method returns the Merkle proof, showing that a transaction was included in a block.
-    /// The proof is returned as a hex-encoded string.
-    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Result<String>;
-    /// Loads up a descriptor into the wallet
-    ///
-    /// This method loads up a descriptor into the wallet. If the rescan option is not None,
-    /// the wallet will be rescanned for transactions matching the descriptor. If you have
-    /// compact block filters enabled, this process will be much faster and use less bandwidth.
-    /// The rescan parameter is the height at which to start the rescan, and should be at least
-    /// as old as the oldest transaction this descriptor could have been used in.
-    fn load_descriptor(&self, descriptor: String) -> Result<bool>;
-
-    #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
-    fn rescanblockchain(
-        &self,
-        start_block: Option<u32>,
-        stop_block: Option<u32>,
-        use_timestamp: bool,
-        confidence: RescanConfidence,
-    ) -> Result<bool>;
-
-    /// Returns the current height of the blockchain
-    fn get_block_count(&self) -> Result<u32>;
-
-    #[doc = include_str!("../../../doc/rpc/getdifficulty.md")]
-    fn get_difficulty(&self) -> Result<f64>;
-    /// Sends a hex-encoded transaction to the network
-    ///
-    /// This method sends a transaction to the network. The transaction should be encoded as a
-    /// hexadecimal string. If the transaction is valid, it will be broadcast to the network, and
-    /// return the transaction id. If the transaction is invalid, an error will be returned.
-    fn send_raw_transaction(&self, tx: String) -> Result<Txid>;
-    #[doc = include_str!("../../../doc/rpc/getroots.md")]
-    fn get_roots(&self) -> Result<Vec<String>>;
-    #[doc = include_str!("../../../doc/rpc/getpeerinfo.md")]
-    fn get_peer_info(&self) -> Result<Vec<PeerInfo>>;
-    /// Returns the number of peers currently connected to the node.
-    fn get_connection_count(&self) -> Result<usize>;
-    /// Returns general state info regarding P2P networking, in a Bitcoin Core v30
-    /// compatible shape.
-    fn get_network_info(&self) -> Result<GetNetworkInfo>;
-    /// Returns a block, given a block hash
-    ///
-    /// This method returns a block, given a block hash. If the verbosity flag is 0, the block
-    /// is returned as a hexadecimal string. If the verbosity flag is 1, the block is returned
-    /// as a json object.
-    fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes>;
-    #[doc = include_str!("../../../doc/rpc/gettxout.md")]
-    fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut>;
-    #[doc = include_str!("../../../doc/rpc/stop.md")]
-    fn stop(&self) -> Result<String>;
-    /// Tells florestad to connect with a peer
-    ///
-    /// You can use this to connect with a given node, providing it's IP address and port.
-    /// If the `v2transport` option is set, we won't retry connecting using the old, unencrypted
-    /// P2P protocol.
-    #[doc = include_str!("../../../doc/rpc/addnode.md")]
-    fn add_node(
-        &self,
-        node: String,
-        command: AddNodeCommand,
-        v2transport: Option<bool>,
-    ) -> Result<Value>;
-    /// Immediately disconnect from a peer.
-    ///
-    /// The peer can be referenced either by node_address or node_id.
-    /// If referencing by node_id, an empty string must be passed as the node_address.
-    fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<Value>;
-    /// Finds an specific utxo in the chain
-    ///
-    /// You can use this to look for a utxo. If it exists, it will return the amount and
-    /// scriptPubKey of this utxo. It returns an empty object if the utxo doesn't exist.
-    /// You must have enabled block filters by setting the `blockfilters=1` option.
-    fn find_tx_out(
-        &self,
-        tx_id: Txid,
-        outpoint: u32,
-        script: String,
-        height_hint: Option<u32>,
-    ) -> Result<Value>;
-    #[doc = include_str!("../../../doc/rpc/getmemoryinfo.md")]
-    fn get_memory_info(&self, mode: Option<String>) -> Result<GetMemInfoRes>;
-    #[doc = include_str!("../../../doc/rpc/getrpcinfo.md")]
-    fn get_rpc_info(&self) -> Result<GetRpcInfoRes>;
-    #[doc = include_str!("../../../doc/rpc/uptime.md")]
-    fn uptime(&self) -> Result<u32>;
-    #[doc = include_str!("../../../doc/rpc/listdescriptors.md")]
-    fn list_descriptors(&self) -> Result<Vec<String>>;
-    #[doc = include_str!("../../../doc/rpc/ping.md")]
-    fn ping(&self) -> Result<()>;
-    /// Returns address manager statistics broken down by network.
-    fn get_addrman_info(&self) -> Result<GetAddrManInfo>;
-}
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
 /// that will let us call any method on the client, and then implement the methods on any
@@ -169,79 +33,23 @@ pub trait JsonRPCClient: Sized {
         T: for<'a> Deserialize<'a> + DeserializeOwned + Debug;
 }
 
-impl<T: JsonRPCClient> FlorestaRPC for T {
+impl<T: JsonRPCClient> BlockchainRpc for T {
+    type Error = rpc_types::Error;
+
     fn find_tx_out(
         &self,
-        tx_id: Txid,
-        outpoint: u32,
+        txid: Txid,
+        vout: u32,
         script: String,
         height_hint: Option<u32>,
-    ) -> Result<Value> {
-        let params = rpc_params([
-            tx_id.into(),
-            outpoint.into(),
-            script.into(),
-            height_hint.into(),
-        ]);
+    ) -> Result<Option<GetTxOut>> {
+        let params = rpc_params([txid.into(), vout.into(), script.into(), height_hint.into()]);
 
         self.call(&RpcMethods::FindTxOut, &params)
     }
 
-    fn uptime(&self) -> Result<u32> {
-        self.call(&RpcMethods::Uptime, &[])
-    }
-
-    fn get_memory_info(&self, mode: Option<String>) -> Result<GetMemInfoRes> {
-        let params = rpc_params([mode.into()]);
-        self.call(&RpcMethods::GetMemoryInfo, &params)
-    }
-
-    fn get_rpc_info(&self) -> Result<GetRpcInfoRes> {
-        self.call(&RpcMethods::GetRpcInfo, &[])
-    }
-
-    fn add_node(
-        &self,
-        node: String,
-        command: AddNodeCommand,
-        v2transport: Option<bool>,
-    ) -> Result<Value> {
-        let params = rpc_params([node.into(), command.to_string().into(), v2transport.into()]);
-
-        self.call(&RpcMethods::AddNode, &params)
-    }
-
-    fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<Value> {
-        let params = rpc_params([node_address.into(), node_id.into()]);
-
-        self.call(&RpcMethods::DisconnectNode, &params)
-    }
-
-    fn stop(&self) -> Result<String> {
-        self.call(&RpcMethods::Stop, &[])
-    }
-
-    fn rescanblockchain(
-        &self,
-        start_height: Option<u32>,
-        stop_height: Option<u32>,
-        use_timestamp: bool,
-        confidence: RescanConfidence,
-    ) -> Result<bool> {
-        let params = rpc_params([
-            start_height.into(),
-            stop_height.into(),
-            use_timestamp.into(),
-            serde_json::to_value(&confidence)
-                .expect("RescanConfidence implements Ser/De")
-                .into(),
-        ]);
-
-        self.call(&RpcMethods::RescanBlockchain, &params)
-    }
-
-    fn get_roots(&self) -> Result<Vec<String>> {
-        self.call(&RpcMethods::GetRoots, &[])
+    fn get_best_block_hash(&self) -> Result<BlockHash> {
+        self.call(&RpcMethods::GetBestBlockHash, &[])
     }
 
     fn get_block(&self, hash: BlockHash, verbosity: Option<u32>) -> Result<GetBlockRes> {
@@ -250,8 +58,24 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call(&RpcMethods::GetBlock, &params)
     }
 
+    fn get_block_from_peer(&self, hash: BlockHash) -> Result<()> {
+        let params = rpc_params([hash.into()]);
+
+        self.call(&RpcMethods::GetBlockFromPeer, &params)
+    }
+
+    fn get_blockchain_info(&self) -> Result<GetBlockchainInfo> {
+        self.call(&RpcMethods::GetBlockchainInfo, &[])
+    }
+
     fn get_block_count(&self) -> Result<u32> {
         self.call(&RpcMethods::GetBlockCount, &[])
+    }
+
+    fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
+        let params = rpc_params([height.into()]);
+
+        self.call(&RpcMethods::GetBlockHash, &params)
     }
 
     fn get_deployment_info(&self, blockhash: Option<BlockHash>) -> Result<GetDeploymentInfo> {
@@ -263,20 +87,93 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call(&RpcMethods::GetDifficulty, &[])
     }
 
-    fn get_tx_out(&self, tx_id: Txid, outpoint: u32) -> Result<GetTxOut> {
-        let params = rpc_params([tx_id.into(), outpoint.into()]);
+    fn get_tx_out(
+        &self,
+        txid: Txid,
+        outpoint: u32,
+        include_mempool: Option<bool>,
+    ) -> Result<Option<GetTxOut>> {
+        let params = rpc_params([txid.into(), outpoint.into(), include_mempool.into()]);
 
         let result: serde_json::Value = self.call(&RpcMethods::GetTxOut, &params)?;
         if result.is_null() {
-            return Err(Error::TxOutNotFound);
+            return Ok(None);
         }
-
-        serde_json::from_value(result).map_err(Error::Serde)
+        serde_json::from_value(result)
+            .map(Some)
+            .map_err(Error::Serde)
     }
 
-    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Result<String> {
-        let params = rpc_params([txids.into(), blockhash.into()]);
+    fn get_txout_proof(&self, tx_ids: &[Txid], blockhash: Option<BlockHash>) -> Result<String> {
+        let params = rpc_params([tx_ids.to_vec().into(), blockhash.into()]);
+
         self.call(&RpcMethods::GetTxOutProof, &params)
+    }
+
+    fn get_roots(&self) -> Result<Vec<String>> {
+        self.call(&RpcMethods::GetRoots, &[])
+    }
+
+    fn get_block_header(
+        &self,
+        hash: BlockHash,
+        verbosity: Option<bool>,
+    ) -> Result<GetBlockHeaderRes> {
+        let params = rpc_params([hash.into(), verbosity.into()]);
+
+        self.call(&RpcMethods::GetBlockHeader, &params)
+    }
+}
+
+impl<T: JsonRPCClient> WalletRpc for T {
+    type Error = rpc_types::Error;
+
+    fn load_descriptor(&self, descriptor: String) -> Result<bool> {
+        let params = rpc_params([descriptor.into()]);
+
+        self.call(&RpcMethods::LoadDescriptor, &params)
+    }
+
+    fn list_descriptors(&self) -> Result<Vec<String>> {
+        self.call(&RpcMethods::ListDescriptors, &[])
+    }
+
+    fn rescan_blockchain(
+        &self,
+        start_height: Option<u32>,
+        stop_height: Option<u32>,
+        use_timestamp: Option<bool>,
+        confidence: Option<RescanConfidence>,
+    ) -> Result<bool> {
+        let params = rpc_params([
+            start_height.into(),
+            stop_height.into(),
+            use_timestamp.into(),
+            confidence.into(),
+        ]);
+
+        self.call(&RpcMethods::RescanBlockchain, &params)
+    }
+}
+
+impl<T: JsonRPCClient> NetworkRpc for T {
+    type Error = rpc_types::Error;
+
+    fn add_node(
+        &self,
+        node: String,
+        command: AddNodeCommand,
+        v2transport: Option<bool>,
+    ) -> Result<()> {
+        let params = rpc_params([node.into(), command.to_string().into(), v2transport.into()]);
+
+        self.call(&RpcMethods::AddNode, &params)
+    }
+
+    fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<()> {
+        let params = rpc_params([node_address.into(), node_id.into()]);
+
+        self.call(&RpcMethods::DisconnectNode, &params)
     }
 
     fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
@@ -291,13 +188,22 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         self.call(&RpcMethods::GetNetworkInfo, &[])
     }
 
-    fn get_best_block_hash(&self) -> Result<BlockHash> {
-        self.call(&RpcMethods::GetBestBlockHash, &[])
+    fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
+        self.call(&RpcMethods::GetAddrManInfo, &[])
     }
 
-    fn get_block_hash(&self, height: u32) -> Result<BlockHash> {
-        let params = rpc_params([height.into()]);
-        self.call(&RpcMethods::GetBlockHash, &params)
+    fn ping(&self) -> Result<()> {
+        self.call(&RpcMethods::Ping, &[])
+    }
+}
+
+impl<T: JsonRPCClient> RawTransactionRpc for T {
+    type Error = rpc_types::Error;
+
+    fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
+        let params = rpc_params([tx.into()]);
+
+        self.call(&RpcMethods::SendRawTransaction, &params)
     }
 
     fn get_raw_transaction(
@@ -309,40 +215,27 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
         self.call(&RpcMethods::GetRawTransaction, &params)
     }
+}
 
-    fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        let params = rpc_params([descriptor.into()]);
-        self.call(&RpcMethods::LoadDescriptor, &params)
+impl<T: JsonRPCClient> ControlRpc for T {
+    type Error = rpc_types::Error;
+
+    fn stop(&self) -> Result<String> {
+        self.call(&RpcMethods::Stop, &[])
     }
 
-    fn get_block_header(
-        &self,
-        hash: BlockHash,
-        verbosity: Option<bool>,
-    ) -> Result<GetBlockHeaderRes> {
-        let params = rpc_params([hash.into(), verbosity.into()]);
-        self.call(&RpcMethods::GetBlockHeader, &params)
+    fn uptime(&self) -> Result<u64> {
+        self.call(&RpcMethods::Uptime, &[])
     }
 
-    fn get_blockchain_info(&self) -> Result<GetBlockchainInfo> {
-        self.call(&RpcMethods::GetBlockchainInfo, &[])
+    fn get_memory_info(&self, mode: Option<&str>) -> Result<GetMemInfoRes> {
+        let params = rpc_params([mode.into()]);
+
+        self.call(&RpcMethods::GetMemoryInfo, &params)
     }
 
-    fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        let params = rpc_params([tx.into()]);
-        self.call(&RpcMethods::SendRawTransaction, &params)
-    }
-
-    fn list_descriptors(&self) -> Result<Vec<String>> {
-        self.call(&RpcMethods::ListDescriptors, &[])
-    }
-
-    fn ping(&self) -> Result<()> {
-        self.call(&RpcMethods::Ping, &[])
-    }
-
-    fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
-        self.call(&RpcMethods::GetAddrManInfo, &[])
+    fn get_rpc_info(&self) -> Result<GetRpcInfoRes> {
+        self.call(&RpcMethods::GetRpcInfo, &[])
     }
 }
 
@@ -606,7 +499,7 @@ mod tests {
         let txids = vec![Txid::all_zeros()];
         let blockhash = Some(BlockHash::all_zeros());
 
-        let result = client.get_txout_proof(txids.clone(), blockhash).unwrap();
+        let result = client.get_txout_proof(&txids, blockhash).unwrap();
 
         let expected_params = rpc_params([txids.clone().into(), blockhash.into()]);
 
@@ -616,9 +509,9 @@ mod tests {
         assert_eq!(*client.params.borrow(), expected_params);
 
         // Test without blockhash parameter
-        let _ = client.get_txout_proof(txids.clone(), None);
+        let _ = client.get_txout_proof(&txids, None);
 
-        let expected_params = rpc_params([txids.clone().into(), None::<BlockHash>.into()]);
+        let expected_params = rpc_params([txids.into(), None::<BlockHash>.into()]);
 
         assert_eq!(*client.method.borrow(), "gettxoutproof");
         assert_eq!(client.params.borrow().len(), 2);
@@ -644,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rescanblockchain() {
+    fn test_rescan_blockchain() {
         let client = MockRpcClient::new();
         let expected_result = true;
         client.set_result(Value::Bool(expected_result));
@@ -655,11 +548,11 @@ mod tests {
         let confidence = RescanConfidence::High;
 
         let result = client
-            .rescanblockchain(
+            .rescan_blockchain(
                 Some(start_height),
                 Some(stop_height),
-                use_timestamp,
-                confidence.clone(),
+                Some(use_timestamp),
+                Some(confidence.clone()),
             )
             .unwrap();
 
@@ -676,17 +569,12 @@ mod tests {
         assert_eq!(*client.params.borrow(), expected_params);
 
         // Test with None parameters
-        let _ = client.rescanblockchain(None, None, use_timestamp, confidence.clone());
+        let _ = client.rescan_blockchain(None, None, None, None);
 
-        let expected_params = [
-            Value::Null,
-            Value::Null,
-            Value::Bool(use_timestamp),
-            serde_json::to_value(&confidence).expect("RescanConfidence implements Ser/De"),
-        ];
+        let expected_params = [Value::Null, Value::Null, Value::Null, Value::Null];
 
         assert_eq!(*client.method.borrow(), "rescanblockchain");
-        assert_eq!(client.params.borrow().len(), 4); // All parameters are passed, but start/stop heights are defaulted
+        assert_eq!(client.params.borrow().len(), 4);
         assert_eq!(*client.params.borrow(), expected_params);
     }
 
@@ -835,14 +723,15 @@ mod tests {
 
         let tx_id = Txid::all_zeros();
         let outpoint = 0u32;
+        let include_mempool = Some(false);
 
-        let result = client.get_tx_out(tx_id, outpoint).unwrap();
+        let result = client.get_tx_out(tx_id, outpoint, include_mempool).unwrap();
 
-        let expected_params = rpc_params([tx_id.into(), outpoint.into()]);
+        let expected_params = rpc_params([tx_id.into(), outpoint.into(), include_mempool.into()]);
 
-        assert_eq!(result, expected_result);
+        assert_eq!(result, Some(expected_result));
         assert_eq!(*client.method.borrow(), "gettxout");
-        assert_eq!(client.params.borrow().len(), 2);
+        assert_eq!(client.params.borrow().len(), 3);
         assert_eq!(*client.params.borrow(), expected_params);
     }
 
@@ -858,14 +747,13 @@ mod tests {
     #[test]
     fn test_add_node() {
         let client = MockRpcClient::new();
-        let expected_result = serde_json::json!({"success": true});
-        client.set_result(expected_result.clone());
+        client.set_result(serde_json::json!(null));
 
         let node = "192.168.1.1:8333".to_string();
         let command = AddNodeCommand::Add;
         let v2transport = Some(true);
 
-        let result = client
+        client
             .add_node(node.clone(), command.clone(), v2transport)
             .unwrap();
 
@@ -875,13 +763,14 @@ mod tests {
             v2transport.into(),
         ]);
 
-        assert_eq!(result, expected_result);
         assert_eq!(*client.method.borrow(), "addnode");
         assert_eq!(client.params.borrow().len(), 3);
         assert_eq!(*client.params.borrow(), expected_params);
 
         // Test without v2transport parameter
-        let _ = client.add_node(node.clone(), command.clone(), None);
+        client
+            .add_node(node.clone(), command.clone(), None)
+            .unwrap();
 
         let expected_params = rpc_params([
             node.clone().into(),
@@ -897,25 +786,23 @@ mod tests {
     #[test]
     fn test_disconnect_node() {
         let client = MockRpcClient::new();
-        let expected_result = serde_json::json!({"success": true});
-        client.set_result(expected_result.clone());
+        client.set_result(serde_json::json!(null));
 
         let node_address = "192.168.1.1".to_string();
         let node_id = Some(1u32);
 
-        let result = client
+        client
             .disconnect_node(node_address.clone(), node_id)
             .unwrap();
 
         let expected_params = rpc_params([node_address.clone().into(), node_id.into()]);
 
-        assert_eq!(result, expected_result);
         assert_eq!(*client.method.borrow(), "disconnectnode");
         assert_eq!(client.params.borrow().len(), 2);
         assert_eq!(*client.params.borrow(), expected_params);
 
         // Test with None node_id
-        let _ = client.disconnect_node(node_address.clone(), None);
+        client.disconnect_node(node_address.clone(), None).unwrap();
 
         let expected_params = rpc_params([node_address.clone().into(), None::<u32>.into()]);
 
@@ -927,8 +814,22 @@ mod tests {
     #[test]
     fn test_find_tx_out() {
         let client = MockRpcClient::new();
-        let expected_result = serde_json::json!({"success": true});
-        client.set_result(expected_result.clone());
+        let expected_result = GetTxOut {
+            best_block: "best_block".to_string(),
+            confirmations: 10,
+            value: 0.1,
+            coinbase: false,
+            script_pubkey: corepc_types::ScriptPubKey {
+                address: Some("address".to_string()),
+                asm: "asm".to_string(),
+                hex: "hex".to_string(),
+                type_: "type".to_string(),
+                addresses: None,
+                descriptor: None,
+                required_signatures: None,
+            },
+        };
+        client.set_result(serde_json::to_value(&expected_result).unwrap());
 
         let txid = Txid::all_zeros();
         let outpoint = 0;
@@ -946,7 +847,7 @@ mod tests {
             height_hint.into(),
         ]);
 
-        assert_eq!(result, expected_result);
+        assert_eq!(result, Some(expected_result));
         assert_eq!(*client.method.borrow(), "findtxout");
         assert_eq!(client.params.borrow().len(), 4);
         assert_eq!(*client.params.borrow(), expetecd_params);
@@ -975,12 +876,12 @@ mod tests {
         let expected_result = serde_json::to_value(&memory_info).unwrap();
         client.set_result(expected_result.clone());
 
-        let mode = Some("all".to_string());
+        let mode = Some("all");
 
-        let result = client.get_memory_info(mode.clone()).unwrap();
+        let result = client.get_memory_info(mode).unwrap();
         let result_serialized = serde_json::to_value(result).unwrap();
 
-        let expected_params = rpc_params([mode.clone().into()]);
+        let expected_params = rpc_params([mode.into()]);
 
         assert_eq!(result_serialized, expected_result);
         assert_eq!(*client.method.borrow(), "getmemoryinfo");
@@ -1018,7 +919,7 @@ mod tests {
     #[test]
     fn test_uptime() {
         let client = MockRpcClient::new();
-        let expected_result = 3600u32;
+        let expected_result = 3600u64;
         client.set_result(Value::Number(Number::from(expected_result)));
 
         let result = client.uptime().unwrap();
