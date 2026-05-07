@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use bitcoin::p2p::ServiceFlags;
+use bitcoin::Amount;
 use bitcoin::Block;
 use floresta_chain::ChainBackend;
 use tokio::sync::oneshot;
@@ -164,7 +165,9 @@ where
                 let txid = transaction.compute_txid();
                 let mut mempool = self.mempool.lock().await;
 
-                if let Err(e) = mempool.accept_to_mempool(transaction) {
+                // Fee is passed as Amount::ZERO because this call site does not have access
+                // to the input values needed to compute the exact fee.
+                if let Err(e) = mempool.accept_to_mempool(transaction, Amount::ZERO) {
                     warn!("Could not broadcast transaction {txid} due to {e}");
                     let _ = responder.send(NodeResponse::TransactionBroadcastResult(Err(e)));
                     return;

@@ -16,6 +16,7 @@ use std::time::Instant;
 use bitcoin::block::Header;
 use bitcoin::block::Version;
 use bitcoin::hashes::Hash;
+use bitcoin::Amount;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::CompactTarget;
@@ -42,6 +43,8 @@ type ShortTxid = u64;
 /// information to make decisions when to include or not a transaction in mempool or in a block.
 struct MempoolTransaction {
     transaction: Transaction,
+    /// The fee paid by this transaction in satoshis.
+    fee: Amount,
     time: Instant,
     depends: Vec<ShortTxid>,
     children: Vec<ShortTxid>,
@@ -56,6 +59,10 @@ pub struct Mempool {
     /// also keep track of when we added the transaction to the mempool to be able to remove
     /// stale transactions.
     transactions: HashMap<ShortTxid, MempoolTransaction>,
+
+    /// Maps every outpoint currently being spent by a mempool transaction to that spender's
+    /// [`ShortTxid`].
+    spent_outpoints: HashMap<OutPoint, ShortTxid>,
 
     /// How much memory (in bytes) does the mempool currently use.
     mempool_size: usize,
@@ -76,7 +83,8 @@ pub enum MempoolError {
     /// The [`Mempool`] is full and cannot accept more [`Transaction`]s.
     FullMempool,
 
-    /// The [`Transaction`] conflicts with another [`Transaction`] in the [`Mempool`].
+    /// The [`Transaction`] conflicts with another [`Transaction`] in the [`Mempool`], and the
+    /// conflicting transaction does not opt-in to RBF (BIP 125 rule 1).
     ConflictingTransaction,
 
     /// The [`Transaction`] has duplicate inputs.
@@ -86,6 +94,19 @@ pub enum MempoolError {
     // instead of reusing BlockchainError.
     /// The [`Transaction`] failed consensus validation.
     ConsensusValidation(BlockchainError),
+
+    /// The conflicting mempool transaction(s) do not signal opt-in Replace-by-Fee (BIP 125
+    /// rule 1).
+    RbfNotSignaled,
+    InsufficientRbfFee {
+        /// Minimum absolute fee the replacement must pay to be accepted.
+        required: Amount,
+        /// Absolute fee the replacement actually pays.
+        provided: Amount,
+    },
+
+    /// Evicting the conflicting transactions would require removing more than
+    TooManyConflicts(usize),
 }
 
 impl Display for MempoolError {
@@ -109,6 +130,26 @@ impl Display for MempoolError {
             Self::ConsensusValidation(e) => {
                 write!(f, "The transaction failed consensus validation: {e}")
             }
+            Self::RbfNotSignaled => {
+                write!(
+                    f,
+                    "The conflicting mempool transaction does not opt-in to RBF (BIP 125 rule 1)"
+                )
+            }
+            Self::InsufficientRbfFee { required, provided } => {
+                write!(
+                    f,
+                    "Replacement fee {provided} is below the required minimum {required} (BIP 125 rule 3)"
+                )
+            }
+            Self::TooManyConflicts(n) => {
+                write!(
+                    f,
+                    "Evicting the conflicting transactions would remove {n} transactions, \
+                     exceeding the BIP 125 rule-5 limit of {}",
+                    Mempool::MAX_RBF_CONFLICTS
+                )
+            }
         }
     }
 }
@@ -116,6 +157,9 @@ impl Display for MempoolError {
 impl Error for MempoolError {}
 
 impl Mempool {
+    /// BIP 125 rule 5: maximum number of transactions that may be evicted by a single RBF.
+    pub const MAX_RBF_CONFLICTS: usize = 100;
+
     /// Creates a new mempool with a given maximum size
     pub fn new(max_mempool_size: usize) -> Mempool {
         let a = rand::random();
@@ -127,6 +171,7 @@ impl Mempool {
 
         Mempool {
             transactions: HashMap::new(),
+            spent_outpoints: HashMap::new(),
             queue: Vec::new(),
             mempool_size: 0,
             max_mempool_size,
@@ -228,6 +273,11 @@ impl Mempool {
                 if let Some(removed) = self.transactions.remove(&short_txid) {
                     self.mempool_size -= removed.transaction.total_size();
 
+                    // Remove all spent-outpoint index entries for this transaction.
+                    for input in &removed.transaction.input {
+                        self.spent_outpoints.remove(&input.previous_output);
+                    }
+
                     for child in &removed.children {
                         if let Some(child_tx) = self.transactions.get_mut(child) {
                             child_tx.depends.retain(|depend| *depend != short_txid);
@@ -239,66 +289,142 @@ impl Mempool {
             .collect()
     }
 
-    /// Checks if an outpoint is already spent in the mempool.
-    ///
-    /// This can be used to find conflicts before adding a transaction to the mempool.
-    fn is_already_spent(&self, outpoint: &OutPoint) -> bool {
-        let short_txid = self.hasher.hash_one(outpoint.txid);
-        let Some(tx) = self.transactions.get(&short_txid) else {
-            return false;
-        };
-
-        tx.children.iter().any(|child| {
-            let Some(child_tx) = self.transactions.get(child) else {
-                return false;
-            };
-
-            child_tx.transaction.input.iter().any(|input| {
-                input.previous_output.txid == outpoint.txid
-                    && input.previous_output.vout == outpoint.vout
-            })
-        })
+    /// Collects `roots` and every descendant reachable through the `children` graph.
+    fn collect_all_descendants(&self, roots: &[ShortTxid]) -> Vec<ShortTxid> {
+        let mut all = roots.to_vec();
+        let mut i = 0;
+        while i < all.len() {
+            let id = all[i];
+            if let Some(tx) = self.transactions.get(&id) {
+                for &child in &tx.children {
+                    if !all.contains(&child) {
+                        all.push(child);
+                    }
+                }
+            }
+            i += 1;
+        }
+        all
     }
 
-    /// Checks if the transaction doesn't have conflicting inputs or spends the same input twice.
-    fn check_for_conflicts(&self, transaction: &Transaction) -> Result<(), MempoolError> {
-        // check for duplicate inputs
-        let inputs = transaction
+    /// Evicts a set of transactions (and their full descendant subtrees) from the mempool,
+    fn evict_with_descendants(&mut self, roots: &[ShortTxid]) {
+        let to_evict = self.collect_all_descendants(roots);
+
+        for id in &to_evict {
+            if let Some(removed) = self.transactions.remove(id) {
+                self.mempool_size -= removed.transaction.total_size();
+
+                // Clean spent-outpoint index.
+                for input in &removed.transaction.input {
+                    self.spent_outpoints.remove(&input.previous_output);
+                }
+
+                // Remove this tx from its mempool parents' children lists.
+                for parent_id in &removed.depends {
+                    if let Some(parent) = self.transactions.get_mut(parent_id) {
+                        parent.children.retain(|c| c != id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Validates `transaction` against the current mempool state and returns the set of
+    /// [`ShortTxid`]s that must be evicted to make room for it (empty when there are no
+    /// conflicts).
+    fn check_for_conflicts(
+        &self,
+        transaction: &Transaction,
+        fee: Amount,
+    ) -> Result<Vec<ShortTxid>, MempoolError> {
+        // Reject transactions with duplicate inputs.
+        let unique_inputs = transaction
             .input
             .iter()
-            .map(|input| input.previous_output)
+            .map(|i| i.previous_output)
             .collect::<BTreeSet<_>>();
-
-        if inputs.len() != transaction.input.len() {
+        if unique_inputs.len() != transaction.input.len() {
             return Err(MempoolError::DuplicatedInputs);
         }
 
-        // Check this transaction doesn't conflict with another transaction in the mempool
-        // TODO(davidson): RBF
-        for input in transaction.input.iter() {
-            if self.is_already_spent(&input.previous_output) {
-                return Err(MempoolError::ConflictingTransaction);
+        // Collect the set of directly-conflicting transactions.
+        let mut direct_conflicts: Vec<ShortTxid> = Vec::new();
+        for input in &transaction.input {
+            if let Some(&conflict_id) = self.spent_outpoints.get(&input.previous_output) {
+                if !direct_conflicts.contains(&conflict_id) {
+                    direct_conflicts.push(conflict_id);
+                }
             }
         }
 
-        Ok(())
+        if direct_conflicts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // BIP 125 rule 1: every directly-conflicting transaction must opt-in to RBF.
+        for &id in &direct_conflicts {
+            let conflict = self
+                .transactions
+                .get(&id)
+                .expect("spent_outpoints entry must correspond to a mempool transaction");
+            if !conflict.transaction.is_explicitly_rbf() {
+                return Err(MempoolError::RbfNotSignaled);
+            }
+        }
+
+        // Collect the full eviction set (direct conflicts + all their descendants).
+        let to_evict = self.collect_all_descendants(&direct_conflicts);
+
+        // BIP 125 rule 5: limit the eviction blast radius.
+        if to_evict.len() > Self::MAX_RBF_CONFLICTS {
+            return Err(MempoolError::TooManyConflicts(to_evict.len()));
+        }
+
+        // BIP 125 rule 3: replacement must pay more than the directly conflicting transactions.
+        let conflicting_fee_total: Amount = direct_conflicts
+            .iter()
+            .filter_map(|id| self.transactions.get(id))
+            .try_fold(Amount::ZERO, |acc, tx| acc.checked_add(tx.fee))
+            .ok_or(MempoolError::InsufficientRbfFee {
+                required: Amount::MAX,
+                provided: fee,
+            })?;
+
+        let fee_check_required = fee > Amount::ZERO || conflicting_fee_total > Amount::ZERO;
+        if fee_check_required && fee <= conflicting_fee_total {
+            return Err(MempoolError::InsufficientRbfFee {
+                required: conflicting_fee_total
+                    .checked_add(Amount::from_sat(1))
+                    .unwrap_or(Amount::MAX),
+                provided: fee,
+            });
+        }
+
+        Ok(to_evict)
     }
 
-    /// Accepts a transaction to mempool
+    /// Accepts a transaction to mempool.
     ///
     /// This method will perform some context-less validations on a transaction,
-    /// and then accept to our mempool. It assumes that we have validated this transaction's
+    /// and then accept it to our mempool. It assumes that we have validated this transaction's
     /// proof.
     ///
     /// # Errors
     ///  - If we don't have space left in our mempool
-    ///  - If the transaction conflicts with another mempool transaction
-    ///  - If it sepends the same input twice
-    ///  - If any amount check fails: if input amounts are less than output amounts or if it spends more than
-    ///    the theoretical maximum amount of Bitcoins
+    ///  - If the transaction conflicts with another mempool transaction that does not opt-in
+    ///    to RBF, or does not pay a higher fee ([`MempoolError::RbfNotSignaled`] /
+    ///    [`MempoolError::InsufficientRbfFee`])
+    ///  - If it spends the same input twice
+    ///  - If any amount check fails: if input amounts are less than output amounts or if it
+    ///    spends more than the theoretical maximum amount of Bitcoins
     ///  - If either vIn or vOut are empty
     ///  - If any script is larger than the maximum allowed size
-    pub fn accept_to_mempool(&mut self, transaction: Transaction) -> Result<(), MempoolError> {
+    pub fn accept_to_mempool(
+        &mut self,
+        transaction: Transaction,
+        fee: Amount,
+    ) -> Result<(), MempoolError> {
         debug!(
             "Accepting {} to mempool {:?}",
             transaction.compute_txid(),
@@ -322,21 +448,31 @@ impl Mempool {
         Consensus::check_transaction_context_free(&transaction)
             .map_err(MempoolError::ConsensusValidation)?;
 
-        // Make sure transaction won't conflict with other mempool transaction
-        self.check_for_conflicts(&transaction)?;
+        // Check for conflicts and compute the eviction set (may be empty if no conflicts).
+        let to_evict = self.check_for_conflicts(&transaction, fee)?;
 
-        // List dependants for this transaction
+        // Evict conflicting transactions (and their descendants) before inserting the
+        // replacement.
+        if !to_evict.is_empty() {
+            self.evict_with_descendants(&to_evict);
+        }
         let depends = self.find_mempool_depends(&transaction);
         for depend in depends.iter() {
             let tx = self.transactions.get_mut(depend).unwrap();
             tx.children.push(short_txid);
         }
 
-        // Insert it into our mempool
+        // Register all inputs in the spent-outpoints index.
+        for input in &transaction.input {
+            self.spent_outpoints.insert(input.previous_output, short_txid);
+        }
+
+        // Insert it into our mempool.
         self.transactions.insert(
             short_txid,
             MempoolTransaction {
                 time: Instant::now(),
+                fee,
                 depends,
                 transaction,
                 children: Vec::new(),
@@ -408,6 +544,24 @@ mod tests {
 
     use super::Mempool;
     use crate::mempool::MempoolError;
+
+    /// Build a simple transaction spending a single outpoint and producing a single output.
+    fn make_tx(input: OutPoint, output_value: Amount, sequence: Sequence) -> Transaction {
+        Transaction {
+            version: Version::ONE,
+            lock_time: absolute::LockTime::from_consensus(0),
+            input: vec![TxIn {
+                previous_output: input,
+                script_sig: Script::new().into(),
+                sequence,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: output_value,
+                script_pubkey: Script::from_bytes(&[]).into(),
+            }],
+        }
+    }
 
     /// builds a list of transactions in a pseudo-random way
     ///
@@ -505,7 +659,7 @@ mod tests {
 
         for tx in transactions {
             mempool
-                .accept_to_mempool(tx)
+                .accept_to_mempool(tx, Amount::ZERO)
                 .expect("failed to accept to mempool");
         }
 
@@ -519,12 +673,13 @@ mod tests {
         let mut did_conflict = false;
 
         for tx in transactions {
-            match mempool.accept_to_mempool(tx) {
+            match mempool.accept_to_mempool(tx, Amount::ZERO) {
                 Ok(_) => {}
-                Err(MempoolError::DuplicatedInputs) => {
+                // Both intra-transaction duplicates and cross-transaction conflicts on
+                // transactions that don't signal RBF are expected.
+                Err(MempoolError::DuplicatedInputs) | Err(MempoolError::RbfNotSignaled) => {
                     did_conflict = true;
                 }
-
                 Err(e) => {
                     panic!("unexpected error: {:?}", e);
                 }
@@ -599,7 +754,7 @@ mod tests {
         let tx: Transaction = deserialize_hex(tx_hex).unwrap();
 
         mempool
-            .accept_to_mempool(tx)
+            .accept_to_mempool(tx, Amount::ZERO)
             .expect("failed to accept to mempool");
 
         let block = mempool.get_block_template(
@@ -623,7 +778,7 @@ mod tests {
 
         for tx in transactions {
             mempool
-                .accept_to_mempool(tx)
+                .accept_to_mempool(tx, Amount::ZERO)
                 .expect("failed to accept to mempool");
         }
 
@@ -649,7 +804,7 @@ mod tests {
         let transactions = build_transactions(15, false);
         for tx in transactions {
             mempool
-                .accept_to_mempool(tx)
+                .accept_to_mempool(tx, Amount::ZERO)
                 .expect("failed to accept to mempool");
         }
 
@@ -717,8 +872,8 @@ mod tests {
         };
         let child_txid = child.compute_txid();
 
-        mempool.accept_to_mempool(parent.clone()).unwrap();
-        mempool.accept_to_mempool(child).unwrap();
+        mempool.accept_to_mempool(parent.clone(), Amount::ZERO).unwrap();
+        mempool.accept_to_mempool(child, Amount::ZERO).unwrap();
 
         // Sanity check: child currently depends on parent
         let parent_short_txid = mempool.hasher.hash_one(parent_txid);
@@ -744,5 +899,221 @@ mod tests {
         assert!(!mempool.transactions[&child_short_txid]
             .depends
             .contains(&parent_short_txid));
+    }
+
+    /// A confirmed UTXO that both the original and replacement transactions will spend.
+    fn confirmed_utxo() -> OutPoint {
+        OutPoint {
+            txid: Txid::all_zeros(),
+            vout: 0,
+        }
+    }
+
+    #[test]
+    fn test_rbf_rejected_when_not_signaled() {
+        // The original transaction uses Sequence::MAX (no RBF signal).
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+        let original = make_tx(utxo, Amount::from_sat(49_000), Sequence::MAX);
+        mempool
+            .accept_to_mempool(original, Amount::from_sat(1_000))
+            .expect("original accepted");
+
+        let replacement = make_tx(utxo, Amount::from_sat(48_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let err = mempool
+            .accept_to_mempool(replacement, Amount::from_sat(2_000))
+            .expect_err("replacement should be rejected");
+
+        assert!(
+            matches!(err, MempoolError::RbfNotSignaled),
+            "expected RbfNotSignaled, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_rbf_accepted_with_higher_fee() {
+        // The original transaction opts in to RBF via Sequence::ENABLE_RBF_NO_LOCKTIME.
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+        let original = make_tx(utxo, Amount::from_sat(49_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let original_txid = original.compute_txid();
+        mempool
+            .accept_to_mempool(original, Amount::from_sat(1_000))
+            .expect("original accepted");
+
+        let replacement =
+            make_tx(utxo, Amount::from_sat(47_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let replacement_txid = replacement.compute_txid();
+        mempool
+            .accept_to_mempool(replacement, Amount::from_sat(3_000))
+            .expect("replacement should be accepted");
+
+        // Original must be gone; replacement must be present.
+        assert!(
+            mempool.get_from_mempool(&original_txid).is_none(),
+            "original should have been evicted"
+        );
+        assert!(
+            mempool.get_from_mempool(&replacement_txid).is_some(),
+            "replacement should be in mempool"
+        );
+        // Spent-outpoint index must point to the replacement.
+        assert_eq!(
+            mempool.spent_outpoints.get(&utxo).copied(),
+            Some(mempool.hasher.hash_one(replacement_txid))
+        );
+    }
+
+    #[test]
+    fn test_rbf_rejected_with_insufficient_fee() {
+        // The replacement is a distinct transaction (different output value) but declares
+        // the same fee as the original; it must be rejected.
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+        let original = make_tx(utxo, Amount::from_sat(49_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        mempool
+            .accept_to_mempool(original, Amount::from_sat(1_000))
+            .expect("original accepted");
+
+        // Different output value so the txid differs from the original, but same declared fee.
+        let replacement =
+            make_tx(utxo, Amount::from_sat(48_500), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let err = mempool
+            .accept_to_mempool(replacement, Amount::from_sat(1_000))
+            .expect_err("replacement with equal fee should be rejected");
+
+        assert!(
+            matches!(err, MempoolError::InsufficientRbfFee { .. }),
+            "expected InsufficientRbfFee, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_rbf_evicts_descendants() {
+        // TX A (RBF-signaling) → TX B (child of A).
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+        let tx_a = make_tx(utxo, Amount::from_sat(49_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let tx_a_txid = tx_a.compute_txid();
+        let tx_a_out = OutPoint {
+            txid: tx_a_txid,
+            vout: 0,
+        };
+        mempool
+            .accept_to_mempool(tx_a, Amount::from_sat(1_000))
+            .expect("TX A accepted");
+
+        let tx_b = make_tx(tx_a_out, Amount::from_sat(48_000), Sequence::MAX);
+        let tx_b_txid = tx_b.compute_txid();
+        mempool
+            .accept_to_mempool(tx_b, Amount::from_sat(1_000))
+            .expect("TX B accepted");
+
+        // Replace A with a higher-fee transaction.
+        let replacement = make_tx(utxo, Amount::from_sat(46_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let replacement_txid = replacement.compute_txid();
+        mempool
+            .accept_to_mempool(replacement, Amount::from_sat(4_000))
+            .expect("replacement accepted");
+
+        assert!(
+            mempool.get_from_mempool(&tx_a_txid).is_none(),
+            "TX A should be evicted"
+        );
+        assert!(
+            mempool.get_from_mempool(&tx_b_txid).is_none(),
+            "TX B (child of A) should also be evicted"
+        );
+        assert!(
+            mempool.get_from_mempool(&replacement_txid).is_some(),
+            "replacement should be in mempool"
+        );
+        // The original UTXOs should no longer be registered as spent by A or B.
+        assert!(!mempool.spent_outpoints.contains_key(&tx_a_out));
+    }
+
+    #[test]
+    fn test_rbf_zero_fee_fallback() {
+        // When neither side provides fee information (both Amount::ZERO), RBF is still
+        // allowed if the conflicting transaction opts in.
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+        let original = make_tx(utxo, Amount::from_sat(49_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let original_txid = original.compute_txid();
+        mempool
+            .accept_to_mempool(original, Amount::ZERO)
+            .expect("original accepted with no fee info");
+
+        let replacement =
+            make_tx(utxo, Amount::from_sat(48_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let replacement_txid = replacement.compute_txid();
+        mempool
+            .accept_to_mempool(replacement, Amount::ZERO)
+            .expect("replacement accepted via zero-fee fallback");
+
+        assert!(mempool.get_from_mempool(&original_txid).is_none());
+        assert!(mempool.get_from_mempool(&replacement_txid).is_some());
+    }
+
+    #[test]
+    fn test_rbf_conflict_detected_for_confirmed_input() {
+        // Two mempool transactions spending the same *confirmed* UTXO must conflict.
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+
+        // TX1 uses Sequence::MAX (no RBF opt-in).
+        let tx1 = make_tx(utxo, Amount::from_sat(49_000), Sequence::MAX);
+        mempool
+            .accept_to_mempool(tx1, Amount::from_sat(1_000))
+            .expect("TX1 accepted");
+
+        // TX2 attempts to spend the same confirmed UTXO — must be rejected.
+        let tx2 = make_tx(utxo, Amount::from_sat(48_000), Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let err = mempool
+            .accept_to_mempool(tx2, Amount::from_sat(2_000))
+            .expect_err("TX2 must conflict with TX1");
+
+        // TX1 doesn't signal RBF, so we expect RbfNotSignaled.
+        assert!(
+            matches!(err, MempoolError::RbfNotSignaled),
+            "expected RbfNotSignaled, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_spent_outpoints_cleared_after_consume_block() {
+        // After a block confirms the mempool transaction, spent_outpoints must be empty.
+        let mut mempool = Mempool::new(10_000_000);
+
+        let utxo = confirmed_utxo();
+        let tx = make_tx(utxo, Amount::from_sat(49_000), Sequence::MAX);
+        let txid = tx.compute_txid();
+        mempool
+            .accept_to_mempool(tx.clone(), Amount::ZERO)
+            .expect("tx accepted");
+
+        assert!(mempool.spent_outpoints.contains_key(&utxo));
+
+        let block = Block {
+            header: Header {
+                version: block::Version::ONE,
+                prev_blockhash: BlockHash::all_zeros(),
+                merkle_root: TxMerkleNode::all_zeros(),
+                time: 0,
+                bits: Target::MAX_ATTAINABLE_REGTEST.to_compact_lossy(),
+                nonce: 0,
+            },
+            txdata: vec![tx],
+        };
+        mempool.consume_block(&block);
+
+        assert!(mempool.get_from_mempool(&txid).is_none());
+        assert!(!mempool.spent_outpoints.contains_key(&utxo));
     }
 }
