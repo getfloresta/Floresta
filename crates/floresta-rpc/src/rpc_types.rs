@@ -15,17 +15,12 @@ pub use corepc_types::v30::GetDeploymentInfo;
 pub use corepc_types::v30::GetNetworkInfo;
 pub use corepc_types::v30::GetTxOut;
 pub use corepc_types::v31::AddrManInfoNetwork;
+pub use corepc_types::v31::DeploymentInfo;
 pub use corepc_types::v31::GetNetworkInfoNetwork;
 pub use corepc_types::v31::GetRawTransactionVerbose;
 use floresta_proc_macro::enum_str_map;
 use serde::Deserialize;
 use serde::Serialize;
-
-#[derive(Debug, Deserialize, Serialize)]
-/// Return type for the `gettxoutproof` rpc command, the internal is
-/// the hex-encoded representation of the Merkle Block, as defined
-/// by Bitcoin Core.
-pub struct GetTxOutProof(pub String);
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]

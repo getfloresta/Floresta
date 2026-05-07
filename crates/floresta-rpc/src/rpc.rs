@@ -58,12 +58,6 @@ impl<T: JsonRPCClient> BlockchainRpc for T {
         self.call(&RpcMethods::GetBlock, &params)
     }
 
-    fn get_block_from_peer(&self, hash: BlockHash) -> Result<()> {
-        let params = rpc_params([hash.into()]);
-
-        self.call(&RpcMethods::GetBlockFromPeer, &params)
-    }
-
     fn get_blockchain_info(&self) -> Result<GetBlockchainInfo> {
         self.call(&RpcMethods::GetBlockchainInfo, &[])
     }
