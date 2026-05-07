@@ -39,6 +39,7 @@ use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_rpc::rpc_interfaces::ControlRpc;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
 use floresta_rpc::rpc_interfaces::WalletRpc;
@@ -337,14 +338,14 @@ async fn handle_json_rpc_request(
             .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
         RpcMethods::Uptime => {
-            Ok(serde_json::to_value(state.uptime()).expect(SERIALIZATION_EXPECT_MSG))
+            Ok(serde_json::to_value(state.uptime().await?).expect(SERIALIZATION_EXPECT_MSG))
         }
         RpcMethods::GetMemoryInfo => {
             let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
 
-            state
-                .get_memory_info(&mode)
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+            let memory_info = state.get_memory_info(mode).await?;
+
+            Ok(serde_json::to_value(memory_info).expect(SERIALIZATION_EXPECT_MSG))
         }
         RpcMethods::GetRpcInfo => state
             .get_rpc_info()

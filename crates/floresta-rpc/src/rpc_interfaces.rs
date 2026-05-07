@@ -195,6 +195,7 @@ pub trait RawTransactionRpc {
     ) -> Result<GetRawTransactionRes, Self::Error>;
 }
 
+#[floresta_proc_macro::maybe_async]
 pub trait ControlRpc {
     type Error: Display + Debug;
 
