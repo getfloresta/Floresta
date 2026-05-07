@@ -17,25 +17,12 @@ use axum::http::Method;
 use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
 use axum::routing::post;
-use bitcoin::Address;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
-use bitcoin::Transaction;
-use bitcoin::TxIn;
-use bitcoin::TxOut;
 use bitcoin::Txid;
-use bitcoin::consensus::deserialize;
-use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::ecdsa::Signature as EcdsaSignature;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::hex;
-use bitcoin::hex::DisplayHex;
 use bitcoin::taproot::Signature as TaprootSignature;
-use corepc_types::ScriptPubKey;
-use corepc_types::ScriptSig;
-use corepc_types::v30::GetRawTransactionVerbose;
-use corepc_types::v31::RawTransactionInput;
-use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::NetworkExt;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
@@ -43,14 +30,13 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_rpc::rpc_interfaces::BlockchainRpc;
 use floresta_rpc::rpc_interfaces::ControlRpc;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
+use floresta_rpc::rpc_interfaces::RawTransactionRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
 use floresta_rpc::rpc_interfaces::WalletRpc;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_watch_only::AddressCache;
-use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
-use floresta_wire::node_interface::MempoolMethods;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::RwLock;
@@ -59,7 +45,6 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::GetRawTransactionRes;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
@@ -102,39 +87,6 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
-
-impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_raw_transaction(&self, tx_id: Txid, verbosity: u8) -> Result<GetRawTransactionRes> {
-        if verbosity > 1 {
-            return Err(JsonRpcError::InvalidVerbosityLevel);
-        }
-
-        let tx = self
-            .wallet
-            .get_transaction(&tx_id)
-            .ok_or(JsonRpcError::TxNotFound)?;
-
-        match verbosity {
-            0 => Ok(GetRawTransactionRes::Zero(serialize_hex(&tx.tx))),
-            1 => Ok(GetRawTransactionRes::One(Box::new(
-                self.make_raw_transaction(tx)?,
-            ))),
-            _ => Err(JsonRpcError::InvalidVerbosityLevel),
-        }
-    }
-
-    async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        let tx_hex = Vec::from_hex(&tx).map_err(|_| JsonRpcError::InvalidHex)?;
-        let tx: Transaction =
-            deserialize(&tx_hex).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
-
-        Ok(self
-            .node
-            .broadcast_transaction(tx)
-            .await
-            .map_err(|e| JsonRpcError::Node(e.to_string()))??)
-    }
-}
 
 async fn handle_json_rpc_request(
     req: RpcRequest,
@@ -338,10 +290,11 @@ async fn handle_json_rpc_request(
         }
         RpcMethods::GetRawTransaction => {
             let txid = get_at(&params, 0, "txid")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", 0)?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
             state
                 .get_raw_transaction(txid, verbosity)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
@@ -413,128 +366,6 @@ async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<Value> {
 }
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn make_vin(&self, input: TxIn, is_coinbase: bool) -> RawTransactionInput {
-        let sequence = input.sequence.0;
-        let txin_witness = (!input.witness.is_empty()).then_some(
-            input
-                .witness
-                .iter()
-                .map(|w| w.to_hex_string(hex::Case::Lower))
-                .collect(),
-        );
-
-        if is_coinbase {
-            return RawTransactionInput {
-                coinbase: Some(input.script_sig.to_hex_string()),
-                sequence,
-                txin_witness,
-                script_sig: None,
-                txid: None,
-                vout: None,
-            };
-        }
-
-        let txid = Some(input.previous_output.txid.to_string());
-        let vout = Some(input.previous_output.vout);
-        let script_sig = ScriptSig {
-            asm: to_core_asm_string(&input.script_sig, true),
-            hex: input.script_sig.to_hex_string(),
-        };
-
-        RawTransactionInput {
-            coinbase: None,
-            txid,
-            vout,
-            script_sig: Some(script_sig),
-            txin_witness,
-            sequence,
-        }
-    }
-
-    fn make_vout(&self, output: TxOut, index: u64) -> RawTransactionOutput {
-        let value = output.value;
-        RawTransactionOutput {
-            value: value.to_btc(),
-            index,
-            script_pubkey: ScriptPubKey {
-                asm: to_core_asm_string(&output.script_pubkey, false),
-                hex: output.script_pubkey.to_hex_string(),
-                // `Address::from_script` can fail for nonstandard scripts. Bitcoin Core
-                // omits the `address` field entirely when `ExtractDestination` fails:
-                // https://github.com/bitcoin/bitcoin/blob/f50d53c84736f8ada8419346c4d1734d5a6686d4/src/core_io.cpp#L424
-                address: Address::from_script(&output.script_pubkey, self.network)
-                    .map(|a| a.to_string())
-                    .ok(),
-                type_: Self::get_script_type_label(&output.script_pubkey).to_string(),
-                descriptor: Some(Self::get_script_type_descriptor(
-                    &output.script_pubkey,
-                    &Address::from_script(&output.script_pubkey, self.network).ok(),
-                )),
-                required_signatures: None, // This field is deprecated in Core v22
-                addresses: None,           // This field is deprecated in Core v22
-            },
-        }
-    }
-
-    fn make_raw_transaction(&self, tx: CachedTransaction) -> Result<GetRawTransactionVerbose> {
-        let raw_tx = tx.tx;
-        let in_active_chain = tx.height != 0;
-        let hex = serialize_hex(&raw_tx);
-        let txid = raw_tx.compute_txid().to_string();
-
-        let mut block_hash = None;
-        let mut block_time = None;
-        let mut transaction_time = None;
-        let mut confirmations = Some(0);
-        if in_active_chain {
-            confirmations = self.chain.get_height().ok().and_then(|tip| {
-                if tip >= tx.height {
-                    Some((tip - tx.height + 1).into())
-                } else {
-                    None
-                }
-            });
-
-            if let Ok(hash) = self.chain.get_block_hash(tx.height) {
-                if let Ok(header) = self.chain.get_block_header(&hash) {
-                    block_hash = Some(header.block_hash().to_string());
-                    block_time = Some(header.time.into());
-                    transaction_time = Some(header.time.into());
-                }
-            }
-        }
-
-        Ok(GetRawTransactionVerbose {
-            in_active_chain: Some(in_active_chain),
-            hex,
-            txid,
-            hash: raw_tx.compute_wtxid().to_string(),
-            size: raw_tx.total_size().try_into()?,
-            vsize: raw_tx.vsize().try_into()?,
-            weight: raw_tx.weight().to_wu(),
-            version: raw_tx.version.0,
-            lock_time: raw_tx.lock_time.to_consensus_u32(),
-            inputs: raw_tx
-                .input
-                .iter()
-                .map(|input| self.make_vin(input.clone(), raw_tx.is_coinbase()))
-                .collect(),
-            outputs: raw_tx
-                .output
-                .into_iter()
-                .enumerate()
-                .map(|(i, output)| -> Result<RawTransactionOutput> {
-                    let index = i.try_into()?;
-                    Ok(self.make_vout(output, index))
-                })
-                .collect::<Result<Vec<_>>>()?,
-            block_hash,
-            confirmations,
-            block_time,
-            transaction_time,
-        })
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         chain: Blockchain,

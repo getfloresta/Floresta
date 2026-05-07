@@ -1116,7 +1116,6 @@ version = "0.9.0"
 dependencies = [
  "axum",
  "bitcoin",
- "corepc-types",
  "dns-lookup",
  "floresta-chain",
  "floresta-common",
