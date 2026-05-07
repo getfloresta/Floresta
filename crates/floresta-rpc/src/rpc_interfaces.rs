@@ -195,6 +195,7 @@ pub trait RawTransactionRpc {
     ) -> Result<RawTxResp, Self::Error>;
 }
 
+#[maybe_async::maybe_async]
 pub trait ControlRpc {
     type Error: Display + Debug;
 
