@@ -9,23 +9,22 @@ make florestad switch to the new chain. We then compare the two node's main chai
 accumulator to make sure they are the same.
 """
 
-import time
 import pytest
 
 
 @pytest.mark.florestad
-def test_reorg_chain(setup_logging, florestad_utreexod):
+def test_reorg_chain(setup_logging, florestad_utreexod, node_manager):
     """Mine blocks, trigger a reorg and assert both nodes end up on the same chain."""
     log = setup_logging
     florestad, utreexod = florestad_utreexod
 
-    ChainReorgTest(log, florestad, utreexod).run()
+    ChainReorgTest(log, florestad, utreexod, node_manager).run()
 
 
 class ChainReorgTest:
     """Tests that Florestad follows Utreexod during a chain reorganization."""
 
-    def __init__(self, log, florestad, utreexod):
+    def __init__(self, log, florestad, utreexod, node_manager):
         """
         Attributes initialized to satisfy static analysis; real values are
         provided by pytest fixtures.
@@ -33,6 +32,7 @@ class ChainReorgTest:
         self.log = log
         self.florestad = florestad
         self.utreexod = utreexod
+        self.node_manager = node_manager
 
     def run(self):
         """Mine blocks, trigger a reorg and assert both nodes end up on the same chain."""
@@ -74,16 +74,5 @@ class ChainReorgTest:
         self.log.info(f"Utreexod node mine {blocks} blocks")
         self.utreexod.rpc.generate(blocks)
 
-        timeout = 30
-        end = time.time() + timeout
-        while time.time() < end:
-            florestad_block = self.florestad.rpc.get_block_count()
-            utreexod_block = self.utreexod.rpc.get_block_count()
-            if florestad_block == utreexod_block:
-                self.log.info(f"Nodes are in sync: {florestad_block} blocks")
-                break
-
-            time.sleep(1)
-
-        if florestad_block != utreexod_block:
-            pytest.fail("Florestad node did not sync with Utreexod node in time")
+        target_height = self.utreexod.rpc.get_block_count()
+        self.node_manager.wait_for_sync(self.florestad, target_height, stale_timeout=30)
