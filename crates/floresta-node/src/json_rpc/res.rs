@@ -21,11 +21,7 @@
 //! [`RpcError`]: jsonrpc_interface::RpcError
 //! [`JsonRpcError`]: jsonrpc_interface::JsonRpcError
 
-use core::fmt::Debug;
-
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-use corepc_types::v30::GetRawTransactionVerbose;
+use corepc_types::v31::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -528,28 +524,3 @@ pub enum GetRawTransactionRes {
 
     One(Box<GetRawTransactionVerbose>),
 }
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetBlockRes {
-    Zero(String),
-    One(Box<GetBlockVerboseOne>),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-/// The response for `getblockheader`, which can be either a raw hex-encoded block header or a verbose
-/// one with all the fields parsed and decoded.
-pub enum GetBlockHeaderRes {
-    /// The raw hex-encoded block header, as returned by `getblockheader` with verbosity false
-    Raw(String),
-
-    /// A verbose block header, as returned by `getblockheader` with verbosity true
-    Verbose(Box<GetBlockHeaderVerbose>),
-}
-
-/// Return type for the `gettxoutproof` rpc command, the internal is
-/// just the hex representation of the Merkle Block, which was defined
-/// by btc core.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct GetTxOutProof(pub Vec<u8>);

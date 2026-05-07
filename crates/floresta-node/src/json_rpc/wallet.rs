@@ -183,7 +183,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             provider: &RpcImpl<BlockChain>,
             at: u32,
         ) -> Result<u32, JsonRpcError> {
-            let hash = provider.get_block_hash(at)?;
+            let hash = provider.get_block_hash_inner(at)?;
             let block = provider.get_block_header_inner(hash)?;
             Ok(block.time)
         }

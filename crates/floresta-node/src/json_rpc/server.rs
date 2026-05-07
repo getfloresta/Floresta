@@ -39,6 +39,7 @@ use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_rpc::rpc_interfaces::BlockchainRpc;
 use floresta_rpc::rpc_interfaces::ControlRpc;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
@@ -166,18 +167,22 @@ async fn handle_json_rpc_request(
         RpcMethods::FindTxOut => {
             let txid = get_at(&params, 0, "txid")?;
             let vout = get_at(&params, 1, "vout")?;
-            let script: String = get_at(&params, 2, "script")?;
-            let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
+            let script = get_at(&params, 2, "script")?;
             let height = get_at(&params, 3, "height")?;
 
-            state.clone().find_tx_out(txid, vout, script, height).await
+            state
+                .clone()
+                .find_tx_out(txid, vout, script, height)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
         RpcMethods::GetBestBlockHash => state
             .get_best_block_hash()
+            .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
         RpcMethods::GetBlock => {
             let hash = get_at(&params, 0, "block_hash")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", 1)?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
             state
                 .get_block(hash, verbosity)
@@ -187,26 +192,29 @@ async fn handle_json_rpc_request(
         RpcMethods::GetBlockFromPeer => {
             let hash = get_at(&params, 0, "block_hash")?;
 
-            state.get_block(hash, 0).await?;
+            state.get_block(hash, Some(0)).await?;
 
             Ok(Value::Null)
         }
         RpcMethods::GetBlockchainInfo => state
             .get_blockchain_info()
+            .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
         RpcMethods::GetBlockCount => state
             .get_block_count()
+            .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
         RpcMethods::GetBlockHash => {
             let height = get_at(&params, 0, "block_height")?;
             state
                 .get_block_hash(height)
+                .await
                 .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
         }
 
         RpcMethods::GetBlockHeader => {
             let hash = get_at(&params, 0, "block_hash")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", true)?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
             state
                 .get_block_header(hash, verbosity)
@@ -218,10 +226,12 @@ async fn handle_json_rpc_request(
 
             state
                 .get_deployment_info(blockhash)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
         RpcMethods::GetDifficulty => state
             .get_difficulty()
+            .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
         RpcMethods::GetTxOut => {
             let txid = get_at(&params, 0, "txid")?;
@@ -230,6 +240,7 @@ async fn handle_json_rpc_request(
 
             state
                 .get_tx_out(txid, vout, include_mempool)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
         RpcMethods::GetTxOutProof => {
@@ -243,6 +254,7 @@ async fn handle_json_rpc_request(
         }
         RpcMethods::GetRoots => state
             .get_roots()
+            .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
 
         // Wallet
