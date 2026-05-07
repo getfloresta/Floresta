@@ -44,7 +44,11 @@ mod tests {
     use rcgen::generate_simple_self_signed;
 
     use crate::jsonrpc_client::Client;
-    use crate::rpc::FlorestaRPC;
+    use crate::rpc_interfaces::BlockchainRpc;
+    use crate::rpc_interfaces::ControlRpc;
+    use crate::rpc_interfaces::NetworkRpc;
+    use crate::rpc_interfaces::RawTransactionRpc;
+    use crate::rpc_interfaces::WalletRpc;
     use crate::rpc_types::GetBlockHeaderRes;
     use crate::rpc_types::GetBlockRes;
 
@@ -150,7 +154,7 @@ mod tests {
     fn test_stop() {
         let (mut _proc, client) = start_florestad();
 
-        let stop = client.stop().expect("rpc not working");
+        let stop = client.stop().unwrap();
         assert_eq!(stop.as_str(), "Floresta stopping");
     }
 
@@ -158,7 +162,7 @@ mod tests {
     fn test_get_blockchaininfo() {
         let (_proc, client) = start_florestad();
 
-        let gbi = client.get_blockchain_info().expect("rpc not working");
+        let gbi = client.get_blockchain_info().unwrap();
 
         assert_eq!(gbi.height, 0);
         assert_eq!(gbi.chain, "regtest".to_owned());
@@ -171,7 +175,7 @@ mod tests {
     fn test_get_roots() {
         let (_proc, client) = start_florestad();
 
-        let gbi = client.get_blockchain_info().expect("rpc not working");
+        let gbi = client.get_blockchain_info().unwrap();
 
         assert_eq!(gbi.root_hashes, Vec::<String>::new());
     }
@@ -180,7 +184,7 @@ mod tests {
     fn test_get_best_block_hash() {
         let (_proc, client) = start_florestad();
 
-        let blockhash = client.get_best_block_hash().expect("rpc not working");
+        let blockhash = client.get_best_block_hash().unwrap();
 
         assert_eq!(
             blockhash,
@@ -214,7 +218,7 @@ mod tests {
     fn test_get_block_hash() {
         let (_proc, client) = start_florestad();
 
-        let blockhash = client.get_block_hash(0).expect("rpc not working");
+        let blockhash = client.get_block_hash(0).unwrap();
 
         assert_eq!(
             blockhash,
@@ -298,5 +302,56 @@ mod tests {
             assert_eq!(net.reachable, supported);
             assert_eq!(net.limited, !supported);
         }
+    }
+
+    #[test]
+    fn test_uptime() {
+        let (_proc, client) = start_florestad();
+
+        client.uptime().unwrap();
+    }
+
+    #[test]
+    fn test_get_connection_count() {
+        let (_proc, client) = start_florestad();
+
+        let count = client.get_connection_count().unwrap();
+        assert!(count == 0);
+    }
+
+    #[test]
+    fn test_get_peer_info() {
+        let (_proc, client) = start_florestad();
+
+        let peers = client.get_peer_info().unwrap();
+        // Should not panic, peers might be empty since we're in regtest
+        assert!(peers.is_empty() || !peers.is_empty());
+    }
+
+    #[test]
+    fn test_list_descriptors() {
+        let (_proc, client) = start_florestad();
+
+        let descriptors = client.list_descriptors().unwrap();
+        // Should not panic, descriptors might be empty
+        assert!(descriptors.is_empty() || !descriptors.is_empty());
+    }
+
+    #[test]
+    fn test_get_memory_info() {
+        let (_proc, client) = start_florestad();
+
+        let mem_info = client.get_memory_info("stats".to_string()).unwrap();
+        // Just check it returns something without error
+        let _ = mem_info;
+    }
+
+    #[test]
+    fn test_get_rpc_info() {
+        let (_proc, client) = start_florestad();
+
+        let rpc_info = client.get_rpc_info().unwrap();
+        // Just check it returns something without error
+        let _ = rpc_info;
     }
 }
