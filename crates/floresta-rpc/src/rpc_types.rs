@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 pub use corepc_types::ScriptPubKey;
+pub use corepc_types::ScriptSig;
 pub use corepc_types::v26::AddrManInfoNetwork;
 pub use corepc_types::v30::DeploymentInfo;
 pub use corepc_types::v30::GetAddrManInfo;
@@ -19,6 +20,8 @@ pub use corepc_types::v30::GetNetworkInfo;
 pub use corepc_types::v30::GetNetworkInfoNetwork;
 pub use corepc_types::v30::GetTxOut;
 pub use corepc_types::v31::GetRawTransactionVerbose;
+pub use corepc_types::v31::RawTransactionInput;
+pub use corepc_types::v31::RawTransactionOutput;
 use serde::Deserialize;
 use serde::Serialize;
 
