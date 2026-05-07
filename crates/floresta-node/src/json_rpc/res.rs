@@ -21,9 +21,6 @@
 //! [`RpcError`]: jsonrpc_interface::RpcError
 //! [`JsonRpcError`]: jsonrpc_interface::JsonRpcError
 
-use serde::Deserialize;
-use serde::Serialize;
-
 /// Types and methods implementing the [JSON-RPC 2.0 spec](https://www.jsonrpc.org/specification),
 /// tailored for floresta's RPC server. Requests using JSON-RPC 1.0 (or omitting the version
 /// field) are also accepted, but responses always follow the 2.0 format.
@@ -514,56 +511,4 @@ pub mod jsonrpc_interface {
             }
         }
     }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct RawTxJson {
-    pub in_active_chain: bool,
-    pub hex: String,
-    pub txid: String,
-    pub hash: String,
-    pub size: u32,
-    pub vsize: u32,
-    pub weight: u32,
-    pub version: u32,
-    pub locktime: u32,
-    pub vin: Vec<TxInJson>,
-    pub vout: Vec<TxOutJson>,
-    pub blockhash: String,
-    pub confirmations: u32,
-    pub blocktime: u32,
-    pub time: u32,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct TxOutJson {
-    pub value: u64,
-    pub n: u32,
-    pub script_pub_key: ScriptPubKeyJson,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ScriptPubKeyJson {
-    pub asm: String,
-    pub hex: String,
-    pub req_sigs: u32,
-    #[serde(rename = "type")]
-    pub type_: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct TxInJson {
-    pub txid: String,
-    pub vout: u32,
-    pub script_sig: ScriptSigJson,
-    pub sequence: u32,
-    pub witness: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ScriptSigJson {
-    pub asm: String,
-    pub hex: String,
 }

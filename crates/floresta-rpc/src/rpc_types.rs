@@ -104,7 +104,7 @@ pub struct ScriptPubKeyJson {
     /// The type of this spk. E.g: PKH, SH, WSH, WPKH, TR, non-standard...
     pub type_: String,
     /// Encode this script using one of the standard address types, if possible
-    pub address: String,
+    pub address: Option<String>,
 }
 
 /// A transaction input returned by some rpcs, like gettransaction and getblock

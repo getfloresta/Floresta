@@ -17,33 +17,21 @@ use axum::http::Method;
 use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
 use axum::routing::post;
-use bitcoin::Address;
-use bitcoin::BlockHash;
 use bitcoin::Network;
-use bitcoin::ScriptBuf;
-use bitcoin::Transaction;
-use bitcoin::TxIn;
-use bitcoin::TxOut;
 use bitcoin::Txid;
-use bitcoin::consensus::deserialize;
-use bitcoin::consensus::encode::serialize_hex;
-use bitcoin::hashes::Hash;
-use bitcoin::hashes::hex::FromHex;
-use bitcoin::hex::DisplayHex;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_rpc::rpc_interfaces::BlockchainRpc;
 use floresta_rpc::rpc_interfaces::ControlRpc;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
+use floresta_rpc::rpc_interfaces::RawTransactionRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
 use floresta_rpc::rpc_interfaces::WalletRpc;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_watch_only::AddressCache;
-use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
-use floresta_wire::node_interface::MempoolMethods;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::RwLock;
@@ -52,11 +40,6 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::RawTxJson;
-use super::res::ScriptPubKeyJson;
-use super::res::ScriptSigJson;
-use super::res::TxInJson;
-use super::res::TxOutJson;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
@@ -99,40 +82,6 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
-
-impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_transaction(&self, tx_id: Txid, verbosity: bool) -> Result<Value> {
-        if verbosity {
-            let tx = self
-                .wallet
-                .get_transaction(&tx_id)
-                .ok_or(JsonRpcError::TxNotFound)?;
-            let raw = self.make_raw_transaction(tx)?;
-            return Ok(serde_json::to_value(raw).expect(SERIALIZATION_EXPECT_MSG));
-        }
-
-        self.wallet
-            .get_transaction(&tx_id)
-            .and_then(|tx| {
-                self.make_raw_transaction(tx)
-                    .ok()
-                    .and_then(|v| serde_json::to_value(v).ok())
-            })
-            .ok_or(JsonRpcError::TxNotFound)
-    }
-
-    async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        let tx_hex = Vec::from_hex(&tx).map_err(|_| JsonRpcError::InvalidHex)?;
-        let tx: Transaction =
-            deserialize(&tx_hex).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
-
-        Ok(self
-            .node
-            .broadcast_transaction(tx)
-            .await
-            .map_err(|e| JsonRpcError::Node(e.to_string()))??)
-    }
-}
 
 async fn handle_json_rpc_request(
     req: RpcRequest,
@@ -336,10 +285,11 @@ async fn handle_json_rpc_request(
         }
         RpcMethods::GetRawTransaction => {
             let txid = get_at(&params, 0, "txid")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", false)?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
             state
-                .get_transaction(txid, verbosity)
+                .get_raw_transaction(txid, verbosity)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
@@ -411,116 +361,6 @@ async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<Value> {
 }
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn make_vin(&self, input: TxIn) -> TxInJson {
-        let txid = serialize_hex(&input.previous_output.txid);
-        let vout = input.previous_output.vout;
-        let sequence = input.sequence.0;
-        TxInJson {
-            txid,
-            vout,
-            script_sig: ScriptSigJson {
-                asm: input.script_sig.to_asm_string(),
-                hex: input.script_sig.to_hex_string(),
-            },
-            witness: input
-                .witness
-                .iter()
-                .map(|w| w.to_hex_string(bitcoin::hex::Case::Upper))
-                .collect(),
-            sequence,
-        }
-    }
-
-    fn get_script_type(script: ScriptBuf) -> Option<&'static str> {
-        if script.is_p2pkh() {
-            return Some("p2pkh");
-        }
-        if script.is_p2sh() {
-            return Some("p2sh");
-        }
-        if script.is_p2wpkh() {
-            return Some("v0_p2wpkh");
-        }
-        if script.is_p2wsh() {
-            return Some("v0_p2wsh");
-        }
-        None
-    }
-
-    fn make_vout(&self, output: TxOut, n: u32) -> TxOutJson {
-        let value = output.value;
-        TxOutJson {
-            value: value.to_sat(),
-            n,
-            script_pub_key: ScriptPubKeyJson {
-                asm: output.script_pubkey.to_asm_string(),
-                hex: output.script_pubkey.to_hex_string(),
-                req_sigs: 0, // This field is deprecated
-                // `Address::from_script` can fail for nonstandard scripts. Bitcoin Core
-                // omits the `address` field entirely when `ExtractDestination` fails:
-                // https://github.com/bitcoin/bitcoin/blob/f50d53c84736f8ada8419346c4d1734d5a6686d4/src/core_io.cpp#L424
-                address: Address::from_script(&output.script_pubkey, self.network)
-                    .ok()
-                    .map(|a| a.to_string()),
-                type_: Self::get_script_type(output.script_pubkey)
-                    .unwrap_or("nonstandard")
-                    .to_string(),
-            },
-        }
-    }
-
-    fn make_raw_transaction(&self, tx: CachedTransaction) -> Result<RawTxJson> {
-        let raw_tx = tx.tx;
-        let in_active_chain = tx.height != 0;
-        let hex = serialize_hex(&raw_tx);
-        let txid = serialize_hex(&raw_tx.compute_txid());
-        let block_hash = self
-            .chain
-            .get_block_hash(tx.height)
-            .unwrap_or(BlockHash::all_zeros());
-        let tip = self.chain.get_height().map_err(|_| JsonRpcError::Chain)?;
-        let confirmations = if in_active_chain {
-            tip - tx.height + 1
-        } else {
-            0
-        };
-
-        Ok(RawTxJson {
-            in_active_chain,
-            hex,
-            txid,
-            hash: serialize_hex(&raw_tx.compute_wtxid()),
-            size: raw_tx.total_size() as u32,
-            vsize: raw_tx.vsize() as u32,
-            weight: raw_tx.weight().to_wu() as u32,
-            version: raw_tx.version.0 as u32,
-            locktime: raw_tx.lock_time.to_consensus_u32(),
-            vin: raw_tx
-                .input
-                .iter()
-                .map(|input| self.make_vin(input.clone()))
-                .collect(),
-            vout: raw_tx
-                .output
-                .into_iter()
-                .enumerate()
-                .map(|(i, output)| self.make_vout(output, i as u32))
-                .collect(),
-            blockhash: serialize_hex(&block_hash),
-            confirmations,
-            blocktime: self
-                .chain
-                .get_block_header(&block_hash)
-                .map(|h| h.time)
-                .unwrap_or(0),
-            time: self
-                .chain
-                .get_block_header(&block_hash)
-                .map(|h| h.time)
-                .unwrap_or(0),
-        })
-    }
-
     // TODO(@luisschwab): get rid of this once
     // https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
     fn get_port(net: &Network) -> u16 {
