@@ -9,6 +9,7 @@ use bitcoin::Txid;
 
 use super::rpc_types::*;
 
+#[maybe_async::maybe_async]
 pub trait BlockchainRpc {
     type Error: Display + Debug;
 
@@ -34,9 +35,6 @@ pub trait BlockchainRpc {
         hash: BlockHash,
         verbosity: Option<u32>,
     ) -> Result<GetBlockRes, Self::Error>;
-
-    /// Fetches a block from peers and stores it locally.
-    fn get_block_from_peer(&self, hash: BlockHash) -> Result<(), Self::Error>;
 
     /// Returns general information about the chain we are on
     ///

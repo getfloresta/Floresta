@@ -9,6 +9,7 @@ use std::str::FromStr;
 
 pub use corepc_types::ScriptPubkey;
 pub use corepc_types::v26::AddrManInfoNetwork;
+pub use corepc_types::v30::DeploymentInfo;
 pub use corepc_types::v30::GetAddrManInfo;
 pub use corepc_types::v30::GetBlockHeaderVerbose;
 pub use corepc_types::v30::GetBlockVerboseOne;
