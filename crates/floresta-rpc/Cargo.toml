@@ -32,6 +32,7 @@ rcgen = { workspace = true }
 [features]
 default = ["with-jsonrpc"]
 with-jsonrpc = ["dep:jsonrpc"]
+async = ["floresta-proc-macro/async"]
 clap = ["dep:clap"]
 
 [lints]

@@ -4,6 +4,7 @@ use core::fmt::Debug;
 
 use serde::Deserialize;
 
+#[cfg(not(feature = "async"))]
 use crate::rpc::JsonRPCClient;
 
 // Define a Client struct that wraps a jsonrpc::Client
@@ -57,6 +58,7 @@ impl Client {
     }
 }
 
+#[cfg(not(feature = "async"))]
 // Implement the JsonRPCClient trait for Client
 impl JsonRPCClient for Client {
     fn call<T: for<'a> serde::de::Deserialize<'a> + Debug>(

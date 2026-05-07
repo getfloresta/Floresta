@@ -39,7 +39,9 @@ use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_rpc::rpc_interfaces::NetworkRpc;
 use floresta_rpc::rpc_interfaces::RpcMethods;
+use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
@@ -340,7 +342,9 @@ async fn handle_json_rpc_request(
         // Network
         RpcMethods::AddNode => {
             let node = get_at(&params, 0, "node")?;
-            let command = get_at(&params, 1, "command")?;
+            let command: String = get_at(&params, 1, "command")?;
+            let command = AddNodeCommand::from_str(&command)
+                .map_err(|_| JsonRpcError::InvalidAddnodeCommand)?;
             let v2transport = get_with_default(&params, 2, "V2transport", false)?;
 
             state
