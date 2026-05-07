@@ -9,6 +9,7 @@ use std::str::FromStr;
 
 pub use corepc_types::ScriptPubKey;
 pub use corepc_types::v26::AddrManInfoNetwork;
+pub use corepc_types::v30::DeploymentInfo;
 pub use corepc_types::v30::GetAddrManInfo;
 pub use corepc_types::v30::GetBlockHeaderVerbose;
 pub use corepc_types::v30::GetBlockVerboseOne;
@@ -20,12 +21,6 @@ pub use corepc_types::v30::GetTxOut;
 pub use corepc_types::v31::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
-
-#[derive(Debug, Deserialize, Serialize)]
-/// Return type for the `gettxoutproof` rpc command, the internal is
-/// the hex-encoded representation of the Merkle Block, as defined
-/// by Bitcoin Core.
-pub struct GetTxOutProof(pub String);
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
