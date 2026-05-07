@@ -99,6 +99,7 @@ pub trait BlockchainRpc {
     ) -> Result<GetBlockHeaderRes, Self::Error>;
 }
 
+#[maybe_async::maybe_async]
 pub trait WalletRpc {
     type Error: Display + Debug;
 

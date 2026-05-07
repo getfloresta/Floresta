@@ -17,3 +17,4 @@ pub mod server;
 mod blockchain;
 mod control;
 mod network;
+mod wallet;
