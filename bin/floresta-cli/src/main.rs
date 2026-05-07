@@ -11,7 +11,11 @@ use bitcoin::Txid;
 use clap::Parser;
 use clap::Subcommand;
 use floresta_rpc::jsonrpc_client::Client;
-use floresta_rpc::rpc::FlorestaRPC;
+use floresta_rpc::rpc_interfaces::BlockchainRpc;
+use floresta_rpc::rpc_interfaces::ControlRpc;
+use floresta_rpc::rpc_interfaces::NetworkRpc;
+use floresta_rpc::rpc_interfaces::RawTransactionRpc;
+use floresta_rpc::rpc_interfaces::WalletRpc;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_rpc::rpc_types::RescanConfidence;
 
@@ -65,24 +69,24 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         Methods::GetBlockCount => serde_json::to_string_pretty(&client.get_block_count()?)?,
         Methods::GetDifficulty => serde_json::to_string_pretty(&client.get_difficulty()?)?,
         Methods::GetTxOut { txid, vout } => {
-            serde_json::to_string_pretty(&client.get_tx_out(txid, vout)?)?
+            serde_json::to_string_pretty(&client.get_tx_out(txid, vout, false)?)?
         }
         Methods::GetTxOutProof { txids, blockhash } => {
-            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash))?
+            serde_json::to_string_pretty(&client.get_txout_proof(&txids, blockhash)?)?
         }
-        Methods::GetTransaction { txid, .. } => {
-            serde_json::to_string_pretty(&client.get_transaction(txid, Some(true))?)?
+        Methods::GetTransaction { txid, verbosity } => {
+            serde_json::to_string_pretty(&client.get_raw_transaction(txid, verbosity)?)?
         }
         Methods::RescanBlockchain {
             start_block,
             stop_block,
             use_timestamp,
             confidence,
-        } => serde_json::to_string_pretty(&client.rescanblockchain(
+        } => serde_json::to_string_pretty(&client.rescan_blockchain(
             Some(start_block),
             Some(stop_block),
             use_timestamp,
-            confidence,
+            Some(confidence),
         )?)?,
         Methods::SendRawTransaction { tx } => {
             serde_json::to_string_pretty(&client.send_raw_transaction(tx)?)?
@@ -230,7 +234,7 @@ pub enum Methods {
 
     /// Returns the transaction, assuming it is cached by our watch only wallet
     #[command(name = "gettransaction")]
-    GetTransaction { txid: Txid, verbose: Option<bool> },
+    GetTransaction { txid: Txid, verbosity: Option<u32> },
 
     #[doc = include_str!("../../../doc/rpc/rescanblockchain.md")]
     #[command(
@@ -386,7 +390,7 @@ pub enum Methods {
     )]
     DisconnectNode {
         node_address: String,
-        node_id: Option<usize>,
+        node_id: Option<u32>,
     },
 
     #[command(name = "findtxout")]

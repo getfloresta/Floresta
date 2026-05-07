@@ -6,9 +6,14 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
+pub use corepc_types::ScriptPubkey;
+pub use corepc_types::v30::GetAddrManInfo;
+pub use corepc_types::v30::GetBlockHeaderVerbose;
+pub use corepc_types::v30::GetBlockVerboseOne;
+pub use corepc_types::v30::GetBlockchainInfo;
+pub use corepc_types::v30::GetDeploymentInfo;
 pub use corepc_types::v30::GetNetworkInfo;
+pub use corepc_types::v30::GetTxOut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,8 +23,15 @@ use serde::Serialize;
 /// by btc core.
 pub struct GetTxOutProof(pub Vec<u8>);
 
-/// The information returned by a get_raw_tx
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum RawTxResp {
+    Zero(String),
+    One(Box<RawTx>),
+}
+
+/// The information returned by a get_raw_transaction verbose one
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RawTx {
     /// Whether this tx is in our best known chain
     pub in_active_chain: bool,
@@ -41,12 +53,12 @@ pub struct RawTx {
     pub locktime: u32,
     /// A list of inputs being spent by this transaction
     ///
-    /// See [TxIn] for more information about the contents of this
-    pub vin: Vec<TxIn>,
+    /// See [TxInJson] for more information about the contents of this
+    pub vin: Vec<TxInJson>,
     /// A list of outputs being created by this tx
     ///
-    /// Se [TxOut] for more information
-    pub vout: Vec<TxOut>,
+    /// See [TxOutJson] for more information
+    pub vout: Vec<TxOutJson>,
     /// The hash of the block that included this tx, if any
     pub blockhash: String,
     /// How many blocks have been mined after this transaction's confirmation
@@ -59,19 +71,19 @@ pub struct RawTx {
 }
 
 /// A transaction output returned by some RPCs like gettransaction and getblock
-#[derive(Deserialize, Serialize)]
-pub struct TxOut {
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TxOutJson {
     /// The amount in sats locked in this UTXO
     pub value: u64,
     /// This utxo's index inside the transaction
     pub n: u32,
     /// The locking script of this utxo
-    pub script_pub_key: ScriptPubKey,
+    pub script_pub_key: ScriptPubKeyJson,
 }
 
 /// The locking script inside a txout
-#[derive(Deserialize, Serialize)]
-pub struct ScriptPubKey {
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ScriptPubKeyJson {
     /// A ASM representation for this script
     ///
     /// Assembly is a high-level representation of a lower level code. Instructions
@@ -92,8 +104,8 @@ pub struct ScriptPubKey {
 }
 
 /// A transaction input returned by some rpcs, like gettransaction and getblock
-#[derive(Deserialize, Serialize)]
-pub struct TxIn {
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TxInJson {
     /// The txid that created this UTXO
     pub txid: String,
     /// The index of this UTXO inside the tx that created it
@@ -109,7 +121,7 @@ pub struct TxIn {
 
 /// A representation for the transaction ScriptSig, returned by some rpcs
 /// like gettransaction and getblock
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ScriptSigJson {
     /// A ASM representation for this scriptSig
     ///
