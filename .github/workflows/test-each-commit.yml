@@ -1,0 +1,95 @@
+name: per-commit tests
+
+on:
+  push:
+
+jobs:
+  check-commits:
+    name: check intermediate commits
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.81.0
+        with:
+          components: rustfmt, clippy
+
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
+
+      - name: compute cache key
+        run: |
+          YEAR=$(date +%Y)
+          WEEK=$(date +%U)
+          BIWEEK=$(( (10#$WEEK + 1) / 2 ))
+          echo "CACHE_VERSION=${YEAR}(${BIWEEK})" >> $GITHUB_ENV
+
+      - name: restore cargo cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/release/
+          key: ${{ runner.os }}-cargo-${{ env.CACHE_VERSION }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.CACHE_VERSION }}-
+
+      - name: setup git
+        run: |
+          git config user.email "ci@floresta.test"
+          git config user.name "Floresta CI"
+
+      - name: run tests for each pushed commit
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          echo "checking commits from $BEFORE_SHA to $HEAD_SHA"
+
+          if [[ "$BEFORE_SHA" == *"0000000000"* ]]; then
+            echo "new branch detected. normal ci will handle the tip commit"
+            exit 0
+          fi
+
+          COMMIT_COUNT=$(git rev-list --count "$BEFORE_SHA..$HEAD_SHA")
+          echo "total commits to check: $COMMIT_COUNT"
+
+          if [ "$COMMIT_COUNT" -le 1 ]; then
+            echo "only one commit in this push, skipping per-commit iteration"
+            exit 0
+          fi
+
+          SCRIPT="/tmp/run_tests.sh"
+          cp .github/ci-test-each-commit-exec.sh "$SCRIPT"
+          chmod +x "$SCRIPT"
+
+          mapfile -t COMMITS < <(git rev-list --reverse "$BEFORE_SHA..$HEAD_SHA")
+
+          FAILED=0
+          FAILED_COMMITS=()
+
+          for SHA in "${COMMITS[@]}"; do
+            git checkout --quiet --detach "$SHA"
+            if ! bash "$SCRIPT"; then
+              FAILED=1
+              FAILED_COMMITS+=("$SHA")
+            fi
+          done
+
+          git checkout --quiet --detach "$HEAD_SHA"
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo ""
+            echo "the following intermediate commits failed tests"
+            printf ' - %s\n' "${FAILED_COMMITS[@]}"
+            exit 1
+          fi
+
+          echo "all intermediate commits compiled and passed tests"
