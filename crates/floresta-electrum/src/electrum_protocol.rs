@@ -346,22 +346,19 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let Some(utxos) = self.address_cache.get_address_utxos(&hash) else {
                     return json_rpc_res!(request, []);
                 };
-                let mut final_utxos = Vec::new();
-                for (utxo, prevout) in utxos.into_iter() {
-                    let Some(height) = self.address_cache.get_height(&prevout.txid) else {
-                        return json_rpc_res!(request, []);
-                    };
-                    let Some(position) = self.address_cache.get_position(&prevout.txid) else {
-                        return json_rpc_res!(request, []);
-                    };
-
-                    final_utxos.push(json!({
-                        "height": height,
-                        "tx_pos": position,
-                        "tx_hash": prevout.txid,
-                        "value": utxo.value
-                    }));
-                }
+                let final_utxos = utxos
+                    .into_iter()
+                    .flat_map(|(utxo, prevout)| {
+                        let height = self.address_cache.get_height(&prevout.txid)?;
+                        let position = self.address_cache.get_position(&prevout.txid)?;
+                        Some(json!({
+                            "height": height,
+                            "tx_pos": position,
+                            "tx_hash": prevout.txid,
+                            "value": utxo.value
+                        }))
+                    })
+                    .collect::<Vec<_>>();
 
                 json_rpc_res!(request, final_utxos)
             }
