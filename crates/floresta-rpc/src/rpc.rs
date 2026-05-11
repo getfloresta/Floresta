@@ -146,6 +146,12 @@ pub trait FlorestaRPC {
     fn list_descriptors(&self) -> Result<Vec<String>>;
     /// Sends a ping to all peers, checking if they are still alive
     fn ping(&self) -> Result<()>;
+
+    #[doc = include_str!("../../../doc/rpc/invalidateblock.md")]
+    fn invalidate_block(&self, blockhash: BlockHash) -> Result<()>;
+
+    #[doc = include_str!("../../../doc/rpc/submitheader.md")]
+    fn submit_header(&self, hexdata: String) -> Result<()>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -341,5 +347,13 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn ping(&self) -> Result<()> {
         self.call("ping", &[])
+    }
+
+    fn invalidate_block(&self, blockhash: BlockHash) -> Result<()> {
+        self.call("invalidateblock", &[Value::String(blockhash.to_string())])
+    }
+
+    fn submit_header(&self, hexdata: String) -> Result<()> {
+        self.call("submitheader", &[Value::String(hexdata)])
     }
 }
