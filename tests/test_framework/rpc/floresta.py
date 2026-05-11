@@ -26,6 +26,14 @@ class FlorestaRPC(BaseRPC):
         """
         return self.perform_request("getroots")
 
+    def invalidate_block(self, blockhash: str):
+        """Marks a block as invalid"""
+        return self.perform_request("invalidateblock", params=[blockhash])
+
+    def submit_header(self, hexdata: str):
+        """Submits a raw block header as a candidate chain tip"""
+        return self.perform_request("submitheader", params=[hexdata])
+
     def get_memoryinfo(self, mode: str):
         """
         Returns stats about our memory usage performing
