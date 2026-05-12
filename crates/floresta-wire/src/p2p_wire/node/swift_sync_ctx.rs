@@ -3,7 +3,6 @@
 //! A node that downloads and validates the blockchain, but skips utreexo proofs as they aren't
 //! needed to validate the UTXO set with the SwiftSync method.
 
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs::File;
 use std::path::Path;
@@ -49,6 +48,9 @@ use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::PeerMessages;
+use crate::p2p_wire::stump_updater::StumpUpdate;
+use crate::p2p_wire::stump_updater::StumpUpdater;
+use crate::p2p_wire::stump_updater::StumpUpdaterHandle;
 
 /// [`SwiftSync`] is a node that downloads and validates the blockchain but skips utreexo
 /// proofs by using SwiftSync.
@@ -58,13 +60,7 @@ use crate::p2p_wire::peer::PeerMessages;
 ///     - `UtreexoNode<SwiftSync, Chain>`
 #[derive(Default)]
 pub struct SwiftSync {
-    /// The utreexo accumulator for the last height we have constructed.
-    acc: (Stump, u32),
-
-    /// A mapping of block heights to their utreexo leaves.
-    utreexo_leaves: BTreeMap<u32, Vec<BitcoinNodeHash>>,
-
-    leaves: usize,
+    stump_updater: Option<StumpUpdaterHandle>,
 
     /// The `TxOut` aggregator.
     agg: SwiftSyncAgg,
@@ -290,6 +286,10 @@ where
         );
         self.last_block_request = 0;
 
+        // Initialize the accumulator updater task that will work in parallel to block validation
+        self.context.stump_updater =
+            Some(StumpUpdater::spawn(Stump::new(), 0, hints.stop_height()));
+
         // Generate the random salt and kick off SwiftSync!
         self.context.salt = Self::generate_salt();
 
@@ -352,8 +352,8 @@ where
 
         // If we have reached the SwiftSync stop height, and we have added all the utreexo leaves
         // to the accumulator, we have finished.
-        if self.swift_sync_finished() {
-            self.handle_stop_height_reached();
+        if let Some(final_acc) = self.swift_sync_finished() {
+            self.handle_stop_height_reached(final_acc);
             return LoopControl::Break;
         }
 
@@ -383,8 +383,6 @@ where
             return LoopControl::Continue;
         }
 
-        self.try_building_utreexo_acc();
-
         try_and_log!(self.pump_swiftsync(hints));
 
         self.get_blocks_to_download();
@@ -393,24 +391,37 @@ where
 
     /// Returns true if we have requested all blocks up to the stop height, we have received and
     /// processed all of them, and we have added all utreexo leaves to the accumulator.
-    fn swift_sync_finished(&self) -> bool {
-        let stop_height = self.context.stop_height;
+    fn swift_sync_finished(&mut self) -> Option<Stump> {
+        let requesting_blocks = self.last_block_request != self.context.stop_height;
 
-        self.last_block_request == stop_height
-            && self.context.acc.1 == stop_height
-            && self.unprocessed_blocks() == 0
-            && self.context.utreexo_leaves.is_empty()
+        // We are still requesting or processing blocks
+        if requesting_blocks || self.unprocessed_blocks() != 0 {
+            return None;
+        }
+
+        // Try to get the result from the stump builder task, else keep waiting for it to finish
+        let updater = self.context.stump_updater.as_mut().expect("initialized");
+
+        match updater.done.try_recv() {
+            Ok(Ok(stump)) => Some(stump),
+
+            // All blocks have been processed, but the stump builder task hasn't finished yet
+            Err(TryRecvError::Empty) => None,
+
+            // These two cases should never happen! Proofless utreexo addition should never fail
+            Err(TryRecvError::Closed) => panic!("Stump builder task was closed without result"),
+            Ok(Err(e)) => panic!("Stump builder task failed with error: {e:?}"),
+        }
     }
 
     /// Called when we process the last SwiftSync block. Verifies that the produced aggregator is
     /// zero and supply is correct. On success marks the chain assumed and exits IBD.
     ///
     /// If one of the two invariants fails, it sets the `abort_height` field.
-    fn handle_stop_height_reached(&mut self) {
+    fn handle_stop_height_reached(&mut self, final_acc: Stump) {
         let stop_height = self.context.stop_height;
         let final_agg = self.context.agg;
         let final_supply = self.context.supply;
-        let final_acc = self.context.acc.0.clone();
 
         // Disable witnessless mode, since we are done with SwiftSync. UtreexoSync requires the
         // witness data in order to reconstruct P2WPKH and P2WSH outputs.
@@ -547,48 +558,34 @@ where
             Ok((agg_re, unspent_amount, utreexo_adds)) => {
                 self.context.agg += agg_re;
                 self.context.supply += unspent_amount;
-
-                self.context.leaves += utreexo_adds.len();
-                info!("total leaves: {}", self.context.leaves);
-
-                self.context.utreexo_leaves.insert(height, utreexo_adds);
-                self.try_building_utreexo_acc();
+                self.pump_utreexo_adds(height, utreexo_adds);
 
                 self.handle_valid_worker_block(block_hash, height, block);
             }
             Err(e) => {
                 let header = block.block.header;
-                self.handle_invalid_block(e, header, height, block.peer)?
+                self.handle_invalid_block(e, header, height, block.peer)?;
             }
         };
         Ok(())
     }
 
-    fn try_building_utreexo_acc(&mut self) {
-        loop {
-            let (tip_acc, tip_height) = &self.context.acc;
-            let next_height = tip_height + 1;
+    /// Handles sending new utreexo leaves to add. This should only be called when we know the
+    /// stump builder task is running (i.e., when there are still blocks to process).
+    fn pump_utreexo_adds(&self, height: u32, adds: Vec<BitcoinNodeHash>) {
+        let updater = self.context.stump_updater.as_ref().expect("initialized");
 
-            let Some(entry) = self.context.utreexo_leaves.first_entry() else {
-                // Map is empty: we may be waiting for blocks (or finishing SwiftSync).
-                break;
-            };
+        // Since SwiftSync is proofless, with implicit deletion, we only add leaves
+        let update = StumpUpdate {
+            adds,
+            deletes: Vec::new(),
+            proof: Proof::default(),
+        };
 
-            if *entry.key() != next_height {
-                // We don't have the utreexo leaves for the next height yet.
-                break;
-            }
-
-            let utreexo_adds = entry.remove();
-
-            let start = Instant::now();
-            let next_acc = tip_acc
-                .modify(&utreexo_adds, &[], &Proof::default())
-                .expect("utreexo shouldn't fail on addition-only");
-            info!("Built ACC in {:?}", start.elapsed());
-
-            self.context.acc = (next_acc, next_height);
-        }
+        updater
+            .tx
+            .send((height, update))
+            .expect("addition-only doesn't fail (proofless), updater should be alive");
     }
 
     fn handle_invalid_block(
