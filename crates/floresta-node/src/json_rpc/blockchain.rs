@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::Address;
 use bitcoin::Block;
@@ -268,11 +270,29 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
 
-        let verification_progress = if height != 0 {
-            f64::from(validated) / f64::from(height)
-        } else {
-            0.0
-        };
+        let validated_hash = self
+            .chain
+            .get_block_hash(validated)
+            .map_err(|_| JsonRpcError::Chain)?;
+        let validated_header = self
+            .chain
+            .get_block_header(&validated_hash)
+            .map_err(|_| JsonRpcError::BlockNotFound)?;
+
+        let genesis_time = genesis_block(self.network).header.time;
+        let now: u32 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .try_into()
+            .unwrap_or(u32::MAX);
+
+        let verification_progress = Self::verification_progress(
+            validated_header.time,
+            latest_header.time,
+            now,
+            genesis_time,
+        );
 
         let blocks = i64::from(validated);
         let headers = i64::from(height);
@@ -808,5 +828,31 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    /// Time-based estimate of validated-tip progress in `[0.0, 1.0]`.
+    ///
+    /// Ratio of chain-time elapsed between genesis and the validated block,
+    /// over chain-time between genesis and the later of `now` or
+    /// `header_tip_time`. Returns `0.0` for cold start, clamps to `1.0` at tip.
+    fn verification_progress(
+        validated_block_time: u32,
+        header_tip_time: u32,
+        now: u32,
+        genesis_time: u32,
+    ) -> f64 {
+        if validated_block_time <= genesis_time {
+            return 0.0;
+        }
+
+        let elapsed_validated = validated_block_time - genesis_time;
+        let denom_anchor = now.max(header_tip_time);
+
+        if denom_anchor <= genesis_time {
+            return 0.0;
+        }
+
+        let elapsed_total = denom_anchor - genesis_time;
+        (f64::from(elapsed_validated) / f64::from(elapsed_total)).clamp(0.0, 1.0)
     }
 }
