@@ -226,6 +226,9 @@ pub enum JsonRpcError {
 
     /// Something went wrong when attempting to publish a transaction to mempool
     MempoolAccept(MempoolError),
+
+    /// The request did not provide valid authentication
+    UnAuthorized,
 }
 
 impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
@@ -260,6 +263,7 @@ impl Display for JsonRpcError {
             JsonRpcError::InvalidDisconnectNodeCommand => write!(f, "Invalid disconnectnode command"),
             JsonRpcError::PeerNotFound => write!(f, "Peer not found in the peer list"),
             JsonRpcError::MempoolAccept(e) => write!(f, "Could not send transaction to mempool due to {e}"),
+            JsonRpcError::UnAuthorized => write!(f, "Unauthorized: missing or invalid authentication token"),
         }
     }
 }

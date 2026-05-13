@@ -2,8 +2,6 @@
 
 use serde::Deserialize;
 
-use crate::error::FlorestadError;
-
 #[derive(Default, Debug, Deserialize)]
 pub struct Wallet {
     pub xpubs: Option<Vec<String>>,
@@ -14,6 +12,13 @@ pub struct Wallet {
 #[derive(Default, Debug, Deserialize)]
 pub struct ConfigFile {
     pub wallet: Wallet,
+    /// Optional auth token for RPC access. If not set, a random token
+    /// is generated and saved to `<data_dir>/.cookie` on startup,
+    /// following Bitcoin Core's cookie auth model.
+    pub rpc_auth_token: Option<String>,
+    /// Optional auth token for Electrum protocol access.
+    /// If not set, electrum connections are allowed without auth.
+    pub electrum_auth_token: Option<String>,
 }
 
 impl ConfigFile {

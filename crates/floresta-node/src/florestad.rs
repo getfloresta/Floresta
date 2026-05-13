@@ -218,8 +218,20 @@ pub struct Config {
     /// If we assumeutreexo or use pow fraud proofs, you have the option to download and validate
     /// the blocks that were skipped. This will take a long time, but will run on the background
     /// and won't affect the node's operation. You may notice that this will take a lot of CPU
-    /// and bandwidth to run.
+    /// Whether we should backfill
     pub backfill: bool,
+
+    /// Optional auth token for JSON-RPC access.
+    ///
+    /// If not set, a random token is generated and saved to `{data_dir}/.cookie`
+    /// on startup, following Bitcoin Core's cookie auth model.
+    /// The token is printed to stdout on first run.
+    pub rpc_auth_token: Option<String>,
+
+    /// Optional auth token for Electrum protocol access.
+    ///
+    /// If not set, Electrum connections are allowed without authentication.
+    pub electrum_auth_token: Option<String>,
 }
 
 impl Config {
@@ -254,6 +266,8 @@ impl Config {
             tls_cert_path: None,
             allow_v1_fallback: false,
             backfill: false,
+            rpc_auth_token: None,
+            electrum_auth_token: None,
         }
     }
 }
@@ -365,6 +379,50 @@ impl Florestad {
         // Check that the directory exists and is writable
         Florestad::validate_data_dir(data_dir)?;
 
+        // Determine RPC auth token. If not configured, generate a random one
+        // and save it to the cookie file (Bitcoin Core-compatible model).
+        let rpc_auth_token = self.config.rpc_auth_token.clone().or_else(|| {
+            let cookie_path = Path::new(data_dir).join(".cookie");
+            // Try to load existing cookie first
+            if let Ok(content) = std::fs::read_to_string(&cookie_path) {
+                let trimmed = content.trim().to_string();
+                if !trimmed.is_empty() {
+                    info!("Loaded existing RPC auth cookie from {}", cookie_path.display());
+                    return Some(trimmed);
+                }
+            }
+            // Generate a new random token from system entropy
+            let token = (|| -> Option<String> {
+                use std::fs::File;
+                use std::io::Read;
+                let mut buf = [0u8; 32];
+                File::open("/dev/urandom").ok()?.read_exact(&mut buf).ok()?;
+                Some(
+                    buf.iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .concat(),
+                )
+            })()
+            .unwrap_or_else(|| {
+                // Fallback: timestamp + pid
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                format!("floresta-rpc-{}-{}", now.as_nanos(), std::process::id())
+            });
+            match std::fs::write(&cookie_path, &token) {
+                Ok(_) => info!(
+                    "Generated RPC auth cookie at {}. Use with: echo '{}' > ~/.floresta-cookie",
+                    cookie_path.display(),
+                    token
+                ),
+                Err(e) => warn!("Could not write RPC cookie file: {e}. RPC will run without auth."),
+            }
+            info!("RPC auth token: {}", &token[..16]);
+            Some(token)
+        });
+
         info!("Loading watch-only wallet");
         let wallet = self.setup_wallet()?;
 
@@ -475,6 +533,7 @@ impl Florestad {
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
                 format!("{data_dir}/debug.log"),
+                rpc_auth_token.clone(),
             ));
 
             if self.json_rpc.set(server).is_err() {

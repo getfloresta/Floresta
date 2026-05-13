@@ -8,6 +8,7 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::Method;
 use axum::http::Response;
 use axum::http::StatusCode;
@@ -81,6 +82,9 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    /// Optional auth token for JSON-RPC access.
+    /// When set, all requests must include `Authorization: Bearer <token>`.
+    pub(super) rpc_auth_token: Option<String>,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -452,7 +456,8 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
         JsonRpcError::InInitialBlockDownload
         | JsonRpcError::Node(_)
         | JsonRpcError::Chain
-        | JsonRpcError::Filters(_) => 503,
+        | JsonRpcError::Filters(_)
+        | JsonRpcError::UnAuthorized => 503,
     }
 }
 
@@ -494,8 +499,36 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
 
 async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    // Check authentication
+    if let Some(ref expected_token) = state.rpc_auth_token {
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let provided_token = auth_header
+            .strip_prefix("Bearer ")
+            .or_else(|| auth_header.strip_prefix("bearer "))
+            .map(|t| t.trim());
+        
+        if provided_token != Some(expected_token.as_str()) {
+            let body = serde_json::json!({
+                "error": {
+                    "code": -32603,
+                    "message": "Unauthorized: missing or invalid authentication token",
+                },
+                "id": Value::Null,
+            });
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+        }
+    }
+
     let req: RpcRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
         Err(e) => {
@@ -730,6 +763,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
+        rpc_auth_token: Option<String>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -770,6 +804,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                rpc_auth_token,
             }));
 
         axum::serve(listener, router)
