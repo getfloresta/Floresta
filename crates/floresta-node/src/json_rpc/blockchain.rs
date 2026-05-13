@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::Address;
 use bitcoin::Block;
@@ -270,11 +272,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
 
-        let verification_progress = if height != 0 {
-            f64::from(validated) / f64::from(height)
-        } else {
-            0.0
-        };
+        let verification_progress = self.verification_progress()?;
 
         let blocks = i64::from(validated);
         let headers = i64::from(height);
@@ -730,5 +728,46 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    /// Time-based estimate of validated-tip progress in `[0.0, 1.0]`.
+    ///
+    /// Ratio of chain-time elapsed between genesis and the validated block,
+    /// over chain-time between genesis and the later of `now` or
+    /// `header_tip_time`. Returns `0.0` for cold start, clamps to `1.0` at tip.
+    fn verification_progress(&self) -> Result<f64, JsonRpcError> {
+        let (_, tip_hash) = self
+            .chain
+            .get_best_block()
+            .map_err(|_| JsonRpcError::Chain)?;
+        let header_tip_time = self
+            .chain
+            .get_block_header(&tip_hash)
+            .map_err(|_| JsonRpcError::Chain)?
+            .time;
+
+        let validated = self
+            .chain
+            .get_validation_index()
+            .map_err(|_| JsonRpcError::Chain)?;
+        let validated_block_time = self
+            .chain
+            .get_block_hash(validated)
+            .and_then(|hash| self.chain.get_block_header(&hash))
+            .map_err(|_| JsonRpcError::Chain)?
+            .time;
+
+        let genesis_time = genesis_block(self.network).header.time;
+        let now: u32 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before unix epoch")
+            .as_secs()
+            .try_into()
+            .expect("unix timestamp overflows u32 in year 2106");
+
+        let elapsed_validated = validated_block_time - genesis_time;
+        let elapsed_total = now.max(header_tip_time) - genesis_time;
+
+        Ok((f64::from(elapsed_validated) / f64::from(elapsed_total)).clamp(0.0, 1.0))
     }
 }
