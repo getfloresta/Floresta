@@ -62,6 +62,11 @@ def test_get_blockchain_info(florestad_bitcoind_utreexod_with_chain):
         if key == "difficulty":
             # Allow float rounding noise.
             assert round(fval, 3) == round(bval, 3)
+        elif key == "verificationprogress":
+            # Floresta computes time-based progress; bitcoind computes
+            # tx-weighted. Both converge at endpoints but drift mid-sync
+            # and at the tip (block timestamps lag `now` by seconds).
+            assert abs(fval - bval) < 1e-3
         else:
             assert fval == bval, f"{key}: floresta={fval} bitcoind={bval}"
 
