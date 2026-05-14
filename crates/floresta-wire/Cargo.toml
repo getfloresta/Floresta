@@ -35,12 +35,15 @@ tonic-prost = { workspace = true }
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-compact-filters = { workspace = true }
 floresta-common = { workspace = true }
-floresta-mempool = { workspace = true }
+floresta-domain = { workspace = true }
 metrics = { workspace = true,  optional = true }
 
 [dev-dependencies]
 zstd = { workspace = true }
 derive_more = { version = "=2.1.1", features = ["constructor"] }
+
+# Local dev-dependencies
+floresta-mempool = { workspace = true }
 
 [features]
 default = []

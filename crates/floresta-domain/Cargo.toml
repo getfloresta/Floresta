@@ -21,6 +21,8 @@ categories = ["cryptography::cryptocurrencies"]
 bitcoin = { workspace = true, features = ["serde", "std"] }
 rustreexo = { workspace = true }
 
+floresta-chain = { workspace = true }
+
 [features]
 default = []
 

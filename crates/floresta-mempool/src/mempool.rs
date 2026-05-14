@@ -4,10 +4,6 @@
 //! our transactions every 1 hour.
 //! Once our transaction is included in a block, we remove it from the mempool.
 
-use core::error::Error;
-use core::fmt;
-use core::fmt::Display;
-use core::fmt::Formatter;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -23,8 +19,9 @@ use bitcoin::Txid;
 use bitcoin::block::Header;
 use bitcoin::block::Version;
 use bitcoin::hashes::Hash;
-use floresta_chain::BlockchainError;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
+use floresta_domain::mempool::MempoolBackend;
+use floresta_domain::mempool::MempoolError;
 use tracing::debug;
 
 /// A short transaction id that we use to identify transactions in the mempool.
@@ -70,79 +67,11 @@ pub struct Mempool {
     hasher: ahash::RandomState,
 }
 
-#[derive(Debug)]
-/// Errors that can occur whilst trying to add a transaction to the [`Mempool`].
-pub enum MempoolError {
-    /// The [`Mempool`] is full and cannot accept more [`Transaction`]s.
-    FullMempool,
-
-    /// The [`Transaction`] conflicts with another [`Transaction`] in the [`Mempool`].
-    ConflictingTransaction,
-
-    /// The [`Transaction`] has duplicate inputs.
-    DuplicatedInputs,
-
-    // TODO(davidson): we might want to make an error type specific for consensus,
-    // instead of reusing BlockchainError.
-    /// The [`Transaction`] failed consensus validation.
-    ConsensusValidation(BlockchainError),
-}
-
-impl Display for MempoolError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::FullMempool => {
-                write!(
-                    f,
-                    "The mempool is full and cannot accept any more transactions"
-                )
-            }
-            Self::ConflictingTransaction => {
-                write!(
-                    f,
-                    "The transaction conflicts with another transaction in the mempool"
-                )
-            }
-            Self::DuplicatedInputs => {
-                write!(f, "The transaction has duplicate inputs")
-            }
-            Self::ConsensusValidation(e) => {
-                write!(f, "The transaction failed consensus validation: {e}")
-            }
-        }
-    }
-}
-
-impl Error for MempoolError {}
-
-impl Mempool {
-    /// Creates a new mempool with a given maximum size
-    pub fn new(max_mempool_size: usize) -> Self {
-        let a = rand::random();
-        let b = rand::random();
-        let c = rand::random();
-        let d = rand::random();
-
-        let hasher = ahash::RandomState::with_seeds(a, b, c, d);
-
-        Self {
-            transactions: HashMap::new(),
-            queue: Vec::new(),
-            mempool_size: 0,
-            max_mempool_size,
-            hasher,
-        }
-    }
-
-    /// List transactions we are pending to process.
-    pub fn list_unprocessed(&self) -> Vec<Txid> {
-        self.queue.clone()
-    }
-
+impl MempoolBackend for Mempool {
     /// List all transactions we've accepted to the mempool.
     ///
     /// This won't count transactions that are still in the queue.
-    pub fn list_mempool(&self) -> Vec<Txid> {
+    fn list_mempool(&self) -> Vec<Txid> {
         self.transactions
             .keys()
             .map(|id| self.transactions[id].transaction.compute_txid())
@@ -151,7 +80,7 @@ impl Mempool {
 
     /// Returns an unsolved block (with nonce 0) with as many transactions as we can fit
     /// into a block (up to max_block_weight).
-    pub fn get_block_template(
+    fn get_block_template(
         &self,
         version: Version,
         prev_blockhash: BlockHash,
@@ -194,29 +123,28 @@ impl Mempool {
         block
     }
 
-    /// Utility method that grabs one transaction and all its dependencies, then adds them to a tx
-    /// list.
-    fn add_transaction_to_block(
-        &self,
-        block_transactions: &mut Vec<Transaction>,
-        short_txid: ShortTxid,
-    ) {
-        let transaction = self.transactions.get(&short_txid).unwrap();
-        if block_transactions.contains(&transaction.transaction) {
-            return;
-        }
+    /// Get a transaction from the mempool.
+    fn get_from_mempool<'a>(&'a self, id: &Txid) -> Option<&'a Transaction> {
+        let id = self.hasher.hash_one(id);
+        self.transactions.get(&id).map(|tx| &tx.transaction)
+    }
 
-        let depends_on = transaction.depends.clone();
-
-        for depend in depends_on {
-            self.add_transaction_to_block(block_transactions, depend);
-        }
-
-        block_transactions.push(transaction.transaction.clone());
+    /// Get all transactions that were in the mempool for more than 1 hour, if any
+    fn get_stale(&mut self) -> Vec<Txid> {
+        self.transactions
+            .values()
+            .filter_map(|tx| {
+                let txid = tx.transaction.compute_txid();
+                match tx.time.elapsed() > Duration::from_secs(3600) {
+                    true => Some(txid),
+                    false => None,
+                }
+            })
+            .collect()
     }
 
     /// Consume a block and remove all transactions that were included in it.
-    pub fn consume_block(&mut self, block: &Block) -> Vec<Txid> {
+    fn consume_block(&mut self, block: &Block) -> Vec<Txid> {
         block
             .txdata
             .iter()
@@ -239,51 +167,6 @@ impl Mempool {
             .collect()
     }
 
-    /// Checks if an outpoint is already spent in the mempool.
-    ///
-    /// This can be used to find conflicts before adding a transaction to the mempool.
-    fn is_already_spent(&self, outpoint: &OutPoint) -> bool {
-        let short_txid = self.hasher.hash_one(outpoint.txid);
-        let Some(tx) = self.transactions.get(&short_txid) else {
-            return false;
-        };
-
-        tx.children.iter().any(|child| {
-            let Some(child_tx) = self.transactions.get(child) else {
-                return false;
-            };
-
-            child_tx.transaction.input.iter().any(|input| {
-                input.previous_output.txid == outpoint.txid
-                    && input.previous_output.vout == outpoint.vout
-            })
-        })
-    }
-
-    /// Checks if the transaction doesn't have conflicting inputs or spends the same input twice.
-    fn check_for_conflicts(&self, transaction: &Transaction) -> Result<(), MempoolError> {
-        // check for duplicate inputs
-        let inputs = transaction
-            .input
-            .iter()
-            .map(|input| input.previous_output)
-            .collect::<BTreeSet<_>>();
-
-        if inputs.len() != transaction.input.len() {
-            return Err(MempoolError::DuplicatedInputs);
-        }
-
-        // Check this transaction doesn't conflict with another transaction in the mempool
-        // TODO(davidson): RBF
-        for input in transaction.input.iter() {
-            if self.is_already_spent(&input.previous_output) {
-                return Err(MempoolError::ConflictingTransaction);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Accepts a transaction to mempool
     ///
     /// This method will perform some context-less validations on a transaction,
@@ -298,7 +181,7 @@ impl Mempool {
     ///    the theoretical maximum amount of Bitcoins
     ///  - If either vIn or vOut are empty
     ///  - If any script is larger than the maximum allowed size
-    pub fn accept_to_mempool(&mut self, transaction: Transaction) -> Result<(), MempoolError> {
+    fn accept_to_mempool(&mut self, transaction: Transaction) -> Result<(), MempoolError> {
         debug!(
             "Accepting {} to mempool {:?}",
             transaction.compute_txid(),
@@ -346,6 +229,97 @@ impl Mempool {
 
         Ok(())
     }
+}
+
+impl Mempool {
+    /// Creates a new mempool with a given maximum size
+    pub fn new(max_mempool_size: usize) -> Mempool {
+        let a = rand::random();
+        let b = rand::random();
+        let c = rand::random();
+        let d = rand::random();
+
+        let hasher = ahash::RandomState::with_seeds(a, b, c, d);
+
+        Mempool {
+            transactions: HashMap::new(),
+            queue: Vec::new(),
+            mempool_size: 0,
+            max_mempool_size,
+            hasher,
+        }
+    }
+
+    /// List transactions we are pending to process.
+    pub fn list_unprocessed(&self) -> Vec<Txid> {
+        self.queue.clone()
+    }
+
+    /// Utility method that grabs one transaction and all its dependencies, then adds them to a tx
+    /// list.
+    fn add_transaction_to_block(
+        &self,
+        block_transactions: &mut Vec<Transaction>,
+        short_txid: ShortTxid,
+    ) {
+        let transaction = self.transactions.get(&short_txid).unwrap();
+        if block_transactions.contains(&transaction.transaction) {
+            return;
+        }
+
+        let depends_on = transaction.depends.clone();
+
+        for depend in depends_on {
+            self.add_transaction_to_block(block_transactions, depend);
+        }
+
+        block_transactions.push(transaction.transaction.clone());
+    }
+
+    /// Checks if an outpoint is already spent in the mempool.
+    ///
+    /// This can be used to find conflicts before adding a transaction to the mempool.
+    fn is_already_spent(&self, outpoint: &OutPoint) -> bool {
+        let short_txid = self.hasher.hash_one(outpoint.txid);
+        let Some(tx) = self.transactions.get(&short_txid) else {
+            return false;
+        };
+
+        tx.children.iter().any(|child| {
+            let Some(child_tx) = self.transactions.get(child) else {
+                return false;
+            };
+
+            child_tx.transaction.input.iter().any(|input| {
+                input.previous_output.txid == outpoint.txid
+                    && input.previous_output.vout == outpoint.vout
+            })
+        })
+    }
+
+    /// Checks if the transaction doesn't have conflicting inputs or spends the same input twice.
+    fn check_for_conflicts(&self, transaction: &Transaction) -> Result<(), MempoolError> {
+        // check for duplicate inputs
+        let inputs = transaction
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .collect::<BTreeSet<_>>();
+
+        if inputs.len() != transaction.input.len() {
+            return Err(MempoolError::DuplicatedInputs);
+        }
+
+        // Check this transaction doesn't conflict with another transaction in the mempool
+        // TODO(davidson): RBF
+        for input in transaction.input.iter() {
+            if self.is_already_spent(&input.previous_output) {
+                return Err(MempoolError::ConflictingTransaction);
+            }
+        }
+
+        Ok(())
+    }
 
     /// From a transaction that is already in the mempool, computes which transaction it depends.
     fn find_mempool_depends(&self, tx: &Transaction) -> Vec<ShortTxid> {
@@ -354,26 +328,6 @@ impl Mempool {
             .filter_map(|input| {
                 let short_txid = self.hasher.hash_one(input.previous_output.txid);
                 self.transactions.get(&short_txid).map(|_| short_txid)
-            })
-            .collect()
-    }
-
-    /// Get a transaction from the mempool.
-    pub fn get_from_mempool<'a>(&'a self, id: &Txid) -> Option<&'a Transaction> {
-        let id = self.hasher.hash_one(id);
-        self.transactions.get(&id).map(|tx| &tx.transaction)
-    }
-
-    /// Get all transactions that were in the mempool for more than 1 hour, if any
-    pub fn get_stale(&mut self) -> Vec<Txid> {
-        self.transactions
-            .values()
-            .filter_map(|tx| {
-                let txid = tx.transaction.compute_txid();
-                match tx.time.elapsed() > Duration::from_secs(3600) {
-                    true => Some(txid),
-                    false => None,
-                }
             })
             .collect()
     }
@@ -403,6 +357,7 @@ mod tests {
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
     use floresta_common::bhash;
+    use floresta_domain::mempool::MempoolBackend;
     use rand::Rng;
     use rand::SeedableRng;
 
