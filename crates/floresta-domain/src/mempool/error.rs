@@ -9,20 +9,20 @@ use core::fmt::Formatter;
 use floresta_chain::BlockchainError;
 
 #[derive(Debug)]
-/// Errors that can occur whilst trying to add a transaction to the [`Mempool`].
+/// Errors that can occur whilst trying to add a transaction to the `Mempool`.
 pub enum MempoolError {
-    /// The [`Mempool`] is full and cannot accept more [`Transaction`]s.
+    /// The `Mempool` is full and cannot accept more [`Transaction`](bitcoin::Transaction)
     FullMempool,
 
-    /// The [`Transaction`] conflicts with another [`Transaction`] in the [`Mempool`].
+    /// The `Transaction` conflicts with another `Transaction` in the `Mempool`.
     ConflictingTransaction,
 
-    /// The [`Transaction`] has duplicate inputs.
+    /// The `Transaction` has duplicate inputs.
     DuplicatedInputs,
 
     // TODO(davidson): we might want to make an error type specific for consensus,
     // instead of reusing BlockchainError.
-    /// The [`Transaction`] failed consensus validation.
+    /// The `Transaction` failed consensus validation.
     ConsensusValidation(BlockchainError),
 }
 
