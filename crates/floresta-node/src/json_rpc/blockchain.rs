@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::consensus::Encodable;
@@ -9,6 +12,7 @@ use bitcoin::Address;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::MerkleBlock;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Script;
 use bitcoin::ScriptBuf;
@@ -16,6 +20,7 @@ use bitcoin::Txid;
 use bitcoin::VarInt;
 use corepc_types::v29::GetTxOut;
 use corepc_types::v30::GetBlockVerboseOne;
+use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::ScriptPubkey;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
@@ -24,7 +29,6 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
-use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
 use super::res::JsonRpcError;
 use super::server::RpcChain;
@@ -243,7 +247,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     // getblockchaininfo
-    pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfoRes, JsonRpcError> {
+    pub(super) fn get_blockchain_info(&self) -> Result<GetBlockchainInfo, JsonRpcError> {
         let (height, hash) = self.chain.get_best_block().unwrap();
         let validated = self.chain.get_validation_index().unwrap();
         let ibd = self.chain.is_in_ibd();
@@ -252,37 +256,61 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
         let latest_block_time = latest_header.time;
-        let leaf_count = self.chain.acc().leaves as u32;
-        let root_count = self.chain.acc().roots.len() as u32;
-        let root_hashes = self
+
+        let validated_hash = self
             .chain
-            .acc()
-            .roots
-            .into_iter()
-            .map(|r| r.to_string())
-            .collect();
+            .get_block_hash(validated)
+            .map_err(|_| JsonRpcError::Chain)?;
+        let validated_header = self
+            .chain
+            .get_block_header(&validated_hash)
+            .map_err(|_| JsonRpcError::BlockNotFound)?;
+        let validated_block_time = validated_header.time;
 
-        let validated_blocks = self.chain.get_validation_index().unwrap();
+        let genesis_time = genesis_block(self.network).header.time;
 
-        let validated_percentage = if height != 0 {
-            validated_blocks as f32 / height as f32
-        } else {
-            0.0
-        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-        Ok(GetBlockchainInfoRes {
-            best_block: hash.to_string(),
-            height,
-            ibd,
-            validated,
-            latest_work,
-            latest_block_time,
-            leaf_count,
-            root_count,
-            root_hashes,
-            chain: self.network.to_string(),
-            difficulty: latest_header.difficulty(self.chain.get_params()) as u64,
-            progress: validated_percentage,
+        let validated_percentage =
+            verification_progress(validated_block_time, latest_block_time, now, genesis_time);
+
+        let mediantime = latest_header.calculate_median_time_past(&self.chain)?;
+        let bits = latest_header.get_bits_hex();
+        let target = latest_header.get_target_hex();
+        let size_on_disk = self.chain.size_on_disk().map_err(|_| JsonRpcError::Chain)?;
+
+        let chain = match self.network {
+            Network::Bitcoin => "main",
+            Network::Testnet => "test",
+            Network::Signet => "signet",
+            Network::Regtest => "regtest",
+            _ => "unknown",
+        }
+        .to_string();
+
+        Ok(GetBlockchainInfo {
+            chain,
+            blocks: validated as i64,
+            headers: height as i64,
+            best_block_hash: hash.to_string(),
+            bits,
+            target,
+            difficulty: latest_header.get_difficulty(),
+            time: latest_block_time as i64,
+            median_time: mediantime as i64,
+            verification_progress: validated_percentage,
+            initial_block_download: ibd,
+            chain_work: latest_work,
+            size_on_disk,
+            pruned: true,
+            prune_height: Some((height as i64) + 1),
+            automatic_pruning: Some(true),
+            prune_target_size: Some(0),
+            signet_challenge: None,
+            warnings: vec![],
         })
     }
 
@@ -664,5 +692,115 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+}
+
+/// Time-based estimate of validated-tip progress in `[0.0, 1.0]`.
+///
+/// Ratio of chain-time elapsed between genesis and the validated block,
+/// over chain-time between genesis and the later of `now` or
+/// `header_tip_time`. Returns `0.0` for cold start, clamps to `1.0` at tip.
+fn verification_progress(
+    validated_block_time: u32,
+    header_tip_time: u32,
+    now: u64,
+    genesis_time: u32,
+) -> f64 {
+    if validated_block_time <= genesis_time {
+        return 0.0;
+    }
+
+    let elapsed_validated = u64::from(validated_block_time - genesis_time);
+    let denom_anchor = now.max(u64::from(header_tip_time));
+    let genesis = u64::from(genesis_time);
+
+    if denom_anchor <= genesis {
+        return 0.0;
+    }
+
+    let elapsed_total = denom_anchor - genesis;
+    (elapsed_validated as f64 / elapsed_total as f64).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verification_progress;
+
+    // Mainnet genesis block timestamp (2009-01-03 18:15:05 UTC).
+    const GENESIS_TIME: u32 = 1_231_006_505;
+    // Synthetic "now" for tests (approximately 2026-05-10).
+    const NOW: u64 = 1_778_544_000;
+
+    #[test]
+    fn test_validated_at_or_before_genesis_returns_zero() {
+        // Cold start (validated == genesis), plus the defensive case
+        // (validated < genesis, which shouldn't happen but the guard catches it).
+        assert_eq!(
+            verification_progress(GENESIS_TIME, GENESIS_TIME, NOW, GENESIS_TIME),
+            0.0,
+        );
+        assert_eq!(
+            verification_progress(GENESIS_TIME - 1, GENESIS_TIME, NOW, GENESIS_TIME),
+            0.0,
+        );
+    }
+
+    #[test]
+    fn test_fully_synced_returns_one() {
+        let validated = NOW as u32;
+        let p = verification_progress(validated, validated, NOW, GENESIS_TIME);
+        assert_eq!(p, 1.0);
+    }
+
+    #[test]
+    fn test_future_dated_block_clamps_to_one() {
+        let p = verification_progress(NOW as u32 + 86_400, NOW as u32, NOW, GENESIS_TIME);
+        assert_eq!(p, 1.0);
+    }
+
+    #[test]
+    fn test_mid_sync_returns_intermediate_value() {
+        let midpoint = ((GENESIS_TIME as u64 + NOW) / 2) as u32;
+        let p = verification_progress(midpoint, midpoint, NOW, GENESIS_TIME);
+        assert!(p > 0.45 && p < 0.55, "expected ~0.5, got {p}");
+    }
+
+    #[test]
+    fn test_frozen_validated_reports_falling_progress() {
+        // Stall scenario: validated freezes while `now` advances;
+        // progress must strictly decrease, never stick at 1.0.
+        let frozen_validated: u32 = 1_295_049_600; // 2011-01-15 (~block 17,904)
+
+        let p_t1 = verification_progress(frozen_validated, frozen_validated, NOW, GENESIS_TIME);
+        let p_t2 = verification_progress(
+            frozen_validated,
+            frozen_validated,
+            NOW + 365 * 86_400,
+            GENESIS_TIME,
+        );
+
+        assert!(p_t1 < 1.0, "progress should not be 1.0 (was {p_t1})");
+        assert!(
+            p_t2 < p_t1,
+            "progress should decrease over time ({p_t2} vs {p_t1})",
+        );
+    }
+
+    #[test]
+    fn test_header_tip_ahead_of_now_used_as_denominator() {
+        // Peers' headers slightly ahead of local clock: max() picks
+        // header_tip so progress doesn't artificially round to 1.0.
+        let header_tip_ahead = NOW as u32 + 3600;
+        let validated = NOW as u32;
+        let p = verification_progress(validated, header_tip_ahead, NOW, GENESIS_TIME);
+        assert!(p < 1.0, "expected p < 1.0, got {p}");
+        assert!(p > 0.99, "expected p > 0.99, got {p}");
+    }
+
+    #[test]
+    fn test_broken_clock_returns_zero() {
+        // Defensive: `now` and `header_tip_time` both 0 (clock before UNIX epoch).
+        let p = verification_progress(GENESIS_TIME + 1000, 0, 0, GENESIS_TIME);
+        assert_eq!(p, 0.0);
     }
 }

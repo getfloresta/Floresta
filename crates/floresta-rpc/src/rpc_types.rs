@@ -15,48 +15,6 @@ use serde::Serialize;
 /// by btc core.
 pub struct GetTxOutProof(pub Vec<u8>);
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct GetBlockchainInfoRes {
-    /// The best block we know about
-    ///
-    /// This should be the hash of the latest block in the most PoW chain we know about. We may
-    /// or may not have fully-validated it yet
-    pub best_block: String,
-    /// The depth of the most-PoW chain we know about
-    pub height: u32,
-    /// Whether we are on Initial Block Download
-    pub ibd: bool,
-    /// How many blocks we have fully-validated so far? This number will be smaller than
-    /// height during IBD, and should be equal to height otherwise
-    pub validated: u32,
-    /// The work performed by the last block
-    ///
-    /// This is the estimated amount of hashes the miner of this block had to perform
-    /// before mining that block, on average
-    pub latest_work: String,
-    /// The UNIX timestamp for the latest block, as reported by the block's header
-    pub latest_block_time: u32,
-    /// How many leaves we have in the utreexo accumulator so far
-    ///
-    /// This should be equal to the number of UTXOs returned by core's `gettxoutsetinfo`
-    pub leaf_count: u32,
-    /// How many roots we have in the acc
-    pub root_count: u32,
-    /// The actual hex-encoded roots
-    pub root_hashes: Vec<String>,
-    /// A short string representing the chain we're in
-    pub chain: String,
-    /// The validation progress
-    ///
-    /// 0 means we didn't validate any block. 1 means we've validated all blocks. so validated == height.
-    pub progress: f32,
-    /// Current network "difficulty"
-    ///
-    /// On average, miners needs to make `difficulty` hashes before finding one that
-    /// solves a block's PoW
-    pub difficulty: u64,
-}
-
 /// The information returned by a get_raw_tx
 #[derive(Deserialize, Serialize)]
 pub struct RawTx {

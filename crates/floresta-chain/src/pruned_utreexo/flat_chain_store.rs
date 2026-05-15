@@ -1123,6 +1123,16 @@ impl ChainStore for FlatChainStore {
         unsafe { self.do_flush() }
     }
 
+    fn size_on_disk(&self) -> Result<u64, Self::Error> {
+        let headers_size = self.headers.len() as u64;
+        let metadata_size = self.metadata.len() as u64;
+        let block_index_size = self.block_index.index_map.len() as u64;
+        let fork_headers_size = self.fork_headers.len() as u64;
+        let accumulator_size = self.accumulator_file.metadata()?.len();
+
+        Ok(headers_size + metadata_size + block_index_size + fork_headers_size + accumulator_size)
+    }
+
     fn save_roots_for_block(&mut self, roots: Vec<u8>, height: u32) -> Result<(), Self::Error> {
         let index = Index::new(height)?;
 
@@ -1381,6 +1391,7 @@ mod tests {
     use super::FlatChainStore;
     use super::FlatChainStoreConfig;
     use super::FlatChainstoreError;
+    use super::HashedDiskHeader;
     use super::Index;
     use super::FLAT_CHAINSTORE_MAGIC;
     use super::FLAT_CHAINSTORE_VERSION;
@@ -1673,6 +1684,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn make_sized_store(
+        block_index_size: usize,
+        headers_file_size: usize,
+        fork_file_size: usize,
+    ) -> FlatChainStore {
+        let test_id = rand::random::<u64>();
+        let config = FlatChainStoreConfig {
+            block_index_size: Some(block_index_size),
+            headers_file_size: Some(headers_file_size),
+            fork_file_size: Some(fork_file_size),
+            cache_size: Some(10),
+            file_permission: Some(0o660),
+            path: format!("./tmp-db/{test_id}/").into(),
+        };
+        FlatChainStore::new(config).unwrap()
+    }
+
+    #[test]
+    fn test_size_on_disk() {
+        // Baseline matches the formula in `size_on_disk`.
+        let mut store = make_sized_store(32_768, 32_768, 16_384);
+        let baseline = (32_768 * size_of::<u32>()
+            + 32_768 * size_of::<HashedDiskHeader>()
+            + 16_384 * size_of::<HashedDiskHeader>()
+            + size_of::<Metadata>()) as u64;
+        assert_eq!(store.size_on_disk().unwrap(), baseline);
+
+        // Vary each preallocated field; check the per-field delta so any
+        // dropped or miscounted summand in `size_on_disk` fails here.
+        let bigger_index = make_sized_store(65_536, 32_768, 16_384);
+        assert_eq!(
+            bigger_index.size_on_disk().unwrap() - baseline,
+            (32_768 * size_of::<u32>()) as u64,
+        );
+
+        let bigger_headers = make_sized_store(32_768, 65_536, 16_384);
+        assert_eq!(
+            bigger_headers.size_on_disk().unwrap() - baseline,
+            (32_768 * size_of::<HashedDiskHeader>()) as u64,
+        );
+
+        let bigger_fork = make_sized_store(32_768, 32_768, 32_768);
+        assert_eq!(
+            bigger_fork.size_on_disk().unwrap() - baseline,
+            (16_384 * size_of::<HashedDiskHeader>()) as u64,
+        );
+
+        // Accumulator file is the only dynamic component; grows by payload.
+        let genesis = genesis_block(Network::Regtest);
+        store
+            .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
+            .unwrap();
+        store.update_block_index(0, genesis.block_hash()).unwrap();
+
+        let acc = vec![0xab; 64];
+        store.save_roots_for_block(acc.clone(), 0).unwrap();
+        assert_eq!(store.size_on_disk().unwrap(), baseline + acc.len() as u64);
+
+        // Cumulative append at height 1.
+        let mut next = genesis.header;
+        next.prev_blockhash = genesis.block_hash();
+        store
+            .save_header(&DiskBlockHeader::FullyValid(next, 1))
+            .unwrap();
+        store.update_block_index(1, next.block_hash()).unwrap();
+
+        let acc2 = vec![0xcd; 32];
+        let pre_second = store.size_on_disk().unwrap();
+        store.save_roots_for_block(acc2.clone(), 1).unwrap();
+        assert_eq!(
+            store.size_on_disk().unwrap(),
+            pre_second + acc2.len() as u64,
+        );
     }
 
     #[test]
