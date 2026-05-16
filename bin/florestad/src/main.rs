@@ -42,6 +42,7 @@ use tracing::Level;
 #[cfg(unix)]
 use crate::daemonize::Daemon;
 use crate::logger::start_logger;
+use crate::logger::LOG_FILE;
 
 fn main() {
     let params = Cli::parse();
@@ -55,6 +56,9 @@ fn main() {
         eprintln!("Could not create data dir {data_dir:?}: {e}");
         exit(1);
     });
+
+    let debug_log_file =
+        resolve_debug_log_file(params.nodebuglogfile, params.debuglogfile.as_deref(), &data_dir);
 
     let config = Config {
         data_dir,
@@ -71,10 +75,7 @@ fn main() {
         log_to_stdout: !params.daemon,
         #[cfg(not(unix))]
         log_to_stdout: true,
-        #[cfg(unix)]
-        log_to_file: params.log_to_file || params.daemon,
-        #[cfg(not(unix))]
-        log_to_file: params.log_to_file,
+        debug_log_file,
         assume_valid: params.assume_valid,
         #[cfg(feature = "zmq-server")]
         zmq_address: params.zmq_address,
@@ -111,8 +112,7 @@ fn main() {
 
     // The guard must stay alive until the end of `main` to flush file logs when dropped.
     let _logger_guard = start_logger(
-        &config.data_dir,
-        config.log_to_file,
+        config.debug_log_file.as_deref(),
         config.log_to_stdout,
         log_level,
     );
@@ -189,6 +189,33 @@ fn data_dir_path(dir: Option<String>, network: Network) -> String {
     base.to_string_lossy().into_owned()
 }
 
+/// Resolves the debug log file path from the CLI flags.
+///
+/// File logging is enabled by default (matching Bitcoin Core). The user can:
+///   - Override the path with `--debuglogfile=<path>`
+///   - Disable file logging entirely with `--nodebuglogfile`
+///
+/// Relative paths are prefixed by the net-specific `data_dir`.
+/// Returns `None` when file logging is disabled, or `Some(absolute_path)` otherwise.
+fn resolve_debug_log_file(
+    no_debug_log_file: bool,
+    debug_log_file: Option<&str>,
+    data_dir: &str,
+) -> Option<String> {
+    if no_debug_log_file {
+        return None;
+    }
+
+    let raw = debug_log_file.unwrap_or(LOG_FILE);
+    let path = PathBuf::from(raw);
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        PathBuf::from(data_dir).join(path)
+    };
+    Some(absolute.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +261,66 @@ mod tests {
                 expected.display().to_string(),
             );
         }
+    }
+
+    /// Default: no flags → file logging enabled at `<data_dir>/debug.log`.
+    #[test]
+    fn test_resolve_debug_log_file_default() {
+        let result = resolve_debug_log_file(false, None, "/home/user/.floresta");
+        let expected = PathBuf::from("/home/user/.floresta").join(LOG_FILE);
+        assert_eq!(result, Some(expected.to_string_lossy().into_owned()));
+    }
+
+    /// `--nodebuglogfile` → file logging disabled.
+    #[test]
+    fn test_resolve_debug_log_file_disabled() {
+        let result = resolve_debug_log_file(true, None, "/home/user/.floresta");
+        assert_eq!(result, None);
+    }
+
+    /// `--nodebuglogfile` overrides `--debuglogfile`.
+    #[test]
+    fn test_resolve_debug_log_file_disabled_overrides_custom() {
+        let result =
+            resolve_debug_log_file(true, Some("custom.log"), "/home/user/.floresta");
+        assert_eq!(result, None);
+    }
+
+    /// `--debuglogfile custom.log` (relative) → `<data_dir>/custom.log`.
+    #[test]
+    fn test_resolve_debug_log_file_relative_path() {
+        let result =
+            resolve_debug_log_file(false, Some("custom.log"), "/home/user/.floresta");
+        let expected = PathBuf::from("/home/user/.floresta").join("custom.log");
+        assert_eq!(result, Some(expected.to_string_lossy().into_owned()));
+    }
+
+    /// `--debuglogfile /tmp/floresta.log` (absolute) → used as-is.
+    #[test]
+    fn test_resolve_debug_log_file_absolute_path() {
+        let result = resolve_debug_log_file(
+            false,
+            Some("/tmp/floresta.log"),
+            "/home/user/.floresta",
+        );
+        assert_eq!(result, Some("/tmp/floresta.log".to_string()));
+    }
+
+    /// Relative path with subdirectory: `--debuglogfile logs/node.log`.
+    #[test]
+    fn test_resolve_debug_log_file_relative_subdir() {
+        let result =
+            resolve_debug_log_file(false, Some("logs/node.log"), "/home/user/.floresta");
+        let expected = PathBuf::from("/home/user/.floresta").join("logs/node.log");
+        assert_eq!(result, Some(expected.to_string_lossy().into_owned()));
+    }
+
+    /// Works correctly with a network-specific data directory (e.g. signet).
+    #[test]
+    fn test_resolve_debug_log_file_network_specific_datadir() {
+        let data_dir = data_dir_path(Some("/home/user/.floresta".into()), Network::Signet);
+        let result = resolve_debug_log_file(false, None, &data_dir);
+        let expected = PathBuf::from("/home/user/.floresta/signet").join(LOG_FILE);
+        assert_eq!(result, Some(expected.to_string_lossy().into_owned()));
     }
 }
