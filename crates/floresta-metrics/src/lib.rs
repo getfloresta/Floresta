@@ -17,6 +17,7 @@ pub struct AppMetrics {
     pub memory_usage: Gauge<f64, AtomicU64>,
     pub block_height: Gauge,
     pub peer_count: Gauge<f64, AtomicU64>,
+    pub utreexo_peer_count: Gauge<f64, AtomicU64>,
     pub avg_block_processing_time: Gauge<f64, AtomicU64>,
     pub message_times: Histogram,
 }
@@ -27,6 +28,7 @@ impl AppMetrics {
         let memory_usage = Gauge::<f64, AtomicU64>::default();
         let block_height = Gauge::default();
         let peer_count = Gauge::<f64, AtomicU64>::default();
+        let utreexo_peer_count = Gauge::<f64, AtomicU64>::default();
         let avg_block_processing_time = Gauge::<f64, AtomicU64>::default();
         let message_times = Histogram::new([0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]);
 
@@ -35,6 +37,11 @@ impl AppMetrics {
             "peer_count",
             "Number of connected peers",
             peer_count.clone(),
+        );
+        registry.register(
+            "utreexo_peer_count",
+            "Number of connected utreexo peers",
+            utreexo_peer_count.clone(),
         );
 
         registry.register(
@@ -60,6 +67,7 @@ impl AppMetrics {
             block_height,
             memory_usage,
             peer_count,
+            utreexo_peer_count,
             avg_block_processing_time,
             message_times,
         }
