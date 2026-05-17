@@ -157,10 +157,45 @@
       }
     },
     {
+      "type": "stat",
+      "title": "Utreexo Peer Count",
+      "description": "Number of peers that support the Utreexo protocol. At least 2 are required for block download.",
+      "id": 13,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 7 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        { "expr": "max(utreexo_peer_count{instance=~\"$instance\"})", "legendFormat": "utreexo peers", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+    {
       "type": "row",
       "title": "Network",
       "id": 101,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
       "collapsed": false
     },
     {

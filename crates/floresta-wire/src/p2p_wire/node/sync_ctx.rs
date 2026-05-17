@@ -162,6 +162,12 @@ where
             self.maybe_disconnect_slowest_peer(protected_services, always_disconnect)?;
         }
 
+        #[cfg(feature = "metrics")]
+        {
+            use metrics::get_metrics;
+            get_metrics().utreexo_peer_count.set(utreexo_peers as f64);
+        }
+
         if needs_utreexo {
             info!("Not enough utreexo peers (we have {utreexo_peers}), opening a new connection");
             self.maybe_open_connection(service_flags::UTREEXO.into())?;
