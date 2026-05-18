@@ -36,6 +36,7 @@ pub use p2p_wire::node_context;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::node_interface;
 pub use p2p_wire::transport::TransportProtocol;
+pub use p2p_wire::BackfillStatusHandle;
 pub use p2p_wire::UtreexoNodeConfig;
 
 /// NodeHooks is a trait that defines the hooks that a node can use to interact with the network

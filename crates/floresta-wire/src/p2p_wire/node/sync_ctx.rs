@@ -240,6 +240,13 @@ where
             .expect("best block should present")
             .0;
 
+        // Update shared backfill status so the RPC layer can report progress
+        if let Some(ref handle) = self.config.backfill_status {
+            if let Ok(mut status) = handle.write() {
+                status.current_height = validation_index;
+            }
+        }
+
         if validation_index == best_block {
             info!("IBD is finished, switching to normal operation mode");
             self.chain.toggle_ibd(false);

@@ -33,6 +33,12 @@ pub struct GetBlockchainInfoRes {
     pub difficulty: u64,
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct IndexInfo {
+    pub synced: bool,
+    pub best_block_height: u32,
+}
+
 /// A confidence enum to auxiliate rescan timestamp values.
 ///
 /// Serves to tell how much confidence you need in such a rescan request. That is, the need for a high confidence rescan

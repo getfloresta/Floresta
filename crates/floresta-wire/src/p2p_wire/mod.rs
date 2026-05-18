@@ -4,9 +4,27 @@
 //! backed by p2p Bitcoin's p2p network.
 
 use core::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use bitcoin::Network;
 use floresta_chain::AssumeUtreexoValue;
+
+/// Shared progress state for the backfill task, allowing external components
+/// (like the RPC server) to query backfill sync progress.
+#[derive(Debug, Clone, Default)]
+pub struct BackfillStatus {
+    /// The current height the backfill task has validated up to.
+    pub current_height: u32,
+    /// The target height the backfill task needs to reach.
+    pub target_height: u32,
+    /// Whether the backfill task has completed.
+    pub done: bool,
+}
+
+/// A thread-safe handle to the backfill status, shared between the backfill
+/// task and any component that wants to read progress (e.g., RPC server).
+pub type BackfillStatusHandle = Arc<RwLock<BackfillStatus>>;
 
 #[derive(Debug, Clone)]
 /// Configuration for the Utreexo node.
@@ -65,6 +83,9 @@ pub struct UtreexoNodeConfig {
     pub allow_v1_fallback: bool,
     /// Whether to disable DNS seeds. Defaults to false.
     pub disable_dns_seeds: bool,
+    /// Shared handle to observe backfill progress from outside the wire layer.
+    /// Set automatically when the backfill task starts.
+    pub backfill_status: Option<BackfillStatusHandle>,
 }
 
 impl Default for UtreexoNodeConfig {
@@ -83,6 +104,7 @@ impl Default for UtreexoNodeConfig {
             filter_start_height: None,
             user_agent: format!("floresta:{}", env!("CARGO_PKG_VERSION")),
             allow_v1_fallback: true,
+            backfill_status: None,
         }
     }
 }

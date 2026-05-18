@@ -29,6 +29,8 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::p2p_wire::BackfillStatus;
+
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
 use crate::node::sync_ctx::SyncNode;
@@ -190,11 +192,11 @@ where
     /// running normally. If we ever assume an invalid chain, the node will [halt and catch fire].
     ///
     /// [halt and catch fire]: https://en.wikipedia.org/wiki/Halt_and_Catch_Fire_(computing)
-    pub fn backfill(&self, done_flag: std::sync::mpsc::Sender<()>) -> Result<bool, WireError> {
+    pub fn backfill(&mut self, done_flag: std::sync::mpsc::Sender<()>) -> Result<bool, WireError> {
         // try finding the last state of the sync node
         let state = std::fs::read(self.config.datadir.clone() + "/.sync_node_state");
         // try to recover from the disk state, if it exists. Otherwise, start from genesis
-        let (chain, end) = match state {
+        let (chain, start, end) = match state {
             Ok(state) => {
                 // if this file is empty, this means we've finished backfilling
                 if state.is_empty() {
@@ -215,6 +217,7 @@ where
                     self.chain
                         .get_partial_chain(tip, end, acc)
                         .expect("Failed to get partial chain"),
+                    tip,
                     end,
                 )
             }
@@ -228,13 +231,37 @@ where
                     self.chain
                         .get_partial_chain(0, end, Stump::default())
                         .unwrap(),
+                    0,
                     end,
                 )
             }
         };
 
+        // Initialize backfill status so the RPC layer can observe progress
+        let status = self
+            .config
+            .backfill_status
+            .get_or_insert_with(|| {
+                std::sync::Arc::new(std::sync::RwLock::new(BackfillStatus::default()))
+            })
+            .clone();
+
+        {
+            let mut s = status.write().expect("backfill status lock poisoned");
+            s.current_height = start;
+            s.target_height = end;
+            s.done = false;
+        }
+
+        let backfill_config = self.config.clone();
+        // Clear the handle from the main node's config so that only the
+        // backfill SyncNode writes to it.  Without this, the main node's
+        // catch-up SyncNode would overwrite backfill progress in its own
+        // maintenance_tick.
+        self.config.backfill_status = None;
+
         let backfill = UtreexoNode::<PartialChainState, SyncNode>::new(
-            self.config.clone(),
+            backfill_config,
             chain,
             self.mempool.clone(),
             None,
@@ -265,6 +292,9 @@ where
                     ser_acc.extend_from_slice(&end.to_le_bytes());
                     std::fs::write(datadir + "/.sync_node_state", ser_acc)
                         .expect("Failed to write sync node state");
+
+                    let mut s = status.write().expect("backfill status lock poisoned");
+                    s.current_height = tip;
                     return;
                 }
 
@@ -277,6 +307,10 @@ where
                         .mark_block_as_valid(block.block_hash())
                         .expect("Failed to mark block as valid");
                 }
+
+                let mut s = status.write().expect("backfill status lock poisoned");
+                s.current_height = end;
+                s.done = true;
 
                 info!("Backfilling task shutting down...");
             },

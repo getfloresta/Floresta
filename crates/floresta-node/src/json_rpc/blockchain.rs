@@ -25,9 +25,12 @@ use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
 
+use std::collections::HashMap;
+
 use super::res::GetBlockHeaderRes;
 use super::res::GetBlockchainInfoRes;
 use super::res::GetTxOutProof;
+use super::res::IndexInfo;
 use super::res::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
@@ -270,6 +273,56 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             difficulty: latest_header.difficulty(self.chain.get_params()) as u64,
             progress: validated_percentage,
         })
+    }
+
+    // getindexinfo
+    pub(super) fn get_index_info(
+        &self,
+        index_name: Option<String>,
+    ) -> Result<HashMap<String, IndexInfo>, JsonRpcError> {
+        let mut indices = HashMap::new();
+        let chain_height = self.chain.get_height().map_err(|_| JsonRpcError::Chain)?;
+
+        // Block filter index (optional)
+        if let Some(ref cfilters) = self.block_filter_storage {
+            let filter_height = cfilters
+                .get_height()
+                .map_err(|e| JsonRpcError::Filters(e.to_string()))?;
+            indices.insert(
+                "block_filter".to_string(),
+                IndexInfo {
+                    synced: filter_height >= chain_height,
+                    best_block_height: filter_height,
+                },
+            );
+        }
+
+        // Backfill index (only present when backfill is enabled)
+        if let Some(ref handle) = self.backfill_status {
+            if let Ok(status) = handle.read() {
+                indices.insert(
+                    "backfill".to_string(),
+                    IndexInfo {
+                        synced: status.done,
+                        best_block_height: status.current_height,
+                    },
+                );
+            }
+        }
+
+        // Filter by name if requested
+        if let Some(name) = index_name {
+            return Ok(indices
+                .remove(&name)
+                .map(|info| {
+                    let mut m = HashMap::new();
+                    m.insert(name, info);
+                    m
+                })
+                .unwrap_or_default());
+        }
+
+        Ok(indices)
     }
 
     // getblockcount
