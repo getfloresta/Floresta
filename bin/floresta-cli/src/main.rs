@@ -57,6 +57,9 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
     Ok(match cmd.methods.clone() {
         // Handle each possible RPC method and serialize the result to a pretty JSON string
         Methods::GetBlockchainInfo => serde_json::to_string_pretty(&client.get_blockchain_info()?)?,
+        Methods::GetIndexInfo { index_name } => {
+            serde_json::to_string_pretty(&client.get_index_info(index_name)?)?
+        }
         Methods::GetBlockHash { height } => {
             serde_json::to_string_pretty(&client.get_block_hash(height)?)?
         }
@@ -172,6 +175,18 @@ pub enum Methods {
         disable_help_subcommand = true
     )]
     GetBlockchainInfo,
+
+    #[doc = include_str!("../../../doc/rpc/getindexinfo.md")]
+    #[command(
+        name = "getindexinfo",
+        about = "Returns the status of one or all available indices.",
+        long_about = Some(include_str!("../../../doc/rpc/getindexinfo.md")),
+        disable_help_subcommand = true
+    )]
+    GetIndexInfo {
+        /// Filter results for an index with a specific name.
+        index_name: Option<String>,
+    },
 
     #[doc = include_str!("../../../doc/rpc/getblockhash.md")]
     #[command(

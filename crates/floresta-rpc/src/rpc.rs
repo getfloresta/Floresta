@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::fmt::Debug;
+use std::collections::HashMap;
 use std::vec;
 
 use bitcoin::BlockHash;
@@ -143,6 +144,8 @@ pub trait FlorestaRPC {
     fn list_descriptors(&self) -> Result<Vec<String>>;
     /// Sends a ping to all peers, checking if they are still alive
     fn ping(&self) -> Result<()>;
+    #[doc = include_str!("../../../doc/rpc/getindexinfo.md")]
+    fn get_index_info(&self, index_name: Option<String>) -> Result<HashMap<String, IndexInfo>>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -346,5 +349,12 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn ping(&self) -> Result<()> {
         self.call("ping", &[])
+    }
+
+    fn get_index_info(&self, index_name: Option<String>) -> Result<HashMap<String, IndexInfo>> {
+        match index_name {
+            Some(name) => self.call("getindexinfo", &[Value::String(name)]),
+            None => self.call("getindexinfo", &[]),
+        }
     }
 }

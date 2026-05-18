@@ -58,6 +58,16 @@ pub struct GetBlockchainInfoRes {
     pub difficulty: u64,
 }
 
+/// Information about a single index, as returned by `getindexinfo`.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct IndexInfo {
+    /// Whether this index is fully synced to the chain tip
+    pub synced: bool,
+
+    /// The height of the best block this index has processed
+    pub best_block_height: u32,
+}
+
 /// The information returned by a get_raw_tx
 #[derive(Deserialize, Serialize)]
 pub struct RawTx {
