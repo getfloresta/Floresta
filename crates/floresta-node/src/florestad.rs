@@ -39,6 +39,7 @@ use floresta_wire::address_man::AddressMan;
 use floresta_wire::address_man::SUPPORTED_NETWORKS;
 use floresta_wire::node::running_ctx::RunningNode;
 use floresta_wire::node::UtreexoNode;
+use floresta_wire::BackfillStatusHandle;
 use floresta_wire::UtreexoNodeConfig;
 use rcgen::BasicConstraints;
 use rcgen::CertificateParams;
@@ -407,6 +408,12 @@ impl Florestad {
             .map(|addr| Self::resolve_hostname(addr, 9050))
             .transpose()?;
 
+        let backfill_status = if self.config.backfill {
+            Some(BackfillStatusHandle::default())
+        } else {
+            None
+        };
+
         let config = UtreexoNodeConfig {
             disable_dns_seeds: self.config.disable_dns_seeds,
             network: self.config.network,
@@ -420,6 +427,7 @@ impl Florestad {
             filter_start_height: self.config.filters_start_height,
             user_agent: self.config.user_agent.clone(),
             allow_v1_fallback: self.config.allow_v1_fallback,
+            backfill_status: backfill_status.clone(),
             ..Default::default()
         };
 
@@ -474,6 +482,7 @@ impl Florestad {
                     .map(|x| Self::resolve_hostname(x, 8332))
                     .transpose()?,
                 format!("{data_dir}/debug.log"),
+                backfill_status,
             ));
 
             if self.json_rpc.set(server).is_err() {

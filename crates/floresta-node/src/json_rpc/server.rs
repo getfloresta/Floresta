@@ -34,6 +34,7 @@ use floresta_watch_only::kv_database::KvDatabase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_wire::node_interface::NodeInterface;
+use floresta_wire::BackfillStatusHandle;
 use serde_json::json;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -81,6 +82,7 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    pub(super) backfill_status: Option<BackfillStatusHandle>,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -233,6 +235,13 @@ async fn handle_json_rpc_request(
         "getblockchaininfo" => state
             .get_blockchain_info()
             .map(|v| serde_json::to_value(v).unwrap()),
+
+        "getindexinfo" => {
+            let index_name = get_optional_field(&params, 0, "index_name", get_string)?;
+            state
+                .get_index_info(index_name)
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
 
         "getblockcount" => state
             .get_block_count()
@@ -735,6 +744,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
+        backfill_status: Option<BackfillStatusHandle>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -775,6 +785,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                backfill_status,
             }));
 
         axum::serve(listener, router)
