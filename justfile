@@ -57,7 +57,7 @@ test-functional-uv-fmt:
 
 # Run the functional tests
 test-functional arg="":
-    bash tests/run_functional.sh {{ arg }}
+    uv run pytest {{ arg }}
 
 # Run the benchmarks
 bench:

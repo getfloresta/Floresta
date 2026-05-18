@@ -43,7 +43,7 @@ jobs:
 
       - name: Run functional tests
         run: |
-          tests/run_functional.sh --release
+          uv run pytest
 
       - name: Log tests on failure
         if: failure()

@@ -66,8 +66,8 @@ Next sections will cover the Python functional tests.
 We provide three way for running functional tests:
 
 - from `just` tool that abstracts what is necessary to run the tests before doing a commit;
-- from the helper script — [run_functional.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run_functional.sh) — to automatically build and run the tests;
-- from python utility directly: the most laborious, but you can run a specific test suite.
+- from `uv run pytest` directly — the test framework auto-builds all required binaries on first run;
+- from the helper script — [run_functional.sh](https://github.com/getfloresta/Floresta/blob/master/tests/run_functional.sh) — a shell wrapper that also handles setup and test execution.
 
 #### From `just` tool
 
@@ -165,115 +165,36 @@ Furthermore, you can run a set of specific tests, rather than all at once.
 ./tests/run_functional.sh -t floresta-cli -k getblock
 ```
 
-#### From python utility directly
+#### From pytest directly
 
-Additional functional tests are available (minimum python version: 3.12).
-It's not recommended to run them directly, since you will need to manually
-build the binaries yourself and place them at `$FLORESTA_TEMP_DIR/binaries`.
-The advantage is that you can run a specific test suite. For this you'll need to:
-
-- Setup `floresta`/`utreexod` environment;
-- Setup python utility;
-- Run tests from python utility directly;
-- Clean up the environment.
-
-##### Setup `floresta`/`utreexod` environment
-
-After build the `floresta` and `utreexod` binaries, you'll need to define
-a `FLORESTA_TEMP_DIR` environment variable. This variable points to where
-our functional tests will look for the binaries.
-
-##### Setup python utility
-
-- Recommended: install [uv: a rust-based python package and project manager](https://docs.astral.sh/uv/).
-
-- Configure an isolated environment:
+The test framework auto-builds all required binaries (florestad, utreexod, bitcoind) on first run via `conftest.py`. You just need `uv` installed:
 
 ```bash
-# create a virtual environment
-# (it's good to not mess up with your os)
-uv venv
-
-# Alternatively, you can specify a python version (e.g, 3.12),
-uv venv --python 3.12
-
-# activate the python virtual environment
-source .venv/bin/activate
-
-# check if the python path was modified
-which python
+uv run pytest
 ```
 
-- Install module dependencies:
+To run a specific test suite:
 
 ```bash
-# installs dependencies listed in pyproject.toml.
-# in local development environment
-# it do not remove existing packages.
-uv pip install -r pyproject.toml
-
-# if you're a old-school pythonist,
-# install from requirements.txt
-# without remove existing packages.
-uv pip install -r tests/requirements.txt
-
-# Alternatively, you can synchronize it
-# uses the uv.lock file to enforce
-# reproducible installations.
-uv sync
+uv run pytest tests/floresta-cli/
 ```
 
-- Format code
+To run a specific test:
 
 ```bash
-uv run black ./tests
-
-# if you want to just check
-uv run black --check --verbose ./tests
-```
-
-- Lint code
-
-```bash
-uv run pylint ./tests
-```
-
-##### Run tests from python utility directly
-
-Our tests are separated by "test suites". Suites are folders located in `./tests/<suite>` and the tests are the `./tests/<suite>/*-test.py` files. To run all suites, type:
-
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py
-```
-
-You can list all suites with:
-
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py --list-suites
-```
-
-To run a specific suite:
-
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py --test-suite <suite>
-```
-
-You can even add more:
-
-```bash
-FLORESTA_TEMP_DIR=<your_bin_dir> uv run tests/test_runner.py --test-suite <suite_A> --test-suite <suite_B>
+uv run pytest tests/floresta-cli/stop.py
 ```
 
 ##### Clean up the environment
 
-If you tests fails it will be necessary to cleanup the `data`
+If your tests fail it will be necessary to cleanup the `data`
 folder created by the tests (some tests use it to retain
 information about tested nodes, like the `addnode` command).
 
 You can do this by running:
 
 ```bash
-rm -rf FLORESTA_TEMP_DIR/data
+rm -rf $FLORESTA_TEMP_DIR/data
 ```
 
 ### Running/Developing Functional Tests with Nix
