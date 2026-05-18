@@ -2,30 +2,77 @@
 
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+# Prepare binaries and run functional tests.
+#
+# This script:
+# 1. Checks build dependencies
+# 2. Builds florestad, utreexod, and bitcoind (if needed)
+# 3. Runs the functional test suite via uv
+#
+# Environment variables:
+#   BITCOIN_REVISION    - Bitcoin Core version to build/download (default: 30.2)
+#   BUILD_BITCOIND_NPROCS - parallel jobs for bitcoind build (default: 4)
+#   FLORESTA_TEMP_DIR   - override the temp directory (default: /tmp/floresta-func-tests)
+#   BITCOIND_EXE        - path to a user-provided bitcoind binary
+#
+# Flags:
+#   --build             - force rebuilding utreexod/bitcoind even if present
+#   --release           - build florestad in release mode (default: debug)
+#   --preserve-data-dir - keep data/logs after a successful run
+
 set -e
 
-# Parse CLI flags:
-# --build    : force rebuilding utreexod/bitcoind even if present
-# --release  : build florestad in release mode (default: debug)
+# ---------------------------------------------------------------------------
+# Parse CLI flags
+# ---------------------------------------------------------------------------
 FORCE_BUILD=0
 BUILD_RELEASE=0
-for ARG in "$@"; do
-    case "$ARG" in
-        --build) FORCE_BUILD=1 ;;
-        --release) BUILD_RELEASE=1 ;;
-        *) ;;
+PRESERVE_DATA=false
+PYTEST_ARGS=()
+
+for arg in "$@"; do
+    case "$arg" in
+    --build) FORCE_BUILD=1 ;;
+    --release) BUILD_RELEASE=1 ;;
+    --preserve-data-dir) PRESERVE_DATA=true ;;
+    *) PYTEST_ARGS+=("$arg") ;;
     esac
 done
 
+# ---------------------------------------------------------------------------
+# Dependency checks
+# ---------------------------------------------------------------------------
+check_installed() {
+    if ! command -v "$1" &>/dev/null; then
+        echo "You must have $1 installed to run those tests!"
+        exit 1
+    fi
+}
+
+check_installed git
+check_installed cargo
+check_installed go
+check_installed uv
+
+# ---------------------------------------------------------------------------
+# Environment setup
+# ---------------------------------------------------------------------------
 BITCOIN_REVISION="${BITCOIN_REVISION:-30.2}"
-# We need for the current dir to be the root dir of the project.
 FLORESTA_PROJ_DIR=$(git rev-parse --show-toplevel)
-TEMP_DIR="${FLORESTA_TEMP_DIR:-/tmp/floresta-func-tests}"
-BINARIES_DIR="$TEMP_DIR/binaries"
+
+if [[ -z "$FLORESTA_TEMP_DIR" ]]; then
+    export FLORESTA_TEMP_DIR="/tmp/floresta-func-tests"
+fi
+
+BINARIES_DIR="$FLORESTA_TEMP_DIR/binaries"
 # Dont use mktemp so we can have deterministic results for each version of floresta.
 mkdir -p "$BINARIES_DIR"
 
 BINARIES_DIR="$(cd "$BINARIES_DIR" && pwd)"
+
+# ---------------------------------------------------------------------------
+# Build helpers
+# ---------------------------------------------------------------------------
 
 # Create a temporary disposable directory, switch to it, and ensure it is removed on function exit
 create_disposable_dir() {
@@ -34,13 +81,6 @@ create_disposable_dir() {
     echo "$DISPOSABLE_DIR"
     # Change to the disposable directory
     pushd "$DISPOSABLE_DIR" >/dev/null
-}
-
-check_installed() {
-    if ! command -v "$1" &>/dev/null; then
-        echo "You must have $1 installed to run those tests!"
-        exit 1
-    fi
 }
 
 # Check for a C++ compiler
@@ -86,31 +126,37 @@ download_prebuilt_bitcoind() {
 
     # Map uname -> platform name used by Bitcoin Core distribution filenames
     case "$UNAME_S" in
-        Linux)
-            case "$UNAME_M" in
-                x86_64) PLATFORM="x86_64-linux-gnu" ;;
-                aarch64|arm64) PLATFORM="aarch64-linux-gnu" ;;
-                armv7l) PLATFORM="arm-linux-gnueabihf" ;;
-                *) echo "Unsupported architecture for prebuilt bitcoind: $UNAME_M"; return 1 ;;
-            esac
-            FILE_EXT="tar.gz"
-            ;;
-        Darwin)
-            case "$UNAME_M" in
-                x86_64) PLATFORM="x86_64-apple-darwin" ;;
-                aarch64|arm64) PLATFORM="arm64-apple-darwin" ;;
-                *) echo "Unsupported architecture for prebuilt bitcoind on macOS: $UNAME_M"; return 1 ;;
-            esac
-            FILE_EXT="tar.gz"
-            ;;
-        MINGW*|MSYS*|CYGWIN*|Windows_NT)
-            PLATFORM="win64"
-            FILE_EXT="zip"
-            ;;
+    Linux)
+        case "$UNAME_M" in
+        x86_64) PLATFORM="x86_64-linux-gnu" ;;
+        aarch64 | arm64) PLATFORM="aarch64-linux-gnu" ;;
+        armv7l) PLATFORM="arm-linux-gnueabihf" ;;
         *)
-            echo "Unsupported OS for prebuilt bitcoind: $UNAME_S"
+            echo "Unsupported architecture for prebuilt bitcoind: $UNAME_M"
             return 1
             ;;
+        esac
+        FILE_EXT="tar.gz"
+        ;;
+    Darwin)
+        case "$UNAME_M" in
+        x86_64) PLATFORM="x86_64-apple-darwin" ;;
+        aarch64 | arm64) PLATFORM="arm64-apple-darwin" ;;
+        *)
+            echo "Unsupported architecture for prebuilt bitcoind on macOS: $UNAME_M"
+            return 1
+            ;;
+        esac
+        FILE_EXT="tar.gz"
+        ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT)
+        PLATFORM="win64"
+        FILE_EXT="zip"
+        ;;
+    *)
+        echo "Unsupported OS for prebuilt bitcoind: $UNAME_S"
+        return 1
+        ;;
     esac
 
     FILE_NAME="bitcoin-${BITCOIN_REVISION}-${PLATFORM}.${FILE_EXT}"
@@ -219,7 +265,7 @@ build_bitcoind_from_source() {
             --without-gui \
             --disable-tests \
             --disable-bench \
-        make_nprocs="${BUILD_BITCOIND_NPROCS:-4}" || exit 1
+            make_nprocs="${BUILD_BITCOIND_NPROCS:-4}" || exit 1
         make -j"$(make_nprocs)" || exit 1
         mv "$DISPOSABLE_DIR/bitcoin/src/bitcoind" "$BINARIES_DIR/bitcoind" || exit 1
     fi
@@ -286,10 +332,9 @@ build_floresta() {
     ln -fs "$(pwd)/target/${PROFILE}/florestad" "$BINARIES_DIR/florestad"
 }
 
-check_installed git
-check_installed cargo
-check_installed go
-
+# ---------------------------------------------------------------------------
+# Prepare phase
+# ---------------------------------------------------------------------------
 build_floresta
 
 # Check if utreexod is already built or if --build is passed
@@ -306,8 +351,20 @@ else
     echo "Bitcoind already built/downloaded, skipping..."
 fi
 
-echo "All done!"
+echo "All binaries ready at $BINARIES_DIR"
 
-echo "Temporary Directory at $TEMP_DIR"
+# ---------------------------------------------------------------------------
+# Run phase
+# ---------------------------------------------------------------------------
 
-exit 0
+# Clean existing data directories before running the tests
+rm -rf "$FLORESTA_TEMP_DIR/data"
+
+# Clean up the logs dir if --preserve-data-dir was not passed
+if [ "$PRESERVE_DATA" = false ]; then
+    echo "Cleaning up test directories before running tests..."
+    rm -rf "$FLORESTA_TEMP_DIR/logs"
+fi
+
+# Run the tests
+uv run pytest "${PYTEST_ARGS[@]}"
