@@ -926,6 +926,7 @@ mod tests {
     use bitcoin::absolute::LockTime;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::consensus::encode::serialize_hex;
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use bitcoin::opcodes::all::OP_NOP;
@@ -1006,6 +1007,17 @@ mod tests {
         OutPoint {
             txid: Txid::all_zeros(),
             vout: 0,
+        }
+    }
+
+    /// Phase 3.1 stub helper: build a transaction with an explicit version (for bitasset v10/v11/v12 testing).
+    /// All other fields match the original `build_tx` (zero locktime).
+    fn build_tx_with_version(version: Version, input: Vec<TxIn>, output: Vec<TxOut>) -> Transaction {
+        Transaction {
+            version,
+            lock_time: LockTime::ZERO,
+            input,
+            output,
         }
     }
 
@@ -1762,5 +1774,107 @@ mod tests {
         assert_eq!(consensus.max_supply_at_height(13_444_444), max_coins);
         assert_eq!(consensus.max_supply_at_height(1_300_440_000), max_coins);
         assert_eq!(consensus.max_supply_at_height(u32::MAX - 1), max_coins);
+    }
+
+    // =====================================================================
+    // Phase 3.1: First safe incremental piece — high-version (v10/v11/v12)
+    // transaction parsing stub + unit tests.
+    //
+    // These tests prove that the existing bitcoin::Transaction deserialization
+    // and the Floresta consensus paths (check_transaction_context_free,
+    // verify_block_transactions, etc.) accept bitasset-style transaction
+    // versions without crashing or spuriously rejecting. No production code
+    // paths were altered; this is purely additive test coverage.
+    //
+    // The versions 10-12 are used by plain-bitassets for asset issuance,
+    // transfers, DEX orders, auctions, etc. on the bitassets signet.
+    // =====================================================================
+
+    /// Constructs a minimal valid (non-coinbase) transaction with the given version
+    /// that will pass `check_transaction_context_free`.
+    fn make_minimal_high_version_tx(version: Version) -> Transaction {
+        let outpoint = dummy_outpoint();
+        let ins = vec![txin!(outpoint)];
+        let outs = vec![txout!(1_000, ScriptBuf::new())];
+        build_tx_with_version(version, ins, outs)
+    }
+
+    #[test]
+    fn test_high_version_bitasset_txs_roundtrip_serialization() {
+        for v in [10i32, 11, 12] {
+            let tx = make_minimal_high_version_tx(Version(v));
+            let hex = serialize_hex(&tx);
+            let decoded: Transaction = deserialize_hex(&hex).expect("deserialize of v{v} tx must succeed");
+            assert_eq!(decoded.version, Version(v), "version must roundtrip for bitasset tx v{}", v);
+            assert_eq!(decoded.input.len(), 1);
+            assert_eq!(decoded.output.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_high_version_bitasset_txs_pass_context_free_validation() {
+        for v in [10i32, 11, 12] {
+            let tx = make_minimal_high_version_tx(Version(v));
+            // Must not panic and must return the sole output value.
+            let out_value = Consensus::check_transaction_context_free(&tx)
+                .expect("high-version tx must pass context-free checks (no version gate exists)");
+            assert_eq!(out_value, Amount::from_sat(1_000));
+        }
+    }
+
+    #[test]
+    fn test_high_version_bitasset_tx_in_verify_block_transactions() {
+        // Build a *valid* coinbase (scriptSig between 2-100 bytes) + a v12 spend.
+        // This exercises the full verify_block_transactions path used by ChainState
+        // and proves that high-version non-coinbase txs are accepted inside blocks.
+        let coinbase = {
+            // Minimal valid coinbase scriptSig (7 bytes, as used in other tests in this file)
+            let script_sig = ScriptBuf::from_hex("03f0a2a4d9f0a2").unwrap();
+            let ins = vec![txin!(OutPoint::null(), script_sig)];
+            let outs = vec![txout!(50_000_000, ScriptBuf::new())];
+            build_tx_with_version(Version::ONE, ins, outs)
+        };
+        let spend_outpoint = OutPoint {
+            txid: coinbase.compute_txid(),
+            vout: 0,
+        };
+        let spend = make_minimal_high_version_tx_with_outpoint(Version(12), spend_outpoint);
+
+        // Prepare utxo map as the consensus verifier expects
+        let mut utxos = HashMap::new();
+        utxos.insert(
+            spend_outpoint,
+            UtxoData {
+                txout: coinbase.output[0].clone(),
+                is_coinbase: true,
+                creation_height: 0,
+                creation_time: 0,
+            },
+        );
+
+        // This is the same call chain used during real block connection (minus Utreexo proof).
+        // Use height >= 100 so the coinbase output is considered mature.
+        let result = Consensus::verify_block_transactions(
+            200,
+            utxos,
+            &[coinbase, spend],
+            Amount::from_sat(50_000_000),
+            false, // no script verification for this stub test
+            0,
+        );
+
+        assert!(
+            result.is_ok(),
+            "block containing v12 bitasset-style tx must be accepted by verify_block_transactions: {:?}",
+            result.err()
+        );
+    }
+
+    /// Variant of make_minimal... that lets us specify the exact outpoint being spent
+    /// (needed for the block-level test above).
+    fn make_minimal_high_version_tx_with_outpoint(version: Version, outpoint: OutPoint) -> Transaction {
+        let ins = vec![txin!(outpoint)];
+        let outs = vec![txout!(1_000, ScriptBuf::new())];
+        build_tx_with_version(version, ins, outs)
     }
 }
