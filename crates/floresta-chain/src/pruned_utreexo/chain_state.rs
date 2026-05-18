@@ -178,6 +178,8 @@ struct BitAssetIndexInner {
     blocks_observed: u64,
     high_version_txs_seen: u64,
     asset_utxos_indexed: u64,
+    /// Phase 3.3: number of v10 issuance transactions observed via the classifier.
+    issuance_events_seen: u64,
 }
 
 #[cfg(feature = "bitassets")]
@@ -226,6 +228,13 @@ impl BitAssetIndex {
     fn process_high_version_tx(&self, tx: &Transaction) {
         let mut inner = self.inner.write();
         inner.high_version_txs_seen += 1;
+
+        // Phase 3.3: exercise the new classifier so that issuance events are
+        // tallied. The classification result itself is not yet used to change
+        // asset_id derivation or storage (kept for later phases).
+        if matches!(classify_bitasset_transaction(tx), BitAssetTxKind::Issuance { .. }) {
+            inner.issuance_events_seen += 1;
+        }
 
         // Stub heuristic (Phase 3.2):
         // Treat the txid itself as the asset identifier for all outputs of
@@ -287,6 +296,142 @@ impl BlockConsumer for BitAssetIndex {
                 inner = self.inner.write(); // re-acquire for next iteration if needed
             }
         }
+    }
+}
+
+// =====================================================================
+// Phase 3.3: BitAsset protocol validation / classification rules (stub)
+//
+// First minimal implementation of interpretation logic for the
+// plain-bitassets protocol (issuance, controllers, OP_SPLIT detection,
+// DEX/auction operation classification).
+//
+// - Completely orthogonal to core consensus & Utreexo.
+// - Feature-gated behind "bitassets".
+// - Pure functions; safe to call on any Transaction that has already
+//   passed Bitcoin + Utreexo validation (the lite client contract).
+// - Reuses the same test helpers as Phases 3.1/3.2.
+// =====================================================================
+
+/// High-level classification of a bitasset protocol transaction.
+///
+/// Derived from tx.version + minimal structural inspection of outputs
+/// (per the BitAssets sidechain spec). This is the foundation for all
+/// future per-asset state-machine logic inside the lite wallet / index.
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BitAssetTxKind {
+    /// v10 CreateAsset transaction.
+    ///
+    /// `has_controller` is true when the first output carries exactly 1
+    /// asset unit (the administrator / controller token for mutable assets).
+    /// When false, the asset is an immutable collectible (controller was
+    /// burned at creation).
+    Issuance {
+        has_controller: bool,
+        genesis_amount: u64,
+    },
+
+    /// v11 transaction that claims a previously-placed DEX order.
+    DexClaim,
+
+    /// v12 (and follow-on versions) used for Dutch-auction bids and
+    /// auction settlement / claim transactions.
+    AuctionBid,
+
+    /// Any other transaction using the reserved high-version range.
+    /// Future protocol extensions will be given dedicated variants.
+    GenericHighVersion,
+}
+
+/// Errors returned by the structural validation entry point.
+///
+/// Only the most basic checks that can be performed with only the
+/// transaction itself (no extra context) are implemented in Phase 3.3.
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BitAssetValidationError {
+    /// A v10 issuance transaction must contain at least the controller
+    /// (or burned) output and the genesis output.
+    IssuanceRequiresAtLeastTwoOutputs,
+}
+
+/// Classify a high-version transaction according to the plain-bitassets
+/// protocol rules.
+///
+/// This is a pure, allocation-free function. It is the primary entry
+/// point that higher layers (wallet, future richer index, RPC) will call
+/// to understand what a v10/v11/v12 transaction is trying to do.
+#[cfg(feature = "bitassets")]
+pub fn classify_bitasset_transaction(tx: &Transaction) -> BitAssetTxKind {
+    match tx.version.0 {
+        10 => {
+            let has_controller = tx.output.len() >= 2 && tx.output[0].value.to_sat() == 1;
+            let genesis_amount = tx
+                .output
+                .get(1)
+                .map(|o| o.value.to_sat())
+                .unwrap_or(0);
+            BitAssetTxKind::Issuance {
+                has_controller,
+                genesis_amount,
+            }
+        }
+        11 => BitAssetTxKind::DexClaim,
+        12 => BitAssetTxKind::AuctionBid,
+        v if (10..=12).contains(&v) => BitAssetTxKind::GenericHighVersion,
+        _ => BitAssetTxKind::GenericHighVersion,
+    }
+}
+
+/// Perform lightweight structural validation of a bitasset transaction
+/// and return its kind on success.
+///
+/// Currently only enforces the minimum output count for issuance.
+/// All other protocol rules (balance conservation per asset, controller
+/// authorization, auction ID uniqueness, price format, etc.) require
+/// additional context (spent UTXOs, current chain height, index state)
+/// and are left for subsequent phases.
+#[cfg(feature = "bitassets")]
+pub fn validate_bitasset_transaction(
+    tx: &Transaction,
+) -> Result<BitAssetTxKind, BitAssetValidationError> {
+    let kind = classify_bitasset_transaction(tx);
+    if let BitAssetTxKind::Issuance { .. } = kind {
+        if tx.output.len() < 2 {
+            return Err(BitAssetValidationError::IssuanceRequiresAtLeastTwoOutputs);
+        }
+    }
+    Ok(kind)
+}
+
+/// Returns true if any of the transaction's output scripts contains the
+/// byte value used by the bitassets protocol for OP_SPLIT (opcode 90 / 0x5a).
+///
+/// OP_SPLIT is used exclusively for output-type inference when multiple
+/// assets or splits are present in one transaction; it is never executed
+/// as a spending condition in the current design. The lite client only
+/// needs detection for now.
+#[cfg(feature = "bitassets")]
+pub fn transaction_contains_op_split(tx: &Transaction) -> bool {
+    // Protocol-specific marker per the BitAssets design document.
+    // (In a full sidechain node this would be interpreted during script
+    // evaluation; here we perform a simple byte scan.)
+    const PROTOCOL_OP_SPLIT: u8 = 0x5a;
+    tx.output
+        .iter()
+        .any(|out| out.script_pubkey.as_bytes().contains(&PROTOCOL_OP_SPLIT))
+}
+
+// Demonstrate integration by exercising the classifier inside the
+// existing processing path (result is ignored in Phase 3.3 but proves
+// the functions are reachable from the index without any behavior change).
+#[cfg(feature = "bitassets")]
+impl BitAssetIndex {
+    /// Number of v10 issuance events observed (for tests / diagnostics).
+    /// Incremented when the classifier reports an Issuance variant.
+    pub fn issuance_events_seen(&self) -> u64 {
+        self.inner.read().issuance_events_seen
     }
 }
 

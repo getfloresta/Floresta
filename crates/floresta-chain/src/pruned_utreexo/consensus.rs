@@ -1891,7 +1891,10 @@ mod tests {
     // =====================================================================
 
     #[cfg(feature = "bitassets")]
-    use crate::pruned_utreexo::chain_state::{AssetId, BitAssetIndex, BlockConsumer};
+    use crate::pruned_utreexo::chain_state::{
+        classify_bitasset_transaction, transaction_contains_op_split, validate_bitasset_transaction,
+        AssetId, BitAssetIndex, BitAssetTxKind, BitAssetValidationError, BlockConsumer,
+    };
 
     #[cfg(feature = "bitassets")]
     #[test]
@@ -2001,5 +2004,135 @@ mod tests {
         assert_eq!(control.high_version_txs_seen(), 0);
         assert_eq!(index.get_asset_utxos(&spend.compute_txid()).len(), 1);
         assert_eq!(control.get_asset_utxos(&spend.compute_txid()).len(), 0);
+    }
+
+    // =====================================================================
+    // Phase 3.3 tests for the bitasset classification & validation rules
+    // (feature = "bitassets")
+    //
+    // These tests exercise the new pure functions that interpret v10/v11/v12
+    // transactions according to the plain-bitassets protocol. They prove the
+    // functions are available, classify correctly, reject malformed issuance,
+    // detect OP_SPLIT markers, and integrate with the index counters.
+    // =====================================================================
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_classify_v10_issuance_with_controller() {
+        // Controller (value = 1) + genesis (value = 1_000_000) + BTC change
+        let outs = vec![
+            txout!(1, ScriptBuf::new()),
+            txout!(1_000_000, ScriptBuf::new()),
+            txout!(50_000, ScriptBuf::new()),
+        ];
+        let tx = build_tx_with_version(Version(10), vec![txin!(dummy_outpoint())], outs);
+
+        let kind = classify_bitasset_transaction(&tx);
+        assert_eq!(
+            kind,
+            BitAssetTxKind::Issuance {
+                has_controller: true,
+                genesis_amount: 1_000_000
+            }
+        );
+
+        let validated = validate_bitasset_transaction(&tx).expect("valid issuance");
+        assert_eq!(validated, kind);
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_classify_v10_collectible_no_controller() {
+        // First output value != 1 → treat as burned-controller collectible
+        let outs = vec![
+            txout!(123, ScriptBuf::new()), // not the magic 1
+            txout!(1, ScriptBuf::new()),
+        ];
+        let tx = build_tx_with_version(Version(10), vec![txin!(dummy_outpoint())], outs);
+
+        let kind = classify_bitasset_transaction(&tx);
+        assert_eq!(
+            kind,
+            BitAssetTxKind::Issuance {
+                has_controller: false,
+                genesis_amount: 1
+            }
+        );
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_classify_v11_v12() {
+        for (ver, expected) in [
+            (11, BitAssetTxKind::DexClaim),
+            (12, BitAssetTxKind::AuctionBid),
+        ] {
+            let tx = make_minimal_high_version_tx(Version(ver));
+            assert_eq!(classify_bitasset_transaction(&tx), expected);
+        }
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_validate_rejects_malformed_v10() {
+        // Only one output — invalid for issuance per spec
+        let outs = vec![txout!(1, ScriptBuf::new())];
+        let tx = build_tx_with_version(Version(10), vec![txin!(dummy_outpoint())], outs);
+
+        let err = validate_bitasset_transaction(&tx).unwrap_err();
+        assert_eq!(err, BitAssetValidationError::IssuanceRequiresAtLeastTwoOutputs);
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_op_split_detector() {
+        // A script whose serialized bytes contain the protocol marker 0x5a.
+        // We use from_hex so the raw byte appears in the script (pushdata or opcode context).
+        let split_script = ScriptBuf::from_hex("5a").expect("hex decodes");
+        let normal_script = ScriptBuf::new();
+
+        let tx_with = build_tx_with_version(
+            Version(10),
+            vec![txin!(dummy_outpoint())],
+            vec![txout!(1, split_script)],
+        );
+        assert!(transaction_contains_op_split(&tx_with));
+
+        let tx_without = build_tx_with_version(
+            Version(10),
+            vec![txin!(dummy_outpoint())],
+            vec![txout!(1, normal_script)],
+        );
+        assert!(!transaction_contains_op_split(&tx_without));
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_validation_integration_with_index() {
+        // Minimal v10 issuance block (controller + genesis)
+        let outs = vec![txout!(1, ScriptBuf::new()), txout!(42, ScriptBuf::new())];
+        let issuance = build_tx_with_version(Version(10), vec![txin!(dummy_outpoint())], outs);
+
+        let block = Block {
+            header: bitcoin::block::Header {
+                version: bitcoin::block::Version::ONE,
+                prev_blockhash: bitcoin::BlockHash::all_zeros(),
+                merkle_root: bitcoin::TxMerkleNode::all_zeros(),
+                time: 0,
+                bits: bitcoin::CompactTarget::from_consensus(0),
+                nonce: 0,
+            },
+            txdata: vec![issuance.clone()],
+        };
+
+        let index = BitAssetIndex::new();
+        index.on_block(&block, 1, None);
+
+        assert!(
+            index.issuance_events_seen() >= 1,
+            "classifier must have counted the v10 issuance"
+        );
+        // The original high-version counter still works
+        assert!(index.high_version_txs_seen() >= 1);
     }
 }
