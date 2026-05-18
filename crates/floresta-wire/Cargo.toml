@@ -18,6 +18,7 @@ categories = ["cryptography::cryptocurrencies", "network-programming"]
 bip324 = { version = "0.10", features = [ "tokio" ] }
 bitcoin = { workspace = true }
 dns-lookup = { workspace = true }
+hintsfile = "0.1.1"
 rand = { workspace = true }
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
 rustreexo = { workspace = true }
