@@ -8,18 +8,18 @@ Define a base class for making RPC calls to a
 """
 
 import json
+import re
 import socket
 import time
-import re
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
-from abc import ABC, abstractmethod
 
 from requests import post
 from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
-from test_framework.rpc.exceptions import JSONRPCError
 from test_framework.rpc import ConfigRPC
+from test_framework.rpc.exceptions import JSONRPCError
 
 
 # pylint: disable=too-many-public-methods
@@ -338,6 +338,13 @@ class BaseRPC(ABC):
                 "disconnectnode", params=[node_address, node_id]
             )
         return self.perform_request("disconnectnode", params=[node_address])
+
+    def get_indexinfo(self, index_name: str = None):
+        """
+        Get the status of one or all available indices
+        """
+        params = [index_name] if index_name is not None else []
+        return self.perform_request("getindexinfo", params=params)
 
     def list_descriptors(self):
         """
