@@ -33,7 +33,7 @@ use floresta_common::try_and_log;
 use floresta_common::try_and_warn;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
-use floresta_domain::mempool::MempoolBackend;
+use floresta_domain::mempool::MempoolBase;
 pub use peer_man::AddedPeerInfo;
 use running_ctx::RunningNode;
 use serde::Deserialize;
@@ -252,7 +252,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     // 1. Core Blockchain and Transient Data
     pub(crate) chain: Chain,
     pub(crate) blocks: HashMap<BlockHash, InflightBlock>,
-    pub(crate) mempool: Arc<tokio::sync::Mutex<dyn MempoolBackend>>,
+    pub(crate) mempool: Arc<tokio::sync::Mutex<dyn MempoolBase>>,
     pub(crate) block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
     pub(crate) last_filter: BlockHash,
 
@@ -341,7 +341,7 @@ where
     pub fn new(
         config: UtreexoNodeConfig,
         chain: Chain,
-        mempool: Arc<Mutex<dyn MempoolBackend>>,
+        mempool: Arc<Mutex<dyn MempoolBase>>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         kill_signal: Arc<tokio::sync::RwLock<bool>>,
         address_man: AddressMan,

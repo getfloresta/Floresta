@@ -20,7 +20,7 @@ use bitcoin::block::Header;
 use bitcoin::block::Version;
 use bitcoin::hashes::Hash;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
-use floresta_domain::mempool::MempoolBackend;
+use floresta_domain::mempool::MempoolBase;
 use floresta_domain::mempool::MempoolError;
 use tracing::debug;
 
@@ -67,7 +67,7 @@ pub struct Mempool {
     hasher: ahash::RandomState,
 }
 
-impl MempoolBackend for Mempool {
+impl MempoolBase for Mempool {
     /// List all transactions we've accepted to the mempool.
     ///
     /// This won't count transactions that are still in the queue.
@@ -233,7 +233,7 @@ impl MempoolBackend for Mempool {
 
 impl Mempool {
     /// Creates a new mempool with a given maximum size
-    pub fn new(max_mempool_size: usize) -> Mempool {
+    pub fn new(max_mempool_size: usize) -> Self {
         let a = rand::random();
         let b = rand::random();
         let c = rand::random();
@@ -241,7 +241,7 @@ impl Mempool {
 
         let hasher = ahash::RandomState::with_seeds(a, b, c, d);
 
-        Mempool {
+        Self {
             transactions: HashMap::new(),
             queue: Vec::new(),
             mempool_size: 0,
@@ -357,7 +357,7 @@ mod tests {
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
     use floresta_common::bhash;
-    use floresta_domain::mempool::MempoolBackend;
+    use floresta_domain::mempool::MempoolBase;
     use rand::Rng;
     use rand::SeedableRng;
 
