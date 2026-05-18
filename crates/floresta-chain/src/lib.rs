@@ -34,6 +34,8 @@ pub use pruned_utreexo::error::*;
 pub use pruned_utreexo::flat_chain_store::*;
 pub use pruned_utreexo::udata::*;
 pub use pruned_utreexo::utxo_data::*;
+#[cfg(feature = "bitassets")]
+pub use pruned_utreexo::chain_state::BitAssetIndex;
 pub use pruned_utreexo::BlockchainInterface;
 pub use pruned_utreexo::ChainBackend;
 pub use pruned_utreexo::Notification;

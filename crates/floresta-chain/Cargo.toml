@@ -49,6 +49,7 @@ bitcoinkernel = ["dep:bitcoinkernel"]
 metrics = ["dep:metrics"]
 test-utils = ["dep:serde"]
 flat-chainstore = ["dep:memmap2", "dep:lru", "dep:twox-hash"]
+bitassets = []
 
 [[bench]]
 name = "chain_state_bench"

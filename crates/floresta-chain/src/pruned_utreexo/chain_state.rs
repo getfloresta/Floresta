@@ -115,6 +115,181 @@ impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
     }
 }
 
+// =====================================================================
+// Phase 3.2: Orthogonal per-asset index (BitAssetIndex)
+//
+// This is the first safe, minimal stub for per-asset UTXO tracking.
+// It is 100% orthogonal to the Utreexo accumulator and `UtxoData`:
+// - Never reads or writes the Stump.
+// - Never mutates or extends `UtxoData` / leaf data.
+// - Only observes already-validated blocks via the public `BlockConsumer`
+//   extension point (identical to the FeeRateIndexer example and AddressCache).
+// - Entirely behind `#[cfg(feature = "bitassets")]` so default builds and
+//   normal Bitcoin (mainnet/testnet/signet) sync are completely unaffected.
+//
+// Storage is simple in-memory for Phase 3.2. Future phases will add
+// persistence and richer protocol interpretation while keeping the same
+// consumer contract.
+// =====================================================================
+
+/// An asset identifier in the stub index.
+///
+/// For the minimal implementation we use the txid of a high-version
+/// transaction as the asset id (common pattern for issuance events).
+/// Real protocol may derive a different canonical ID (e.g. first output
+/// or explicit field); the type alias makes future changes localized.
+#[cfg(feature = "bitassets")]
+pub type AssetId = bitcoin::Txid;
+
+/// Minimal metadata stored for each asset-carrying UTXO in the index.
+///
+/// In Phase 3.2 we only record the Bitcoin carrier value. Later versions
+/// will hold the asset-specific amount, controller data, etc.
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssetUtxo {
+    pub asset_id: AssetId,
+    pub outpoint: OutPoint,
+    pub bitcoin_value: u64,
+}
+
+/// A minimal, orthogonal, optional per-asset UTXO index.
+///
+/// Implements `BlockConsumer` so it can be subscribed to any `ChainState`.
+/// When enabled via the `bitassets` feature it receives every validated
+/// block. It scans for v10–v12 transactions and maintains its own
+/// `asset_id → {outpoints}` sets completely independently of the main
+/// accumulator.
+///
+/// The index can safely run side-by-side with normal chain sync.
+#[cfg(feature = "bitassets")]
+pub struct BitAssetIndex {
+    inner: spin::RwLock<BitAssetIndexInner>,
+}
+
+#[cfg(feature = "bitassets")]
+#[derive(Default)]
+struct BitAssetIndexInner {
+    /// Primary per-asset UTXO set view.
+    asset_utxos: HashMap<AssetId, HashSet<OutPoint>>,
+    /// Reverse lookup for quick membership tests (used by future transfer logic).
+    outpoint_to_asset: HashMap<OutPoint, AssetId>,
+    /// Simple counters for tests and diagnostics (creation/transfer events).
+    blocks_observed: u64,
+    high_version_txs_seen: u64,
+    asset_utxos_indexed: u64,
+}
+
+#[cfg(feature = "bitassets")]
+impl Default for BitAssetIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "bitassets")]
+impl BitAssetIndex {
+    /// Create a fresh empty index.
+    pub fn new() -> Self {
+        BitAssetIndex {
+            inner: spin::RwLock::new(BitAssetIndexInner::default()),
+        }
+    }
+
+    /// Returns the current set of unspent outpoints belonging to the given asset.
+    /// The returned vector order is undefined.
+    pub fn get_asset_utxos(&self, asset_id: &AssetId) -> Vec<OutPoint> {
+        let inner = self.inner.read();
+        inner
+            .asset_utxos
+            .get(asset_id)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Returns the asset that an outpoint is currently tracked under, if any.
+    pub fn get_asset_for_outpoint(&self, outpoint: &OutPoint) -> Option<AssetId> {
+        let inner = self.inner.read();
+        inner.outpoint_to_asset.get(outpoint).cloned()
+    }
+
+    /// Number of blocks this index has observed (for tests).
+    pub fn blocks_observed(&self) -> u64 {
+        self.inner.read().blocks_observed
+    }
+
+    /// Number of v10–v12 transactions observed (for tests).
+    pub fn high_version_txs_seen(&self) -> u64 {
+        self.inner.read().high_version_txs_seen
+    }
+
+    fn process_high_version_tx(&self, tx: &Transaction) {
+        let mut inner = self.inner.write();
+        inner.high_version_txs_seen += 1;
+
+        // Stub heuristic (Phase 3.2):
+        // Treat the txid itself as the asset identifier for all outputs of
+        // this high-version transaction. This models issuance events and
+        // allows immediate per-asset grouping without requiring spent-UTXO
+        // information or protocol-specific decoding.
+        //
+        // Real implementation (later) will:
+        //   - Distinguish v10 (issuance) vs v11/v12 (transfer/DEX/auction)
+        //   - Extract explicit asset_id and asset amounts from scripts/witness
+        //   - When wants_spent_utxos() == true, remove spent asset utxos and
+        //     propagate the original asset_id to the new outputs (transfer).
+        let asset_id: AssetId = tx.compute_txid();
+
+        for (vout, _txout) in tx.output.iter().enumerate() {
+            let outpoint = OutPoint {
+                txid: tx.compute_txid(),
+                vout: vout as u32,
+            };
+
+            inner
+                .asset_utxos
+                .entry(asset_id)
+                .or_default()
+                .insert(outpoint);
+            inner.outpoint_to_asset.insert(outpoint, asset_id);
+
+            inner.asset_utxos_indexed += 1;
+        }
+    }
+}
+
+#[cfg(feature = "bitassets")]
+impl BlockConsumer for BitAssetIndex {
+    fn wants_spent_utxos(&self) -> bool {
+        // Phase 3.2 minimal version: we do not request spent UTXOs yet.
+        // This keeps the subscriber path lightweight and proves the
+        // orthogonal observation model works with the default (false) path.
+        false
+    }
+
+    fn on_block(
+        &self,
+        block: &Block,
+        _height: u32,
+        _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
+    ) {
+        let mut inner = self.inner.write();
+        inner.blocks_observed += 1;
+
+        for tx in &block.txdata {
+            // v10, v11, v12 are the versions used by the bitassets protocol
+            // on the dedicated signet for issuance, transfers, orders, etc.
+            if (10..=12).contains(&tx.version.0) {
+                // Drop the write guard before the more involved per-tx work
+                // to keep critical section tiny (good practice, even if tiny here).
+                drop(inner);
+                self.process_high_version_tx(tx);
+                inner = self.inner.write(); // re-acquire for next iteration if needed
+            }
+        }
+    }
+}
+
 /// Internal state of the blockchain managed by `ChainState`.
 pub struct ChainStateInner<PersistedState: ChainStore> {
     /// The acc we use for validation.
