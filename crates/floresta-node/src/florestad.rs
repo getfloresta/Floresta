@@ -1372,6 +1372,14 @@ impl Florestad {
                 let result = Self::run_native_bitassets_quic_once(wallet.clone(), &quic_url).await;
                 if let Err(err) = result {
                     warn!("Native BitAssets lite-wallet QUIC disconnected: {err}");
+                    let should_reconnect_immediately = err.contains("wallet script hashes changed")
+                        || wallet
+                            .lock()
+                            .await
+                            .wallet_info()
+                            .get("quic")
+                            .and_then(|quic| quic.get("last_message_unix_ms"))
+                            .is_some_and(|value| !value.is_null());
                     {
                         let mut wallet = wallet.lock().await;
                         wallet.set_quic_error(err.clone());
@@ -1382,6 +1390,9 @@ impl Florestad {
                         wallet.sync()
                     })
                     .await;
+                    if should_reconnect_immediately {
+                        backoff = Duration::from_secs(1);
+                    }
                 }
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(60));

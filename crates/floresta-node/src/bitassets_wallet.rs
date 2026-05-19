@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::net::{SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -78,6 +79,25 @@ impl Hash {
                 Error::Rpc(format!("expected 32-byte hash, got {} bytes", bytes.len()))
             },
         )?))
+    }
+}
+
+impl<'de> Deserialize<'de> for Hash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as Deserialize>::deserialize(deserializer)?;
+        Self::from_hex(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for Hash {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&hex::encode(self.0))
     }
 }
 
@@ -196,11 +216,41 @@ pub struct DutchAuctionParams {
     pub final_price: u64,
 }
 
+#[derive(BorshDeserialize, BorshSerialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct EncryptionPubKey([u8; 32]);
+
+impl<'de> Deserialize<'de> for EncryptionPubKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as Deserialize>::deserialize(deserializer)?;
+        let bytes = hex::decode(&value).map_err(serde::de::Error::custom)?;
+        let len = bytes.len();
+        let bytes = bytes.try_into().map_err(|_: Vec<u8>| {
+            serde::de::Error::custom(format!("expected 32-byte encryption pubkey, got {len}"))
+        })?;
+        Ok(Self(bytes))
+    }
+}
+
+impl Serialize for EncryptionPubKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&hex::encode(self.0))
+    }
+}
+
 #[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BitAssetData {
-    pub ticker: Option<String>,
-    pub name: Option<String>,
-    pub summary: Option<String>,
+    pub commitment: Option<Hash>,
+    pub socket_addr_v4: Option<SocketAddrV4>,
+    pub socket_addr_v6: Option<SocketAddrV6>,
+    pub encryption_pubkey: Option<EncryptionPubKey>,
+    pub signing_pubkey: Option<VerifyingKey>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Eq, PartialEq)]
@@ -220,7 +270,7 @@ struct Transaction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-struct VerifyingKey(ed25519_dalek::VerifyingKey);
+pub struct VerifyingKey(ed25519_dalek::VerifyingKey);
 
 impl BorshSerialize for VerifyingKey {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -234,6 +284,32 @@ impl BorshDeserialize for VerifyingKey {
         ed25519_dalek::VerifyingKey::from_bytes(&bytes)
             .map(Self)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+    }
+}
+
+impl<'de> Deserialize<'de> for VerifyingKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as Deserialize>::deserialize(deserializer)?;
+        let bytes = hex::decode(&value).map_err(serde::de::Error::custom)?;
+        let len = bytes.len();
+        let bytes = bytes.try_into().map_err(|_: Vec<u8>| {
+            serde::de::Error::custom(format!("expected 32-byte verifying key, got {len}"))
+        })?;
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for VerifyingKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&hex::encode(self.0.to_bytes()))
     }
 }
 
@@ -1792,5 +1868,337 @@ mod tests {
             hex::encode(borsh::to_vec(&tx).unwrap()),
             "0100000000010101010101010101010101010101010101010101010101010101010101010102000000010000000303030303030303030303030303030303030303022a00000000000000000000000000000000"
         );
+    }
+
+    fn constructor_shape_hashes() -> Vec<(&'static str, String)> {
+        let asset_a = AssetId::BitAsset(BitAssetId(Hash([0x11; 32])));
+        let asset_b = AssetId::BitAsset(BitAssetId(Hash([0x22; 32])));
+        let auction_id = DutchAuctionId(Txid(Hash([0x44; 32])));
+        let outpoint = |byte, vout| OutPoint::Regular {
+            txid: Txid(Hash([byte; 32])),
+            vout,
+        };
+        let output = |byte, content| Output {
+            address: Address([byte; 20]),
+            content,
+            memo: Vec::new(),
+        };
+        let data = BitAssetData {
+            commitment: None,
+            socket_addr_v4: None,
+            socket_addr_v6: None,
+            encryption_pubkey: None,
+            signing_pubkey: None,
+        };
+        let params = DutchAuctionParams {
+            start_block: 10,
+            duration: 5,
+            base_asset: asset_a,
+            base_amount: 100,
+            quote_asset: asset_b,
+            initial_price: 1_000,
+            final_price: 500,
+        };
+        let txs = vec![
+            (
+                "reserve",
+                Transaction {
+                    inputs: Vec::new(),
+                    outputs: vec![output(1, OutputContent::BitAssetReservation)],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::BitAssetReservation {
+                        commitment: Hash([0xaa; 32]),
+                    }),
+                },
+            ),
+            (
+                "register",
+                Transaction {
+                    inputs: vec![outpoint(1, 0)],
+                    outputs: vec![
+                        output(2, OutputContent::BitAsset(1_000)),
+                        output(2, OutputContent::BitAssetControl),
+                    ],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::BitAssetRegistration {
+                        name_hash: Hash([0xbb; 32]),
+                        revealed_nonce: Hash([0xcc; 32]),
+                        bitasset_data: Box::new(data),
+                        initial_supply: 1_000,
+                    }),
+                },
+            ),
+            (
+                "amm_mint",
+                Transaction {
+                    inputs: vec![outpoint(0x11, 0), outpoint(0x22, 0)],
+                    outputs: vec![output(3, OutputContent::AmmLpToken(200))],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::AmmMint {
+                        amount0: 100,
+                        amount1: 400,
+                        lp_token_mint: 200,
+                    }),
+                },
+            ),
+            (
+                "amm_swap",
+                Transaction {
+                    inputs: vec![outpoint(0x11, 1)],
+                    outputs: vec![output(4, OutputContent::BitAsset(36))],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::AmmSwap {
+                        amount_spent: 10,
+                        amount_receive: 36,
+                        pair_asset: asset_b,
+                    }),
+                },
+            ),
+            (
+                "amm_burn",
+                Transaction {
+                    inputs: vec![outpoint(0x33, 0)],
+                    outputs: vec![
+                        output(5, OutputContent::BitAsset(10)),
+                        output(6, OutputContent::BitAsset(40)),
+                    ],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::AmmBurn {
+                        amount0: 10,
+                        amount1: 40,
+                        lp_token_burn: 20,
+                    }),
+                },
+            ),
+            (
+                "dutch_create",
+                Transaction {
+                    inputs: vec![outpoint(0x11, 2)],
+                    outputs: vec![output(7, OutputContent::DutchAuctionReceipt)],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::DutchAuctionCreate(params.clone())),
+                },
+            ),
+            (
+                "dutch_bid",
+                Transaction {
+                    inputs: vec![outpoint(0x22, 1)],
+                    outputs: vec![output(8, OutputContent::BitAsset(10))],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::DutchAuctionBid {
+                        auction_id,
+                        receive_asset: asset_a,
+                        quantity: 10,
+                        bid_size: 100,
+                    }),
+                },
+            ),
+            (
+                "dutch_collect",
+                Transaction {
+                    inputs: vec![outpoint(0x44, 0)],
+                    outputs: vec![
+                        output(9, OutputContent::BitAsset(90)),
+                        output(10, OutputContent::BitAsset(100)),
+                    ],
+                    memo: Vec::new(),
+                    data: Some(TransactionData::DutchAuctionCollect {
+                        asset_offered: asset_a,
+                        asset_receive: asset_b,
+                        amount_offered_remaining: 90,
+                        amount_received: 100,
+                    }),
+                },
+            ),
+        ];
+
+        txs.into_iter()
+            .map(|(label, tx)| {
+                let bytes = borsh::to_vec(&tx).unwrap();
+                (label, hex::encode(blake3::hash(&bytes).as_bytes()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn borsh_native_constructor_shapes_are_stable() {
+        assert_eq!(
+            constructor_shape_hashes(),
+            vec![
+                (
+                    "reserve",
+                    "d6f27e504be264fbe6da94ef5eb8cfc39c86d96b12dd4ed1eec4c2b86c76a36e".to_string()
+                ),
+                (
+                    "register",
+                    "74a05698e0d29b5bab35e9706944231bc06a77751c71c8096bd010f56f27f5d1".to_string()
+                ),
+                (
+                    "amm_mint",
+                    "8b2a54a5e6976aa7d55682ec488770c7c2e77665db2f5a2ab6bcef38f1f77bb5".to_string()
+                ),
+                (
+                    "amm_swap",
+                    "d3edc01e9380fc79d1cc1221b531361fee29d508f5f8e1d173690c8178bbd3e2".to_string()
+                ),
+                (
+                    "amm_burn",
+                    "2b82ba8d1a4115dab1be1f4f3f9f8aa595760c84838021a880b7a3125a4524d4".to_string()
+                ),
+                (
+                    "dutch_create",
+                    "436afe9e94c3e61c86454d310493f13122ef61ea9934d96f0348d70e39cc24c2".to_string()
+                ),
+                (
+                    "dutch_bid",
+                    "18b16c34e76a7a03944ddeb42442c5a667714c5780a809633300cc0c2e1f8c0e".to_string()
+                ),
+                (
+                    "dutch_collect",
+                    "90f8a8687c1e868f59b7f822bcf138eda836cb5c7bc729aeba5e6d11dd1c9b23".to_string()
+                ),
+            ]
+        );
+    }
+
+    fn native_test_wallet() -> NativeBitAssetsWallet {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap()
+    }
+
+    fn assert_zero_fee_rejected(result: Result<Value, Error>) {
+        match result {
+            Err(Error::Rpc(message)) => assert!(message.contains("fee_sats=0")),
+            other => panic!("expected fee_sats=0 rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_constructors_reject_nonzero_fees_before_network_or_selection() {
+        let asset_a = "1111111111111111111111111111111111111111111111111111111111111111";
+        let asset_b = "2222222222222222222222222222222222222222222222222222222222222222";
+        let auction_id = "4444444444444444444444444444444444444444444444444444444444444444";
+
+        let mut wallet = native_test_wallet();
+        assert_zero_fee_rejected(wallet.transfer(
+            "46wMdKN8vRVCHCKw77eqsRkpc6yT",
+            asset_a,
+            1,
+            1,
+            None,
+        ));
+        assert_zero_fee_rejected(wallet.reserve("name", 1));
+        assert_zero_fee_rejected(wallet.register(
+            "name",
+            1,
+            BitAssetData {
+                commitment: None,
+                socket_addr_v4: None,
+                socket_addr_v6: None,
+                encryption_pubkey: None,
+                signing_pubkey: None,
+            },
+            1,
+        ));
+        assert_zero_fee_rejected(wallet.amm_mint(asset_a, asset_b, 1, 1, 1, 1));
+        assert_zero_fee_rejected(wallet.amm_swap(asset_a, asset_b, 1, 1, 1));
+        assert_zero_fee_rejected(wallet.amm_burn(asset_a, asset_b, 1, 1, 1, 1));
+        assert_zero_fee_rejected(wallet.dutch_auction_create(
+            DutchAuctionParams {
+                start_block: 1,
+                duration: 1,
+                base_asset: parse_asset_id(asset_a).unwrap(),
+                base_amount: 1,
+                quote_asset: parse_asset_id(asset_b).unwrap(),
+                initial_price: 1,
+                final_price: 1,
+            },
+            1,
+        ));
+        assert_zero_fee_rejected(wallet.dutch_auction_bid(auction_id, asset_a, asset_b, 1, 1, 1));
+        assert_zero_fee_rejected(
+            wallet.dutch_auction_collect(auction_id, asset_a, asset_b, 1, 1, 1),
+        );
+    }
+
+    #[test]
+    fn invalid_utreexo_proof_rejects_non_bitasset_wallet_content() {
+        let mut wallet = native_test_wallet();
+        let outpoint = WalletOutPoint {
+            txid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            vout: 0,
+        };
+        let proof_ref = WalletProofRef {
+            txid: outpoint.txid.clone(),
+            block_hash: Some(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ),
+            sidechain_block_height: Some(7),
+            bmm_inclusions: Vec::new(),
+            best_main_verification: None,
+        };
+        let commitment = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let leaf_hash = lite_wallet_leaf_hash(
+            &outpoint,
+            "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+            &format!("reservation:{}:{commitment}", outpoint.txid),
+            "",
+            &proof_ref,
+        )
+        .unwrap();
+        let update = json!({
+            "tip_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tip_height": 7,
+            "utreexo_leaf_count": 1,
+            "utreexo_roots": [leaf_hash],
+            "created_utxos": [{
+                "outpoint": {"Regular": {
+                    "txid": outpoint.txid,
+                    "vout": outpoint.vout
+                }},
+                "output": {
+                    "address": "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+                    "content": {"BitAssetReservation": [
+                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        commitment
+                    ]},
+                    "memo": ""
+                }
+            }],
+            "spent_outpoints": [],
+            "mempool_created_utxos": [],
+            "mempool_spent_outpoints": [],
+            "proof_refs": [{
+                "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sidechain_block_height": 7,
+                "bmm_inclusions": [],
+                "best_main_verification": null
+            }],
+            "utreexo_proofs": [{
+                "outpoint": {"Regular": {
+                    "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "vout": 0
+                }},
+                "leaf_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "targets": [0],
+                "hashes": []
+            }]
+        });
+
+        match wallet.apply_update(&update) {
+            Err(Error::UtreexoProof(outpoint)) => {
+                assert!(outpoint
+                    .contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+            }
+            other => panic!("expected Utreexo proof rejection, got {other:?}"),
+        }
     }
 }

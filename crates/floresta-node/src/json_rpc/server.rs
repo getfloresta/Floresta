@@ -416,9 +416,11 @@ async fn handle_json_rpc_request(
                 .transpose()
                 .map_err(|err| JsonRpcError::Wallet(err.to_string()))?
                 .unwrap_or(BitAssetData {
-                    ticker: None,
-                    name: None,
-                    summary: None,
+                    commitment: None,
+                    socket_addr_v4: None,
+                    socket_addr_v6: None,
+                    encryption_pubkey: None,
+                    signing_pubkey: None,
                 });
             let fee_sats = get_numeric(&params, 3, "fee_sats")?;
             let Some(wallet) = state.bitassets_wallet.as_ref() else {
