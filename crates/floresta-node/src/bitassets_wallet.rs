@@ -7,6 +7,7 @@ use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_dalek::Signer as _;
 use rand::RngCore as _;
+use rustreexo::{node_hash::BitcoinNodeHash, proof::Proof, stump::Stump};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -36,6 +37,8 @@ pub enum Error {
     Rpc(String),
     #[error("native wallet seed must be exactly 64 bytes, got {0}")]
     SeedLength(usize),
+    #[error("invalid native wallet BitAssets Utreexo proof for {0}")]
+    UtreexoProof(String),
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +57,10 @@ impl Address {
 
     fn as_base58(&self) -> String {
         base58::encode(&self.0)
+    }
+
+    fn script_hash(&self) -> String {
+        hex::encode(blake3::hash(&self.0).as_bytes())
     }
 }
 
@@ -271,6 +278,8 @@ struct AuthorizedTransaction {
 struct StoredAddress {
     index: u32,
     address: String,
+    #[serde(default)]
+    script_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -287,6 +296,8 @@ pub struct WalletUtxo {
     pub amount: u64,
     pub confirmed: bool,
     pub proof_refs: Vec<WalletProofRef>,
+    #[serde(default)]
+    pub utreexo_leaf_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -328,7 +339,13 @@ impl NativeBitAssetsWallet {
         let path = path.as_ref().to_path_buf();
         if path.exists() {
             let bytes = fs::read(&path)?;
-            let stored = serde_json::from_slice(&bytes)?;
+            let mut stored: StoredWallet = serde_json::from_slice(&bytes)?;
+            for address in &mut stored.addresses {
+                if address.script_hash.is_none() {
+                    address.script_hash =
+                        Some(Address::from_base58(&address.address)?.script_hash());
+                }
+            }
             return Ok(Self {
                 path,
                 rpc_url,
@@ -380,6 +397,7 @@ impl NativeBitAssetsWallet {
         self.stored.addresses.push(StoredAddress {
             index,
             address: address_string.clone(),
+            script_hash: Some(address.script_hash()),
         });
         self.save()?;
         Ok(address_string)
@@ -416,19 +434,23 @@ impl NativeBitAssetsWallet {
     }
 
     pub fn sync(&mut self) -> Result<Value, Error> {
-        let addresses = self
+        let script_hashes = self
             .stored
             .addresses
             .iter()
-            .map(|address| json!(address.address))
-            .collect::<Vec<_>>();
-        if addresses.is_empty() {
+            .map(|address| {
+                address.script_hash.clone().map(Ok).unwrap_or_else(|| {
+                    Address::from_base58(&address.address).map(|a| a.script_hash())
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        if script_hashes.is_empty() {
             return Ok(self.wallet_info());
         }
         let update = bitassets_rpc_call_with_params(
             &self.rpc_url,
             "get_lite_wallet_update",
-            vec![json!(addresses), json!(self.stored.last_tip_hash)],
+            vec![json!(script_hashes), json!(self.stored.last_tip_hash)],
         )?;
         self.apply_update(&update)?;
         self.save()?;
@@ -536,6 +558,7 @@ impl NativeBitAssetsWallet {
 
     fn apply_update(&mut self, update: &Value) -> Result<(), Error> {
         let proof_refs = parse_proof_refs(update.get("proof_refs"))?;
+        let utreexo_view = parse_utreexo_view(update)?;
         let spent = parse_outpoints(update.get("spent_outpoints"))?
             .into_iter()
             .chain(parse_outpoints(update.get("mempool_spent_outpoints"))?)
@@ -545,10 +568,16 @@ impl NativeBitAssetsWallet {
             .retain(|utxo| !spent.contains(&utxo.outpoint));
         self.stored.spent_outpoints = spent.iter().cloned().collect();
 
-        for utxo in parse_utxos(update.get("created_utxos"), true, &proof_refs)? {
+        for utxo in parse_utxos(
+            update.get("created_utxos"),
+            true,
+            &proof_refs,
+            Some(&utreexo_view),
+        )? {
             upsert_utxo(&mut self.stored.confirmed_utxos, utxo);
         }
-        self.stored.mempool_utxos = parse_utxos(update.get("mempool_created_utxos"), false, &[])?;
+        self.stored.mempool_utxos =
+            parse_utxos(update.get("mempool_created_utxos"), false, &[], None)?;
         self.stored.last_tip_hash = update
             .get("tip_hash")
             .and_then(Value::as_str)
@@ -638,17 +667,152 @@ fn parse_outpoint(value: &Value) -> Result<WalletOutPoint, Error> {
     })
 }
 
+#[derive(Clone, Debug)]
+struct UtreexoProofRef {
+    outpoint: WalletOutPoint,
+    leaf_hash: String,
+    proof: Proof,
+}
+
+#[derive(Clone, Debug)]
+struct UtreexoView {
+    stump: Stump,
+    proofs: Vec<UtreexoProofRef>,
+}
+
+impl UtreexoView {
+    fn verify(&self, proof: &UtreexoProofRef) -> Result<(), Error> {
+        let leaf = parse_node_hash(&proof.leaf_hash)?;
+        let valid = self
+            .stump
+            .verify(&proof.proof, &[leaf])
+            .map_err(|err| Error::Rpc(format!("Utreexo proof verification failed: {err:?}")))?;
+        if valid {
+            Ok(())
+        } else {
+            Err(Error::UtreexoProof(format_outpoint(&proof.outpoint)))
+        }
+    }
+}
+
+fn parse_utreexo_view(update: &Value) -> Result<UtreexoView, Error> {
+    let leaves = update
+        .get("utreexo_leaf_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::Rpc("lite wallet update missing utreexo_leaf_count".to_string()))?;
+    let roots = update
+        .get("utreexo_roots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Rpc("lite wallet update missing utreexo_roots".to_string()))?
+        .iter()
+        .map(|root| {
+            root.as_str()
+                .ok_or_else(|| Error::Rpc("Utreexo root must be a string".to_string()))
+                .and_then(parse_node_hash)
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let proofs = update
+        .get("utreexo_proofs")
+        .and_then(Value::as_array)
+        .map(|proofs| {
+            proofs
+                .iter()
+                .map(|proof| {
+                    let outpoint = parse_outpoint(proof.get("outpoint").ok_or_else(|| {
+                        Error::Rpc("Utreexo proof missing outpoint".to_string())
+                    })?)?;
+                    let leaf_hash = proof
+                        .get("leaf_hash")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::Rpc("Utreexo proof missing leaf_hash".to_string()))?
+                        .to_string();
+                    let targets = proof
+                        .get("targets")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| Error::Rpc("Utreexo proof missing targets".to_string()))?
+                        .iter()
+                        .map(|target| {
+                            target.as_u64().ok_or_else(|| {
+                                Error::Rpc("Utreexo proof target must be u64".to_string())
+                            })
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+                    let hashes = proof
+                        .get("hashes")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| Error::Rpc("Utreexo proof missing hashes".to_string()))?
+                        .iter()
+                        .map(|hash| {
+                            hash.as_str()
+                                .ok_or_else(|| {
+                                    Error::Rpc("Utreexo proof hash must be a string".to_string())
+                                })
+                                .and_then(parse_node_hash)
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+                    Ok(UtreexoProofRef {
+                        outpoint,
+                        leaf_hash,
+                        proof: Proof { targets, hashes },
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(UtreexoView {
+        stump: Stump { leaves, roots },
+        proofs,
+    })
+}
+
+fn parse_node_hash(hex_hash: &str) -> Result<BitcoinNodeHash, Error> {
+    let bytes = hex::decode(hex_hash)?;
+    let len = bytes.len();
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_: Vec<u8>| Error::Rpc(format!("expected 32-byte Utreexo hash, got {len}")))?;
+    Ok(BitcoinNodeHash::from(bytes))
+}
+
+fn format_outpoint(outpoint: &WalletOutPoint) -> String {
+    format!("regular {} {}", outpoint.txid, outpoint.vout)
+}
+
+fn lite_wallet_leaf_hash(
+    outpoint: &WalletOutPoint,
+    address: &str,
+    asset_id: &str,
+    amount: u64,
+    memo_hex: &str,
+    proof_ref: &WalletProofRef,
+) -> Result<String, Error> {
+    let address = Address::from_base58(address)?;
+    let memo = hex::decode(memo_hex)?;
+    let payload = borsh::to_vec(&(
+        "plain-bitassets:lite-wallet-leaf:v1",
+        format_outpoint(outpoint),
+        address.0,
+        format!("bitasset:{asset_id}:{amount}"),
+        memo,
+        proof_ref.sidechain_block_height.unwrap_or_default(),
+        proof_ref.block_hash.clone().unwrap_or_default(),
+    ))?;
+    Ok(hex::encode(blake3::hash(&payload).as_bytes()))
+}
+
 fn parse_utxos(
     value: Option<&Value>,
     confirmed: bool,
     proof_refs: &[WalletProofRef],
+    utreexo_view: Option<&UtreexoView>,
 ) -> Result<Vec<WalletUtxo>, Error> {
     let Some(array) = value.and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
     array
         .iter()
-        .filter_map(|value| parse_utxo(value, confirmed, proof_refs).transpose())
+        .filter_map(|value| parse_utxo(value, confirmed, proof_refs, utreexo_view).transpose())
         .collect()
 }
 
@@ -656,6 +820,7 @@ fn parse_utxo(
     value: &Value,
     confirmed: bool,
     proof_refs: &[WalletProofRef],
+    utreexo_view: Option<&UtreexoView>,
 ) -> Result<Option<WalletUtxo>, Error> {
     let outpoint = parse_outpoint(
         value
@@ -685,17 +850,49 @@ fn parse_utxo(
         .get(1)
         .and_then(Value::as_u64)
         .ok_or_else(|| Error::Rpc("BitAsset UTXO missing amount".to_string()))?;
+    let refs = proof_refs
+        .iter()
+        .filter(|proof| proof.txid == outpoint.txid)
+        .cloned()
+        .collect::<Vec<_>>();
+    let utreexo_leaf_hash = if confirmed {
+        let view = utreexo_view
+            .ok_or_else(|| Error::Rpc("confirmed UTXO missing Utreexo view".to_string()))?;
+        let proof = view
+            .proofs
+            .iter()
+            .find(|proof| proof.outpoint == outpoint)
+            .ok_or_else(|| Error::UtreexoProof(format_outpoint(&outpoint)))?;
+        let proof_ref = refs
+            .first()
+            .ok_or_else(|| Error::UtreexoProof(format_outpoint(&outpoint)))?;
+        let expected_leaf_hash = lite_wallet_leaf_hash(
+            &outpoint,
+            &address,
+            &asset_id,
+            amount,
+            output
+                .get("memo")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            proof_ref,
+        )?;
+        if expected_leaf_hash != proof.leaf_hash {
+            return Err(Error::UtreexoProof(format_outpoint(&outpoint)));
+        }
+        view.verify(proof)?;
+        Some(proof.leaf_hash.clone())
+    } else {
+        None
+    };
     Ok(Some(WalletUtxo {
         outpoint: outpoint.clone(),
         address,
         asset_id,
         amount,
         confirmed,
-        proof_refs: proof_refs
-            .iter()
-            .filter(|proof| proof.txid == outpoint.txid)
-            .cloned()
-            .collect(),
+        proof_refs: refs,
+        utreexo_leaf_hash,
     }))
 }
 
@@ -821,9 +1018,33 @@ mod tests {
         )
         .unwrap();
 
+        let outpoint = WalletOutPoint {
+            txid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            vout: 0,
+        };
+        let proof_ref = WalletProofRef {
+            txid: outpoint.txid.clone(),
+            block_hash: Some(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ),
+            sidechain_block_height: Some(7),
+            bmm_inclusions: Vec::new(),
+            best_main_verification: None,
+        };
+        let leaf_hash = lite_wallet_leaf_hash(
+            &outpoint,
+            "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            42,
+            "",
+            &proof_ref,
+        )
+        .unwrap();
         let update = json!({
             "tip_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "tip_height": 7,
+            "utreexo_leaf_count": 1,
+            "utreexo_roots": [leaf_hash],
             "created_utxos": [{
                 "outpoint": {"Regular": {
                     "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -847,6 +1068,15 @@ mod tests {
                 "sidechain_block_height": 7,
                 "bmm_inclusions": [],
                 "best_main_verification": null
+            }],
+            "utreexo_proofs": [{
+                "outpoint": {"Regular": {
+                    "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "vout": 0
+                }},
+                "leaf_hash": leaf_hash,
+                "targets": [0],
+                "hashes": []
             }]
         });
 
