@@ -160,6 +160,16 @@ pub struct Cli {
     /// 64-byte hex seed used when creating the native BitAssets wallet.
     pub bitassets_wallet_seed: Option<String>,
 
+    #[cfg(feature = "bitassets")]
+    #[arg(long, value_name = "HOST:PORT")]
+    /// plain-bitassets lite-wallet QUIC endpoint used by the native wallet.
+    pub bitassets_lite_wallet_quic_url: Option<String>,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, default_value_t = false)]
+    /// Disable native BitAssets lite-wallet QUIC subscriptions and use JSON-RPC polling only.
+    pub disable_bitassets_lite_wallet_quic: bool,
+
     #[arg(long, default_value_t = false)]
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,

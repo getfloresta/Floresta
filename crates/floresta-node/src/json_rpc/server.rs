@@ -52,7 +52,9 @@ use super::res::ScriptSigJson;
 use super::res::TxInJson;
 use super::res::TxOutJson;
 #[cfg(feature = "bitassets")]
-use crate::bitassets_wallet::NativeBitAssetsWallet;
+use crate::bitassets_wallet::{
+    parse_asset_id, BitAssetData, DutchAuctionParams, NativeBitAssetsWallet,
+};
 use crate::json_rpc::request::arg_parser::get_bool;
 use crate::json_rpc::request::arg_parser::get_hash;
 use crate::json_rpc::request::arg_parser::get_hashes_array;
@@ -384,6 +386,218 @@ async fn handle_json_rpc_request(
                 .lock()
                 .await
                 .transfer(&destination, &asset_id, amount, fee_sats, memo)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_reserve" => {
+            let name = get_string(&params, 0, "name")?;
+            let fee_sats = get_numeric(&params, 1, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .reserve(&name, fee_sats)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_register" => {
+            let name = get_string(&params, 0, "name")?;
+            let initial_supply = get_numeric(&params, 1, "initial_supply")?;
+            let bitasset_data: BitAssetData = params
+                .get(2)
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))?
+                .unwrap_or(BitAssetData {
+                    ticker: None,
+                    name: None,
+                    summary: None,
+                });
+            let fee_sats = get_numeric(&params, 3, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .register(&name, initial_supply, bitasset_data, fee_sats)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_amm_mint" => {
+            let asset0 = get_string(&params, 0, "asset0")?;
+            let asset1 = get_string(&params, 1, "asset1")?;
+            let amount0 = get_numeric(&params, 2, "amount0")?;
+            let amount1 = get_numeric(&params, 3, "amount1")?;
+            let lp_token_mint = get_numeric(&params, 4, "lp_token_mint")?;
+            let fee_sats = get_numeric(&params, 5, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .amm_mint(&asset0, &asset1, amount0, amount1, lp_token_mint, fee_sats)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_amm_swap" => {
+            let asset_spend = get_string(&params, 0, "asset_spend")?;
+            let asset_receive = get_string(&params, 1, "asset_receive")?;
+            let amount_spend = get_numeric(&params, 2, "amount_spend")?;
+            let amount_receive = get_numeric(&params, 3, "amount_receive")?;
+            let fee_sats = get_numeric(&params, 4, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .amm_swap(
+                    &asset_spend,
+                    &asset_receive,
+                    amount_spend,
+                    amount_receive,
+                    fee_sats,
+                )
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_amm_burn" => {
+            let asset0 = get_string(&params, 0, "asset0")?;
+            let asset1 = get_string(&params, 1, "asset1")?;
+            let amount0 = get_numeric(&params, 2, "amount0")?;
+            let amount1 = get_numeric(&params, 3, "amount1")?;
+            let lp_token_burn = get_numeric(&params, 4, "lp_token_burn")?;
+            let fee_sats = get_numeric(&params, 5, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .amm_burn(&asset0, &asset1, amount0, amount1, lp_token_burn, fee_sats)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_dutch_auction_create" => {
+            let object = params.first().and_then(Value::as_object).ok_or_else(|| {
+                JsonRpcError::Wallet("auction params must be an object".to_string())
+            })?;
+            let string_field = |name: &str| -> Result<String> {
+                object
+                    .get(name)
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| JsonRpcError::Wallet(format!("auction params missing {name}")))
+            };
+            let u32_field = |name: &str| -> Result<u32> {
+                object
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| JsonRpcError::Wallet(format!("auction params missing {name}")))
+            };
+            let u64_field = |name: &str| -> Result<u64> {
+                object
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| JsonRpcError::Wallet(format!("auction params missing {name}")))
+            };
+            let auction_params = DutchAuctionParams {
+                start_block: u32_field("start_block")?,
+                duration: u32_field("duration")?,
+                base_asset: parse_asset_id(&string_field("base_asset")?)
+                    .map_err(|err| JsonRpcError::Wallet(err.to_string()))?,
+                base_amount: u64_field("base_amount")?,
+                quote_asset: parse_asset_id(&string_field("quote_asset")?)
+                    .map_err(|err| JsonRpcError::Wallet(err.to_string()))?,
+                initial_price: u64_field("initial_price")?,
+                final_price: u64_field("final_price")?,
+            };
+            let fee_sats = get_numeric(&params, 1, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .dutch_auction_create(auction_params, fee_sats)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_dutch_auction_bid" => {
+            let auction_id = get_string(&params, 0, "auction_id")?;
+            let base_asset = get_string(&params, 1, "base_asset")?;
+            let quote_asset = get_string(&params, 2, "quote_asset")?;
+            let bid_size = get_numeric(&params, 3, "bid_size")?;
+            let receive_quantity = get_numeric(&params, 4, "receive_quantity")?;
+            let fee_sats = get_numeric(&params, 5, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .dutch_auction_bid(
+                    &auction_id,
+                    &base_asset,
+                    &quote_asset,
+                    bid_size,
+                    receive_quantity,
+                    fee_sats,
+                )
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_dutch_auction_collect" => {
+            let auction_id = get_string(&params, 0, "auction_id")?;
+            let base_asset = get_string(&params, 1, "base_asset")?;
+            let quote_asset = get_string(&params, 2, "quote_asset")?;
+            let amount_base = get_numeric(&params, 3, "amount_base")?;
+            let amount_quote = get_numeric(&params, 4, "amount_quote")?;
+            let fee_sats = get_numeric(&params, 5, "fee_sats")?;
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .dutch_auction_collect(
+                    &auction_id,
+                    &base_asset,
+                    &quote_asset,
+                    amount_base,
+                    amount_quote,
+                    fee_sats,
+                )
                 .map_err(|err| JsonRpcError::Wallet(err.to_string()))
         }
 

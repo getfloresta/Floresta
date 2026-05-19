@@ -98,6 +98,10 @@ fn main() {
         bitassets_wallet_create: params.bitassets_wallet_create,
         #[cfg(feature = "bitassets")]
         bitassets_wallet_seed: params.bitassets_wallet_seed,
+        #[cfg(feature = "bitassets")]
+        bitassets_lite_wallet_quic_url: params.bitassets_lite_wallet_quic_url,
+        #[cfg(feature = "bitassets")]
+        disable_bitassets_lite_wallet_quic: params.disable_bitassets_lite_wallet_quic,
         enable_electrum_tls: params.enable_electrum_tls,
         electrum_address_tls: params.electrum_address_tls,
         tls_cert_path: params.tls_cert_path,

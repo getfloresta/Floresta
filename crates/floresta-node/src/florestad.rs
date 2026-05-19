@@ -299,6 +299,14 @@ pub struct Config {
     /// Optional 64-byte hex seed used when creating the native BitAssets wallet.
     pub bitassets_wallet_seed: Option<String>,
 
+    #[cfg(feature = "bitassets")]
+    /// Optional plain-bitassets lite-wallet QUIC endpoint for native wallet subscriptions.
+    pub bitassets_lite_wallet_quic_url: Option<String>,
+
+    #[cfg(feature = "bitassets")]
+    /// Disable native wallet QUIC subscriptions and use JSON-RPC polling only.
+    pub disable_bitassets_lite_wallet_quic: bool,
+
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,
 
@@ -374,6 +382,10 @@ impl Config {
             bitassets_wallet_create: false,
             #[cfg(feature = "bitassets")]
             bitassets_wallet_seed: None,
+            #[cfg(feature = "bitassets")]
+            bitassets_lite_wallet_quic_url: None,
+            #[cfg(feature = "bitassets")]
+            disable_bitassets_lite_wallet_quic: false,
             enable_electrum_tls: false,
             electrum_address_tls: None,
             generate_cert: false,
@@ -607,6 +619,32 @@ impl Florestad {
         } else {
             None
         };
+        #[cfg(feature = "bitassets")]
+        if let Some(wallet) = native_bitassets_wallet.as_ref() {
+            if self.config.disable_bitassets_lite_wallet_quic {
+                wallet.lock().await.set_quic_enabled(false);
+            } else {
+                wallet.lock().await.set_quic_enabled(true);
+                let quic_url = self
+                    .config
+                    .bitassets_lite_wallet_quic_url
+                    .clone()
+                    .or_else(|| {
+                        self.config
+                            .bitassets_rpc_url
+                            .as_deref()
+                            .and_then(Self::default_bitassets_quic_url)
+                    });
+                if let Some(quic_url) = quic_url {
+                    Self::spawn_native_bitassets_quic_loop(wallet.clone(), quic_url);
+                } else {
+                    wallet
+                        .lock()
+                        .await
+                        .set_quic_error("missing --bitassets-lite-wallet-quic-url");
+                }
+            }
+        }
 
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
@@ -1311,6 +1349,223 @@ impl Florestad {
                 }
             }
         });
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn default_bitassets_quic_url(rpc_url: &str) -> Option<String> {
+        let without_scheme = rpc_url.split_once("://").map_or(rpc_url, |(_, rest)| rest);
+        let authority = without_scheme.split('/').next()?;
+        let (host, port) = authority.rsplit_once(':')?;
+        let port = port.parse::<u16>().ok()?.checked_add(100)?;
+        Some(format!("{host}:{port}"))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn spawn_native_bitassets_quic_loop(
+        wallet: Arc<tokio::sync::Mutex<NativeBitAssetsWallet>>,
+        quic_url: String,
+    ) {
+        info!("Starting native BitAssets lite-wallet QUIC subscription to {quic_url}");
+        task::spawn(async move {
+            let mut backoff = Duration::from_secs(1);
+            loop {
+                let result = Self::run_native_bitassets_quic_once(wallet.clone(), &quic_url).await;
+                if let Err(err) = result {
+                    warn!("Native BitAssets lite-wallet QUIC disconnected: {err}");
+                    {
+                        let mut wallet = wallet.lock().await;
+                        wallet.set_quic_error(err.clone());
+                    }
+                    let wallet_for_sync = wallet.clone();
+                    let _ = task::spawn_blocking(move || {
+                        let mut wallet = wallet_for_sync.blocking_lock();
+                        wallet.sync()
+                    })
+                    .await;
+                }
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(60));
+            }
+        });
+    }
+
+    #[cfg(feature = "bitassets")]
+    async fn run_native_bitassets_quic_once(
+        wallet: Arc<tokio::sync::Mutex<NativeBitAssetsWallet>>,
+        quic_url: &str,
+    ) -> Result<(), String> {
+        let endpoint = Self::native_bitassets_quic_endpoint()?;
+        let remote: SocketAddr = quic_url
+            .parse()
+            .map_err(|err| format!("invalid QUIC address {quic_url}: {err}"))?;
+        let connection = endpoint
+            .connect(remote, "localhost")
+            .map_err(|err| format!("QUIC connect setup failed: {err}"))?
+            .await
+            .map_err(|err| format!("QUIC connect failed: {err}"))?;
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|err| format!("QUIC stream open failed: {err}"))?;
+        let (script_hashes, from_block_hash, subscription_generation) = {
+            let mut wallet = wallet.lock().await;
+            wallet.set_quic_connected(true);
+            (
+                wallet.script_hashes().map_err(|err| err.to_string())?,
+                wallet.last_tip_hash(),
+                wallet.subscription_generation(),
+            )
+        };
+        if script_hashes.is_empty() {
+            return Err("native BitAssets wallet has no script hashes to subscribe".to_string());
+        }
+        let request = json!({
+            "type": "subscribe",
+            "script_hashes": script_hashes,
+            "from_block_hash": from_block_hash,
+        });
+        let request = serde_json::to_vec(&request).map_err(|err| err.to_string())?;
+        send.write_all(&request)
+            .await
+            .map_err(|err| format!("QUIC subscribe write failed: {err}"))?;
+        send.finish()
+            .map_err(|err| format!("QUIC subscribe finish failed: {err}"))?;
+
+        let mut buffer = Vec::<u8>::new();
+        loop {
+            let chunk = match tokio::time::timeout(
+                Duration::from_secs(2),
+                recv.read_chunk(64 * 1024, true),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|err| format!("QUIC read failed: {err}"))?,
+                Err(_) => {
+                    if wallet.lock().await.subscription_generation() != subscription_generation {
+                        return Err("wallet script hashes changed; resubscribing".to_string());
+                    }
+                    continue;
+                }
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
+            buffer.extend_from_slice(&chunk.bytes);
+            while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+                let line = buffer.drain(..=newline).collect::<Vec<_>>();
+                let line = &line[..line.len().saturating_sub(1)];
+                if line.is_empty() {
+                    continue;
+                }
+                Self::apply_native_bitassets_quic_message(wallet.clone(), line).await?;
+            }
+        }
+        Err("QUIC stream closed".to_string())
+    }
+
+    #[cfg(feature = "bitassets")]
+    async fn apply_native_bitassets_quic_message(
+        wallet: Arc<tokio::sync::Mutex<NativeBitAssetsWallet>>,
+        line: &[u8],
+    ) -> Result<(), String> {
+        let message: Value = serde_json::from_slice(line)
+            .map_err(|err| format!("invalid QUIC JSON message: {err}"))?;
+        let message_type = message
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "QUIC message missing type".to_string())?;
+        if message_type == "error" {
+            let message = message
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("plain-bitassets lite-wallet error");
+            return Err(message.to_string());
+        }
+        let update = match message_type {
+            "snapshot" | "mempool" | "confirmed" => message
+                .get("update")
+                .ok_or_else(|| format!("{message_type} message missing update"))?,
+            other => return Err(format!("unknown QUIC message type {other}")),
+        };
+        let mut wallet = wallet.lock().await;
+        wallet
+            .apply_quic_update(update)
+            .map_err(|err| format!("could not apply {message_type} update: {err}"))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn native_bitassets_quic_endpoint() -> Result<quinn::Endpoint, String> {
+        let bind_addr: SocketAddr = "[::]:0"
+            .parse()
+            .map_err(|err| format!("invalid QUIC bind address: {err}"))?;
+        let mut endpoint = quinn::Endpoint::client(bind_addr)
+            .map_err(|err| format!("could not create QUIC endpoint: {err}"))?;
+        endpoint.set_default_client_config(Self::native_bitassets_quic_client_config()?);
+        Ok(endpoint)
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn native_bitassets_quic_client_config() -> Result<quinn::ClientConfig, String> {
+        #[derive(Debug)]
+        struct SkipServerVerification;
+
+        impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+            fn verify_server_cert(
+                &self,
+                _end_entity: &rustls::pki_types::CertificateDer,
+                _intermediates: &[rustls::pki_types::CertificateDer],
+                _server_name: &rustls::pki_types::ServerName,
+                _ocsp_response: &[u8],
+                _now: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                message: &[u8],
+                cert: &rustls::pki_types::CertificateDer<'_>,
+                dss: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                rustls::crypto::verify_tls12_signature(
+                    message,
+                    cert,
+                    dss,
+                    &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+                )
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                message: &[u8],
+                cert: &rustls::pki_types::CertificateDer<'_>,
+                dss: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                rustls::crypto::verify_tls13_signature(
+                    message,
+                    cert,
+                    dss,
+                    &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+                )
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                rustls::crypto::ring::default_provider()
+                    .signature_verification_algorithms
+                    .supported_schemes()
+            }
+        }
+
+        let crypto = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+            .with_no_client_auth();
+        let client_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+            .map_err(|err| format!("could not create QUIC rustls client config: {err}"))?;
+        Ok(quinn::ClientConfig::new(Arc::new(client_config)))
     }
 
     /// Setup the wallet by initializing the database and adding descriptors, xpubs, and addresses.

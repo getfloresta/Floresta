@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitcoin::base58;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
@@ -29,6 +30,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("not enough native wallet BitAsset funds for {asset_id}: need {amount}")]
     NotEnoughFunds { asset_id: String, amount: u64 },
+    #[error("native BitAssets wallet has no wallet UTXO matching {0}")]
+    NoWalletUtxo(String),
     #[error("BitAssets native wallet has no address for input {0}")]
     NoSigningAddress(String),
     #[error("JSON error")]
@@ -66,7 +69,7 @@ impl Address {
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-struct Hash([u8; 32]);
+pub struct Hash([u8; 32]);
 
 impl Hash {
     fn from_hex(s: &str) -> Result<Self, Error> {
@@ -168,7 +171,7 @@ enum TransactionData {
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Copy, Debug, Eq, PartialEq)]
-enum AssetId {
+pub enum AssetId {
     Bitcoin,
     BitAsset(BitAssetId),
     BitAssetControl(BitAssetId),
@@ -176,28 +179,28 @@ enum AssetId {
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-struct BitAssetId(Hash);
+pub struct BitAssetId(pub Hash);
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 struct DutchAuctionId(Txid);
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Eq, PartialEq)]
-struct DutchAuctionParams {
-    start_block: u32,
-    duration: u32,
-    base_asset: AssetId,
-    base_amount: u64,
-    quote_asset: AssetId,
-    initial_price: u64,
-    final_price: u64,
+pub struct DutchAuctionParams {
+    pub start_block: u32,
+    pub duration: u32,
+    pub base_asset: AssetId,
+    pub base_amount: u64,
+    pub quote_asset: AssetId,
+    pub initial_price: u64,
+    pub final_price: u64,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Eq, PartialEq)]
-struct BitAssetData {
-    ticker: Option<String>,
-    name: Option<String>,
-    summary: Option<String>,
+#[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BitAssetData {
+    pub ticker: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<String>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Debug, Eq, PartialEq)]
@@ -298,6 +301,22 @@ pub struct WalletUtxo {
     pub proof_refs: Vec<WalletProofRef>,
     #[serde(default)]
     pub utreexo_leaf_hash: Option<String>,
+    #[serde(default = "default_content_kind")]
+    pub content_kind: String,
+    #[serde(default)]
+    pub reservation_txid: Option<String>,
+    #[serde(default)]
+    pub reservation_commitment: Option<String>,
+    #[serde(default)]
+    pub lp_asset0: Option<String>,
+    #[serde(default)]
+    pub lp_asset1: Option<String>,
+    #[serde(default)]
+    pub auction_id: Option<String>,
+}
+
+fn default_content_kind() -> String {
+    "bitasset".to_string()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -322,11 +341,21 @@ struct StoredWallet {
     last_tip_height: Option<u32>,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct QuicStatus {
+    pub enabled: bool,
+    pub connected: bool,
+    pub last_message_unix_ms: Option<u128>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct NativeBitAssetsWallet {
     path: PathBuf,
     rpc_url: String,
     stored: StoredWallet,
+    quic_status: QuicStatus,
+    subscription_generation: u64,
 }
 
 impl NativeBitAssetsWallet {
@@ -350,6 +379,8 @@ impl NativeBitAssetsWallet {
                 path,
                 rpc_url,
                 stored,
+                quic_status: QuicStatus::default(),
+                subscription_generation: 0,
             });
         }
 
@@ -379,6 +410,8 @@ impl NativeBitAssetsWallet {
                 last_tip_hash: None,
                 last_tip_height: None,
             },
+            quic_status: QuicStatus::default(),
+            subscription_generation: 0,
         };
         wallet.save()?;
         Ok(wallet)
@@ -400,6 +433,7 @@ impl NativeBitAssetsWallet {
             script_hash: Some(address.script_hash()),
         });
         self.save()?;
+        self.subscription_generation = self.subscription_generation.saturating_add(1);
         Ok(address_string)
     }
 
@@ -412,7 +446,45 @@ impl NativeBitAssetsWallet {
             "last_tip_hash": self.stored.last_tip_hash,
             "last_tip_height": self.stored.last_tip_height,
             "balances": self.balances(),
+            "quic": self.quic_status,
         })
+    }
+
+    pub fn script_hashes(&self) -> Result<Vec<String>, Error> {
+        self.stored
+            .addresses
+            .iter()
+            .map(|address| {
+                address.script_hash.clone().map(Ok).unwrap_or_else(|| {
+                    Address::from_base58(&address.address).map(|a| a.script_hash())
+                })
+            })
+            .collect()
+    }
+
+    pub fn last_tip_hash(&self) -> Option<String> {
+        self.stored.last_tip_hash.clone()
+    }
+
+    pub fn subscription_generation(&self) -> u64 {
+        self.subscription_generation
+    }
+
+    pub fn set_quic_enabled(&mut self, enabled: bool) {
+        self.quic_status.enabled = enabled;
+    }
+
+    pub fn set_quic_connected(&mut self, connected: bool) {
+        self.quic_status.connected = connected;
+        if connected {
+            self.quic_status.last_error = None;
+            self.quic_status.last_message_unix_ms = unix_ms_now();
+        }
+    }
+
+    pub fn set_quic_error(&mut self, error: impl Into<String>) {
+        self.quic_status.connected = false;
+        self.quic_status.last_error = Some(error.into());
     }
 
     pub fn list_utxos(&self) -> Value {
@@ -434,16 +506,7 @@ impl NativeBitAssetsWallet {
     }
 
     pub fn sync(&mut self) -> Result<Value, Error> {
-        let script_hashes = self
-            .stored
-            .addresses
-            .iter()
-            .map(|address| {
-                address.script_hash.clone().map(Ok).unwrap_or_else(|| {
-                    Address::from_base58(&address.address).map(|a| a.script_hash())
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
+        let script_hashes = self.script_hashes()?;
         if script_hashes.is_empty() {
             return Ok(self.wallet_info());
         }
@@ -453,6 +516,15 @@ impl NativeBitAssetsWallet {
             vec![json!(script_hashes), json!(self.stored.last_tip_hash)],
         )?;
         self.apply_update(&update)?;
+        self.save()?;
+        Ok(self.wallet_info())
+    }
+
+    pub fn apply_quic_update(&mut self, update: &Value) -> Result<Value, Error> {
+        self.apply_update(update)?;
+        self.quic_status.connected = true;
+        self.quic_status.last_error = None;
+        self.quic_status.last_message_unix_ms = unix_ms_now();
         self.save()?;
         Ok(self.wallet_info())
     }
@@ -470,29 +542,8 @@ impl NativeBitAssetsWallet {
                 "native BitAsset transfer currently supports fee_sats=0".to_string(),
             ));
         }
-        let _asset_id = BitAssetId(Hash::from_hex(asset_id_hex)?);
-        let mut selected = Vec::new();
-        let mut total = 0u64;
-        for utxo in self
-            .stored
-            .confirmed_utxos
-            .iter()
-            .filter(|utxo| utxo.asset_id == asset_id_hex)
-        {
-            selected.push(utxo.clone());
-            total = total
-                .checked_add(utxo.amount)
-                .ok_or_else(|| Error::Rpc("amount overflow".to_string()))?;
-            if total >= amount {
-                break;
-            }
-        }
-        if total < amount {
-            return Err(Error::NotEnoughFunds {
-                asset_id: asset_id_hex.to_string(),
-                amount,
-            });
-        }
+        let asset = AssetId::BitAsset(BitAssetId(Hash::from_hex(asset_id_hex)?));
+        let (total, selected) = self.select_wallet_utxos(&asset, amount)?;
 
         let mut outputs = vec![Output {
             address: Address::from_base58(destination)?,
@@ -510,22 +561,343 @@ impl NativeBitAssetsWallet {
         }
 
         let transaction = Transaction {
-            inputs: selected
-                .iter()
-                .map(|utxo| {
-                    Ok(OutPoint::Regular {
-                        txid: Txid(Hash::from_hex(&utxo.outpoint.txid)?),
-                        vout: utxo.outpoint.vout,
-                    })
-                })
-                .collect::<Result<Vec<_>, Error>>()?,
+            inputs: selected_to_outpoints(&selected)?,
             outputs,
             memo: Vec::new(),
             data: None,
         };
+        let txid = self.sign_and_broadcast(transaction, &selected)?;
+        Ok(json!({
+            "txid": txid,
+            "status": "broadcast",
+            "native": true
+        }))
+    }
+
+    pub fn reserve(&mut self, name: &str, fee_sats: u64) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let reservation_address = Address::from_base58(&self.get_new_address()?)?;
+        let index = self.index_for_address(&reservation_address.as_base58())?;
+        let signing_key = self.signing_key(index)?;
+        let name_hash = Hash(*blake3::hash(name.as_bytes()).as_bytes());
+        let nonce = blake3::keyed_hash(signing_key.as_bytes(), &name_hash.0);
+        let commitment = Hash(*blake3::keyed_hash(nonce.as_bytes(), &name_hash.0).as_bytes());
+        let transaction = Transaction {
+            inputs: Vec::new(),
+            outputs: vec![Output {
+                address: reservation_address,
+                content: OutputContent::BitAssetReservation,
+                memo: Vec::new(),
+            }],
+            memo: Vec::new(),
+            data: Some(TransactionData::BitAssetReservation { commitment }),
+        };
+        let txid = self.sign_and_broadcast(transaction, &[])?;
+        Ok(json!({
+            "txid": txid,
+            "status": "broadcast",
+            "native": true,
+            "commitment": hex::encode(commitment.0),
+        }))
+    }
+
+    pub fn register(
+        &mut self,
+        name: &str,
+        initial_supply: u64,
+        bitasset_data: BitAssetData,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let name_hash = Hash(*blake3::hash(name.as_bytes()).as_bytes());
+        let bitasset_id = BitAssetId(name_hash);
+        let mut selected = None;
+        let mut revealed_nonce = None;
+        for utxo in self
+            .stored
+            .confirmed_utxos
+            .iter()
+            .filter(|utxo| utxo.content_kind == "reservation")
+        {
+            let Some(commitment) = utxo.reservation_commitment.as_deref() else {
+                continue;
+            };
+            let index = self.index_for_address(&utxo.address)?;
+            let signing_key = self.signing_key(index)?;
+            let nonce = blake3::keyed_hash(signing_key.as_bytes(), &name_hash.0);
+            let computed = blake3::keyed_hash(nonce.as_bytes(), &name_hash.0);
+            if hex::encode(computed.as_bytes()) == commitment {
+                selected = Some(utxo.clone());
+                revealed_nonce = Some(Hash(*nonce.as_bytes()));
+                break;
+            }
+        }
+        let selected =
+            selected.ok_or_else(|| Error::NoWalletUtxo(format!("reservation for {name}")))?;
+        let revealed_nonce = revealed_nonce.expect("set with selected reservation");
+        let address = Address::from_base58(&self.get_new_address()?)?;
+        let mut outputs = Vec::new();
+        if initial_supply != 0 {
+            outputs.push(Output {
+                address,
+                content: OutputContent::BitAsset(initial_supply),
+                memo: Vec::new(),
+            });
+        }
+        outputs.push(Output {
+            address,
+            content: OutputContent::BitAssetControl,
+            memo: Vec::new(),
+        });
+        let transaction = Transaction {
+            inputs: selected_to_outpoints(std::slice::from_ref(&selected))?,
+            outputs,
+            memo: Vec::new(),
+            data: Some(TransactionData::BitAssetRegistration {
+                name_hash,
+                revealed_nonce,
+                bitasset_data: Box::new(bitasset_data),
+                initial_supply,
+            }),
+        };
+        let txid = self.sign_and_broadcast(transaction, &[selected])?;
+        Ok(json!({
+            "txid": txid,
+            "status": "broadcast",
+            "native": true,
+            "asset_id": hex::encode(bitasset_id.0.0),
+        }))
+    }
+
+    pub fn amm_mint(
+        &mut self,
+        asset0: &str,
+        asset1: &str,
+        amount0: u64,
+        amount1: u64,
+        lp_token_mint: u64,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let asset0 = parse_asset_id(asset0)?;
+        let asset1 = parse_asset_id(asset1)?;
+        let (input0, mut selected) = self.select_wallet_utxos(&asset0, amount0)?;
+        let (input1, selected1) = self.select_wallet_utxos(&asset1, amount1)?;
+        selected.extend(selected1);
+        let mut outputs = Vec::new();
+        self.push_change(&mut outputs, asset0, input0 - amount0)?;
+        self.push_change(&mut outputs, asset1, input1 - amount1)?;
+        outputs.push(Output {
+            address: Address::from_base58(&self.get_new_address()?)?,
+            content: OutputContent::AmmLpToken(lp_token_mint),
+            memo: Vec::new(),
+        });
+        self.broadcast_constructor(
+            selected,
+            outputs,
+            TransactionData::AmmMint {
+                amount0,
+                amount1,
+                lp_token_mint,
+            },
+        )
+    }
+
+    pub fn amm_swap(
+        &mut self,
+        asset_spend: &str,
+        asset_receive: &str,
+        amount_spend: u64,
+        amount_receive: u64,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let asset_spend = parse_asset_id(asset_spend)?;
+        let asset_receive = parse_asset_id(asset_receive)?;
+        let (input, selected) = self.select_wallet_utxos(&asset_spend, amount_spend)?;
+        let mut outputs = Vec::new();
+        self.push_change(&mut outputs, asset_spend, input - amount_spend)?;
+        outputs.push(Output {
+            address: Address::from_base58(&self.get_new_address()?)?,
+            content: output_content_for_asset(asset_receive, amount_receive),
+            memo: Vec::new(),
+        });
+        self.broadcast_constructor(
+            selected,
+            outputs,
+            TransactionData::AmmSwap {
+                amount_spent: amount_spend,
+                amount_receive,
+                pair_asset: asset_receive,
+            },
+        )
+    }
+
+    pub fn amm_burn(
+        &mut self,
+        asset0: &str,
+        asset1: &str,
+        amount0: u64,
+        amount1: u64,
+        lp_token_burn: u64,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let asset0 = parse_asset_id(asset0)?;
+        let asset1 = parse_asset_id(asset1)?;
+        let (input, selected) =
+            self.select_lp_utxos(&asset_key(&asset0), &asset_key(&asset1), lp_token_burn)?;
+        let mut outputs = Vec::new();
+        if input != lp_token_burn {
+            outputs.push(Output {
+                address: Address::from_base58(&self.get_new_address()?)?,
+                content: OutputContent::AmmLpToken(input - lp_token_burn),
+                memo: Vec::new(),
+            });
+        }
+        outputs.push(Output {
+            address: Address::from_base58(&self.get_new_address()?)?,
+            content: output_content_for_asset(asset0, amount0),
+            memo: Vec::new(),
+        });
+        outputs.push(Output {
+            address: Address::from_base58(&self.get_new_address()?)?,
+            content: output_content_for_asset(asset1, amount1),
+            memo: Vec::new(),
+        });
+        self.broadcast_constructor(
+            selected,
+            outputs,
+            TransactionData::AmmBurn {
+                amount0,
+                amount1,
+                lp_token_burn,
+            },
+        )
+    }
+
+    pub fn dutch_auction_create(
+        &mut self,
+        params: DutchAuctionParams,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let (input, selected) = self.select_wallet_utxos(&params.base_asset, params.base_amount)?;
+        let mut outputs = Vec::new();
+        self.push_change(&mut outputs, params.base_asset, input - params.base_amount)?;
+        outputs.push(Output {
+            address: Address::from_base58(&self.get_new_address()?)?,
+            content: OutputContent::DutchAuctionReceipt,
+            memo: Vec::new(),
+        });
+        self.broadcast_constructor(
+            selected,
+            outputs,
+            TransactionData::DutchAuctionCreate(params),
+        )
+    }
+
+    pub fn dutch_auction_bid(
+        &mut self,
+        auction_id: &str,
+        base_asset: &str,
+        quote_asset: &str,
+        bid_size: u64,
+        receive_quantity: u64,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let auction_id = DutchAuctionId(Txid(Hash::from_hex(auction_id)?));
+        let base_asset = parse_asset_id(base_asset)?;
+        let quote_asset = parse_asset_id(quote_asset)?;
+        let (input, selected) = self.select_wallet_utxos(&quote_asset, bid_size)?;
+        let mut outputs = Vec::new();
+        self.push_change(&mut outputs, quote_asset, input - bid_size)?;
+        outputs.push(Output {
+            address: Address::from_base58(&self.get_new_address()?)?,
+            content: output_content_for_asset(base_asset, receive_quantity),
+            memo: Vec::new(),
+        });
+        self.broadcast_constructor(
+            selected,
+            outputs,
+            TransactionData::DutchAuctionBid {
+                auction_id,
+                receive_asset: base_asset,
+                quantity: receive_quantity,
+                bid_size,
+            },
+        )
+    }
+
+    pub fn dutch_auction_collect(
+        &mut self,
+        auction_id: &str,
+        base_asset: &str,
+        quote_asset: &str,
+        amount_base: u64,
+        amount_quote: u64,
+        fee_sats: u64,
+    ) -> Result<Value, Error> {
+        reject_nonzero_fee(fee_sats)?;
+        let base_asset = parse_asset_id(base_asset)?;
+        let quote_asset = parse_asset_id(quote_asset)?;
+        let selected = self.select_auction_receipt(auction_id)?;
+        let mut outputs = Vec::new();
+        if amount_base != 0 {
+            outputs.push(Output {
+                address: Address::from_base58(&self.get_new_address()?)?,
+                content: output_content_for_asset(base_asset, amount_base),
+                memo: Vec::new(),
+            });
+        }
+        if amount_quote != 0 {
+            outputs.push(Output {
+                address: Address::from_base58(&self.get_new_address()?)?,
+                content: output_content_for_asset(quote_asset, amount_quote),
+                memo: Vec::new(),
+            });
+        }
+        self.broadcast_constructor(
+            vec![selected],
+            outputs,
+            TransactionData::DutchAuctionCollect {
+                asset_offered: base_asset,
+                asset_receive: quote_asset,
+                amount_offered_remaining: amount_base,
+                amount_received: amount_quote,
+            },
+        )
+    }
+
+    fn broadcast_constructor(
+        &mut self,
+        selected: Vec<WalletUtxo>,
+        outputs: Vec<Output>,
+        data: TransactionData,
+    ) -> Result<Value, Error> {
+        let transaction = Transaction {
+            inputs: selected_to_outpoints(&selected)?,
+            outputs,
+            memo: Vec::new(),
+            data: Some(data),
+        };
+        let txid = self.sign_and_broadcast(transaction, &selected)?;
+        Ok(json!({
+            "txid": txid,
+            "status": "broadcast",
+            "native": true,
+        }))
+    }
+
+    fn sign_and_broadcast(
+        &self,
+        transaction: Transaction,
+        selected: &[WalletUtxo],
+    ) -> Result<Value, Error> {
         let tx_bytes = borsh::to_vec(&transaction)?;
         let mut authorizations = Vec::with_capacity(selected.len());
-        for utxo in &selected {
+        for utxo in selected {
             let index = self.index_for_address(&utxo.address)?;
             let signing_key = self.signing_key(index)?;
             let verifying_key = VerifyingKey(signing_key.verifying_key());
@@ -544,16 +916,102 @@ impl NativeBitAssetsWallet {
             authorizations,
         };
         let authorized_hex = hex::encode(borsh::to_vec(&authorized)?);
-        let txid = bitassets_rpc_call_with_params(
+        bitassets_rpc_call_with_params(
             &self.rpc_url,
             "submit_authorized_transaction",
             vec![json!(authorized_hex)],
-        )?;
-        Ok(json!({
-            "txid": txid,
-            "status": "broadcast",
-            "native": true
-        }))
+        )
+    }
+
+    fn select_wallet_utxos(
+        &self,
+        asset: &AssetId,
+        amount: u64,
+    ) -> Result<(u64, Vec<WalletUtxo>), Error> {
+        let key = asset_key(asset);
+        let mut selected = Vec::new();
+        let mut total = 0u64;
+        for utxo in self
+            .stored
+            .confirmed_utxos
+            .iter()
+            .filter(|utxo| utxo.asset_id == key)
+        {
+            selected.push(utxo.clone());
+            total = total
+                .checked_add(utxo.amount)
+                .ok_or_else(|| Error::Rpc("amount overflow".to_string()))?;
+            if total >= amount {
+                break;
+            }
+        }
+        if total < amount {
+            Err(Error::NotEnoughFunds {
+                asset_id: key,
+                amount,
+            })
+        } else {
+            Ok((total, selected))
+        }
+    }
+
+    fn select_lp_utxos(
+        &self,
+        asset0: &str,
+        asset1: &str,
+        amount: u64,
+    ) -> Result<(u64, Vec<WalletUtxo>), Error> {
+        let mut selected = Vec::new();
+        let mut total = 0u64;
+        for utxo in self.stored.confirmed_utxos.iter().filter(|utxo| {
+            utxo.content_kind == "amm_lp_token"
+                && utxo.lp_asset0.as_deref() == Some(asset0)
+                && utxo.lp_asset1.as_deref() == Some(asset1)
+        }) {
+            selected.push(utxo.clone());
+            total = total
+                .checked_add(utxo.amount)
+                .ok_or_else(|| Error::Rpc("amount overflow".to_string()))?;
+            if total >= amount {
+                break;
+            }
+        }
+        if total < amount {
+            Err(Error::NotEnoughFunds {
+                asset_id: format!("lp:{asset0}:{asset1}"),
+                amount,
+            })
+        } else {
+            Ok((total, selected))
+        }
+    }
+
+    fn select_auction_receipt(&self, auction_id: &str) -> Result<WalletUtxo, Error> {
+        self.stored
+            .confirmed_utxos
+            .iter()
+            .find(|utxo| {
+                utxo.content_kind == "dutch_auction_receipt"
+                    && utxo.auction_id.as_deref() == Some(auction_id)
+            })
+            .cloned()
+            .ok_or_else(|| Error::NoWalletUtxo(format!("auction receipt {auction_id}")))
+    }
+
+    fn push_change(
+        &mut self,
+        outputs: &mut Vec<Output>,
+        asset: AssetId,
+        amount: u64,
+    ) -> Result<(), Error> {
+        if amount != 0 {
+            outputs.push(Output {
+                address: Address::from_base58(&self.get_new_address()?)?,
+                content: output_content_for_asset(asset, amount),
+                memo: Vec::new(),
+            });
+        }
+        Ok(())
     }
 
     fn apply_update(&mut self, update: &Value) -> Result<(), Error> {
@@ -782,8 +1240,7 @@ fn format_outpoint(outpoint: &WalletOutPoint) -> String {
 fn lite_wallet_leaf_hash(
     outpoint: &WalletOutPoint,
     address: &str,
-    asset_id: &str,
-    amount: u64,
+    content_descriptor: &str,
     memo_hex: &str,
     proof_ref: &WalletProofRef,
 ) -> Result<String, Error> {
@@ -793,12 +1250,154 @@ fn lite_wallet_leaf_hash(
         "plain-bitassets:lite-wallet-leaf:v1",
         format_outpoint(outpoint),
         address.0,
-        format!("bitasset:{asset_id}:{amount}"),
+        content_descriptor.to_string(),
         memo,
         proof_ref.sidechain_block_height.unwrap_or_default(),
         proof_ref.block_hash.clone().unwrap_or_default(),
     ))?;
     Ok(hex::encode(blake3::hash(&payload).as_bytes()))
+}
+
+#[derive(Clone, Debug)]
+struct ParsedContent {
+    content_kind: String,
+    asset_id: String,
+    amount: u64,
+    descriptor: String,
+    reservation_txid: Option<String>,
+    reservation_commitment: Option<String>,
+    lp_asset0: Option<String>,
+    lp_asset1: Option<String>,
+    auction_id: Option<String>,
+}
+
+fn parse_filled_content(content: &Value) -> Result<ParsedContent, Error> {
+    if let Some(bitasset) = content.get("BitAsset").and_then(Value::as_array) {
+        let asset_id = bitasset
+            .first()
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::Rpc("BitAsset UTXO missing asset id".to_string()))?
+            .to_string();
+        let amount = bitasset
+            .get(1)
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::Rpc("BitAsset UTXO missing amount".to_string()))?;
+        return Ok(ParsedContent {
+            content_kind: "bitasset".to_string(),
+            asset_id: asset_id.clone(),
+            amount,
+            descriptor: format!("bitasset:{asset_id}:{amount}"),
+            reservation_txid: None,
+            reservation_commitment: None,
+            lp_asset0: None,
+            lp_asset1: None,
+            auction_id: None,
+        });
+    }
+    if let Some(asset_id) = content.get("BitAssetControl").and_then(Value::as_str) {
+        return Ok(ParsedContent {
+            content_kind: "bitasset_control".to_string(),
+            asset_id: format!("control:{asset_id}"),
+            amount: 1,
+            descriptor: format!("bitasset-control:{asset_id}"),
+            reservation_txid: None,
+            reservation_commitment: None,
+            lp_asset0: None,
+            lp_asset1: None,
+            auction_id: None,
+        });
+    }
+    if let Some(reservation) = content.get("BitAssetReservation").and_then(Value::as_array) {
+        let reservation_txid = reservation
+            .first()
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::Rpc("reservation UTXO missing txid".to_string()))?
+            .to_string();
+        let commitment = reservation
+            .get(1)
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::Rpc("reservation UTXO missing commitment".to_string()))?
+            .to_string();
+        return Ok(ParsedContent {
+            content_kind: "reservation".to_string(),
+            asset_id: format!("reservation:{commitment}"),
+            amount: 1,
+            descriptor: format!("reservation:{reservation_txid}:{commitment}"),
+            reservation_txid: Some(reservation_txid),
+            reservation_commitment: Some(commitment),
+            lp_asset0: None,
+            lp_asset1: None,
+            auction_id: None,
+        });
+    }
+    if let Some(lp_token) = content.get("AmmLpToken").and_then(Value::as_object) {
+        let asset0_value = lp_token
+            .get("asset0")
+            .ok_or_else(|| Error::Rpc("LP token missing asset0".to_string()))?;
+        let asset1_value = lp_token
+            .get("asset1")
+            .ok_or_else(|| Error::Rpc("LP token missing asset1".to_string()))?;
+        let asset0_wire = asset_id_wire_string(asset0_value)?;
+        let asset1_wire = asset_id_wire_string(asset1_value)?;
+        let amount = lp_token
+            .get("amount")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::Rpc("LP token missing amount".to_string()))?;
+        let asset0 = asset_key_from_wire_hex(&asset0_wire)?;
+        let asset1 = asset_key_from_wire_hex(&asset1_wire)?;
+        return Ok(ParsedContent {
+            content_kind: "amm_lp_token".to_string(),
+            asset_id: format!("lp:{asset0}:{asset1}"),
+            amount,
+            descriptor: format!("amm-lp:{asset0_wire}:{asset1_wire}:{amount}"),
+            reservation_txid: None,
+            reservation_commitment: None,
+            lp_asset0: Some(asset0),
+            lp_asset1: Some(asset1),
+            auction_id: None,
+        });
+    }
+    if let Some(value) = content
+        .get("BitcoinSats")
+        .or_else(|| content.get("Bitcoin"))
+        .and_then(Value::as_u64)
+    {
+        return Ok(ParsedContent {
+            content_kind: "bitcoin".to_string(),
+            asset_id: "bitcoin".to_string(),
+            amount: value,
+            descriptor: format!("bitcoin:{value}"),
+            reservation_txid: None,
+            reservation_commitment: None,
+            lp_asset0: None,
+            lp_asset1: None,
+            auction_id: None,
+        });
+    }
+    if let Some(auction_id) = content.get("DutchAuctionReceipt").and_then(Value::as_str) {
+        return Ok(ParsedContent {
+            content_kind: "dutch_auction_receipt".to_string(),
+            asset_id: format!("auction-receipt:{auction_id}"),
+            amount: 1,
+            descriptor: format!("dutch-auction:{auction_id}"),
+            reservation_txid: None,
+            reservation_commitment: None,
+            lp_asset0: None,
+            lp_asset1: None,
+            auction_id: Some(auction_id.to_string()),
+        });
+    }
+    Ok(ParsedContent {
+        content_kind: "unsupported".to_string(),
+        asset_id: "unsupported".to_string(),
+        amount: 0,
+        descriptor: format!("unsupported:{content}"),
+        reservation_txid: None,
+        reservation_commitment: None,
+        lp_asset0: None,
+        lp_asset1: None,
+        auction_id: None,
+    })
 }
 
 fn parse_utxos(
@@ -835,21 +1434,13 @@ fn parse_utxo(
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Rpc("UTXO missing address".to_string()))?
         .to_string();
-    let Some(bitasset) = output
-        .pointer("/content/BitAsset")
-        .and_then(Value::as_array)
-    else {
+    let content = output
+        .get("content")
+        .ok_or_else(|| Error::Rpc("UTXO missing content".to_string()))?;
+    let parsed_content = parse_filled_content(content)?;
+    if parsed_content.content_kind == "unsupported" {
         return Ok(None);
-    };
-    let asset_id = bitasset
-        .first()
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::Rpc("BitAsset UTXO missing asset id".to_string()))?
-        .to_string();
-    let amount = bitasset
-        .get(1)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| Error::Rpc("BitAsset UTXO missing amount".to_string()))?;
+    }
     let refs = proof_refs
         .iter()
         .filter(|proof| proof.txid == outpoint.txid)
@@ -869,8 +1460,7 @@ fn parse_utxo(
         let expected_leaf_hash = lite_wallet_leaf_hash(
             &outpoint,
             &address,
-            &asset_id,
-            amount,
+            &parsed_content.descriptor,
             output
                 .get("memo")
                 .and_then(Value::as_str)
@@ -888,11 +1478,17 @@ fn parse_utxo(
     Ok(Some(WalletUtxo {
         outpoint: outpoint.clone(),
         address,
-        asset_id,
-        amount,
+        asset_id: parsed_content.asset_id,
+        amount: parsed_content.amount,
         confirmed,
         proof_refs: refs,
         utreexo_leaf_hash,
+        content_kind: parsed_content.content_kind,
+        reservation_txid: parsed_content.reservation_txid,
+        reservation_commitment: parsed_content.reservation_commitment,
+        lp_asset0: parsed_content.lp_asset0,
+        lp_asset1: parsed_content.lp_asset1,
+        auction_id: parsed_content.auction_id,
     }))
 }
 
@@ -948,6 +1544,92 @@ fn upsert_utxo(utxos: &mut Vec<WalletUtxo>, utxo: WalletUtxo) {
     } else {
         utxos.push(utxo);
     }
+}
+
+fn reject_nonzero_fee(fee_sats: u64) -> Result<(), Error> {
+    if fee_sats == 0 {
+        Ok(())
+    } else {
+        Err(Error::Rpc(
+            "native BitAssets constructors currently support fee_sats=0".to_string(),
+        ))
+    }
+}
+
+fn selected_to_outpoints(selected: &[WalletUtxo]) -> Result<Vec<OutPoint>, Error> {
+    selected
+        .iter()
+        .map(|utxo| {
+            Ok(OutPoint::Regular {
+                txid: Txid(Hash::from_hex(&utxo.outpoint.txid)?),
+                vout: utxo.outpoint.vout,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn parse_asset_id(asset: &str) -> Result<AssetId, Error> {
+    let normalized = asset.trim();
+    if normalized.eq_ignore_ascii_case("bitcoin") {
+        return Ok(AssetId::Bitcoin);
+    }
+    if let Some(bitasset) = normalized.strip_prefix("bitasset:") {
+        return Ok(AssetId::BitAsset(BitAssetId(Hash::from_hex(bitasset)?)));
+    }
+    if let Some(control) = normalized.strip_prefix("control:") {
+        return Ok(AssetId::BitAssetControl(BitAssetId(Hash::from_hex(
+            control,
+        )?)));
+    }
+    if let Ok(bytes) = hex::decode(normalized) {
+        if let Ok(asset_id) = AssetId::try_from_wire_bytes(&bytes) {
+            return Ok(asset_id);
+        }
+    }
+    Ok(AssetId::BitAsset(BitAssetId(Hash::from_hex(normalized)?)))
+}
+
+impl AssetId {
+    fn try_from_wire_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        borsh::from_slice(bytes)
+            .map_err(|err| Error::Rpc(format!("invalid serialized asset id: {err}")))
+    }
+}
+
+fn asset_id_wire_string(value: &Value) -> Result<String, Error> {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| Error::Rpc("asset id must be a serialized hex string".to_string()))
+}
+
+fn asset_key_from_wire_hex(wire_hex: &str) -> Result<String, Error> {
+    let bytes = hex::decode(wire_hex)?;
+    let asset = AssetId::try_from_wire_bytes(&bytes)?;
+    Ok(asset_key(&asset))
+}
+
+fn asset_key(asset: &AssetId) -> String {
+    match asset {
+        AssetId::Bitcoin => "bitcoin".to_string(),
+        AssetId::BitAsset(bitasset) => hex::encode(bitasset.0 .0),
+        AssetId::BitAssetControl(bitasset) => format!("control:{}", hex::encode(bitasset.0 .0)),
+    }
+}
+
+fn output_content_for_asset(asset: AssetId, amount: u64) -> OutputContent {
+    match asset {
+        AssetId::Bitcoin => OutputContent::Bitcoin(amount),
+        AssetId::BitAsset(_) => OutputContent::BitAsset(amount),
+        AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+    }
+}
+
+fn unix_ms_now() -> Option<u128> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
 }
 
 fn bitassets_rpc_call_with_params(
@@ -1034,8 +1716,7 @@ mod tests {
         let leaf_hash = lite_wallet_leaf_hash(
             &outpoint,
             "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
-            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-            42,
+            "bitasset:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:42",
             "",
             &proof_ref,
         )
