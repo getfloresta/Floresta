@@ -14,6 +14,8 @@ use serde::Serialize;
 
 pub mod electrum_protocol;
 pub mod error;
+#[cfg(feature = "bitassets")]
+pub mod native_bitassets_wallet;
 pub mod request;
 
 #[derive(Debug, Deserialize, Serialize)]

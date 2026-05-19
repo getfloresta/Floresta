@@ -16,6 +16,11 @@ categories = ["cryptography::cryptocurrencies"]
 
 [dependencies]
 bitcoin = { workspace = true }
+blake3 = { version = "1.8", optional = true }
+borsh = { version = "1.6", features = ["derive"], optional = true }
+ed25519-dalek = { version = "2.2", features = ["serde"], optional = true }
+hex = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 rustreexo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -33,8 +38,8 @@ floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
 rcgen = { workspace = true }
+tempfile = { workspace = true }
 zstd = { workspace = true }
 
 # Local dev-dependencies
@@ -43,7 +48,15 @@ floresta-mempool = { workspace = true }
 
 [features]
 default = []
-bitassets = ["dep:ureq", "floresta-chain/bitassets"]
+bitassets = [
+    "dep:blake3",
+    "dep:borsh",
+    "dep:ed25519-dalek",
+    "dep:hex",
+    "dep:rand",
+    "dep:ureq",
+    "floresta-chain/bitassets",
+]
 
 [lints]
 workspace = true

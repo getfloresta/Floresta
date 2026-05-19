@@ -48,6 +48,8 @@ use tracing::trace;
 
 use crate::get_arg;
 use crate::json_rpc_res;
+#[cfg(feature = "bitassets")]
+use crate::native_bitassets_wallet::NativeBitAssetsWallet;
 use crate::request::Request;
 
 /// How often do we re-broadcast our transactions, until it gets confirmed
@@ -228,6 +230,10 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
     /// actions that must be delegated to the sidechain wallet.
     #[cfg(feature = "bitassets")]
     bitassets_rpc_url: Option<String>,
+
+    /// Optional Floresta-owned native BitAssets wallet.
+    #[cfg(feature = "bitassets")]
+    native_bitassets_wallet: Option<NativeBitAssetsWallet>,
 }
 
 impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
@@ -254,6 +260,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             bitasset_index: None,
             #[cfg(feature = "bitassets")]
             bitassets_rpc_url: None,
+            #[cfg(feature = "bitassets")]
+            native_bitassets_wallet: None,
         })
     }
 
@@ -266,6 +274,15 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     #[cfg(feature = "bitassets")]
     pub fn with_bitassets_rpc_url(mut self, bitassets_rpc_url: String) -> Self {
         self.bitassets_rpc_url = Some(bitassets_rpc_url);
+        self
+    }
+
+    #[cfg(feature = "bitassets")]
+    pub fn with_native_bitassets_wallet(
+        mut self,
+        native_bitassets_wallet: NativeBitAssetsWallet,
+    ) -> Self {
+        self.native_bitassets_wallet = Some(native_bitassets_wallet);
         self
     }
 
@@ -363,6 +380,136 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "hex": String::from_iter(headers),
                     "max": MAX_COUNT,
                 })
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.wallet.get_new_address" => {
+                let Some(wallet) = self.native_bitassets_wallet.as_mut() else {
+                    return Err(super::error::Error::BitAssetsUnavailable);
+                };
+                let address = wallet.get_new_address()?;
+                json_rpc_res!(request, address)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.wallet.transfer" => {
+                let dest = get_arg!(request, String, 0);
+                let asset_id = get_arg!(request, AssetId, 1);
+                let amount = get_arg!(request, u64, 2);
+                let fee_sats = get_arg!(request, u64, 3);
+                let memo = request.params.get(4).and_then(|memo| {
+                    if memo.is_null() {
+                        None
+                    } else {
+                        Some(memo.as_str().unwrap_or_default().as_bytes().to_vec())
+                    }
+                });
+                let Some(rpc_url) = self.bitassets_rpc_url.clone() else {
+                    return Err(super::error::Error::BitAssetsRpcUnavailable);
+                };
+                let Some(wallet) = self.native_bitassets_wallet.as_mut() else {
+                    return Err(super::error::Error::BitAssetsUnavailable);
+                };
+                let result = wallet.transfer(
+                    &rpc_url,
+                    &dest,
+                    &asset_id.to_string(),
+                    amount,
+                    fee_sats,
+                    memo,
+                )?;
+                json_rpc_res!(request, result)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.amm_burn" => {
+                let asset0 = get_arg!(request, String, 0);
+                let asset1 = get_arg!(request, String, 1);
+                let lp_token_amount = get_arg!(request, u64, 2);
+                let txid = self.bitassets_rpc_call_with_params(
+                    "amm_burn",
+                    vec![json!(asset0), json!(asset1), json!(lp_token_amount)],
+                )?;
+                json_rpc_res!(request, txid)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.amm_mint" => {
+                let asset0 = get_arg!(request, String, 0);
+                let asset1 = get_arg!(request, String, 1);
+                let amount0 = get_arg!(request, u64, 2);
+                let amount1 = get_arg!(request, u64, 3);
+                let txid = self.bitassets_rpc_call_with_params(
+                    "amm_mint",
+                    vec![json!(asset0), json!(asset1), json!(amount0), json!(amount1)],
+                )?;
+                json_rpc_res!(request, txid)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.amm_swap" => {
+                let asset_spend = get_arg!(request, String, 0);
+                let asset_receive = get_arg!(request, String, 1);
+                let amount_spend = get_arg!(request, u64, 2);
+                let amount_receive = self.bitassets_rpc_call_with_params(
+                    "amm_swap",
+                    vec![
+                        json!(asset_spend),
+                        json!(asset_receive),
+                        json!(amount_spend),
+                    ],
+                )?;
+                json_rpc_res!(request, amount_receive)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.dutch_auction_bid" => {
+                let auction_id = get_arg!(request, String, 0);
+                let bid_size = get_arg!(request, u64, 1);
+                let amount = self.bitassets_rpc_call_with_params(
+                    "dutch_auction_bid",
+                    vec![json!(auction_id), json!(bid_size)],
+                )?;
+                json_rpc_res!(request, amount)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.dutch_auction_collect" => {
+                let auction_id = get_arg!(request, String, 0);
+                let amounts = self.bitassets_rpc_call_with_params(
+                    "dutch_auction_collect",
+                    vec![json!(auction_id)],
+                )?;
+                json_rpc_res!(request, amounts)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.dutch_auction_create" => {
+                let params = request
+                    .params
+                    .first()
+                    .cloned()
+                    .ok_or(super::error::Error::InvalidParams)?;
+                let txid =
+                    self.bitassets_rpc_call_with_params("dutch_auction_create", vec![params])?;
+                json_rpc_res!(request, txid)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.dutch_auctions" => {
+                let auctions = self.bitassets_rpc_call_with_params("dutch_auctions", vec![])?;
+                json_rpc_res!(request, auctions)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.get_amm_pool_state" => {
+                let asset0 = get_arg!(request, String, 0);
+                let asset1 = get_arg!(request, String, 1);
+                let state = self.bitassets_rpc_call_with_params(
+                    "get_amm_pool_state",
+                    vec![json!(asset0), json!(asset1)],
+                )?;
+                json_rpc_res!(request, state)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.get_amm_price" => {
+                let base = get_arg!(request, String, 0);
+                let quote = get_arg!(request, String, 1);
+                let price = self.bitassets_rpc_call_with_params(
+                    "get_amm_price",
+                    vec![json!(base), json!(quote)],
+                )?;
+                json_rpc_res!(request, price)
             }
             #[cfg(feature = "bitassets")]
             "blockchain.asset.get_new_address" => {
@@ -1737,6 +1884,24 @@ mod test {
 
         let response = send_request(request, port).await.unwrap();
         assert_eq!(response["id"], 5);
+        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(
+            response["error"]["data"],
+            "BitAssets sidechain RPC is not configured for this Electrum server"
+        );
+
+        let asset = format!("01{asset_id}");
+        let request = json!({
+            "id": 6,
+            "method": "blockchain.asset.amm_mint",
+            "jsonrpc": "2.0",
+            "params": [asset, "00", 10, 10]
+        })
+        .to_string()
+            + "\n";
+
+        let response = send_request(request, port).await.unwrap();
+        assert_eq!(response["id"], 6);
         assert_eq!(response["error"]["code"], -32000);
         assert_eq!(
             response["error"]["data"],

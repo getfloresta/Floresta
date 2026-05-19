@@ -17,6 +17,10 @@ pub enum Error {
     #[error("BitAssets sidechain RPC error: {0}")]
     BitAssetsRpc(String),
 
+    #[cfg(feature = "bitassets")]
+    #[error("BitAssets native wallet error: {0}")]
+    BitAssetsNativeWallet(#[from] crate::native_bitassets_wallet::NativeBitAssetsWalletError),
+
     #[error("Invalid json string {0}")]
     Parsing(#[from] serde_json::Error),
 
