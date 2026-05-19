@@ -145,6 +145,21 @@ pub struct Cli {
     /// Refresh interval for the trusted plain-bitassets JSON-RPC import.
     pub bitassets_rpc_refresh_seconds: Option<u64>,
 
+    #[cfg(feature = "bitassets")]
+    #[arg(long, default_value_t = false)]
+    /// Enable the Floresta-owned native BitAssets wallet.
+    pub enable_bitassets_native_wallet: bool,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, default_value_t = false)]
+    /// Create the native BitAssets wallet if it does not already exist.
+    pub bitassets_wallet_create: bool,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, value_name = "HEX")]
+    /// 64-byte hex seed used when creating the native BitAssets wallet.
+    pub bitassets_wallet_seed: Option<String>,
+
     #[arg(long, default_value_t = false)]
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,

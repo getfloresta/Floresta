@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,9 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[derive(Debug, thiserror::Error)]
-pub enum NativeBitAssetsWalletError {
-    #[error("BitAssets native wallet already exists at {0}")]
-    AlreadyExists(String),
+pub enum Error {
     #[error("invalid BitAssets address")]
     Address(#[from] bitcoin::base58::InvalidCharacterError),
     #[error("invalid BitAssets address length {0} != 20")]
@@ -44,12 +43,12 @@ pub enum NativeBitAssetsWalletError {
 struct Address([u8; 20]);
 
 impl Address {
-    fn from_base58(s: &str) -> Result<Self, NativeBitAssetsWalletError> {
+    fn from_base58(s: &str) -> Result<Self, Error> {
         let decoded = base58::decode(s)?;
         let len = decoded.len();
         let bytes = decoded
             .try_into()
-            .map_err(|_: Vec<u8>| NativeBitAssetsWalletError::AddressLength(len))?;
+            .map_err(|_: Vec<u8>| Error::AddressLength(len))?;
         Ok(Self(bytes))
     }
 
@@ -63,13 +62,10 @@ impl Address {
 struct Hash([u8; 32]);
 
 impl Hash {
-    fn from_hex(s: &str) -> Result<Self, NativeBitAssetsWalletError> {
+    fn from_hex(s: &str) -> Result<Self, Error> {
         Ok(Self(hex::decode(s)?.try_into().map_err(
             |bytes: Vec<u8>| {
-                NativeBitAssetsWalletError::Rpc(format!(
-                    "expected 32-byte hash, got {} bytes",
-                    bytes.len()
-                ))
+                Error::Rpc(format!("expected 32-byte hash, got {} bytes", bytes.len()))
             },
         )?))
     }
@@ -248,7 +244,7 @@ struct Signature(ed25519_dalek::Signature);
 
 impl BorshSerialize for Signature {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.0.to_bytes().serialize(writer)
+        BorshSerialize::serialize(&self.0.to_bytes(), writer)
     }
 }
 
@@ -271,17 +267,35 @@ struct AuthorizedTransaction {
     authorizations: Vec<Authorization>,
 }
 
-#[derive(Debug)]
-struct NativeUtxo {
-    outpoint: OutPoint,
-    address: Address,
-    amount: u64,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoredAddress {
     index: u32,
     address: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct WalletOutPoint {
+    pub txid: String,
+    pub vout: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WalletUtxo {
+    pub outpoint: WalletOutPoint,
+    pub address: String,
+    pub asset_id: String,
+    pub amount: u64,
+    pub confirmed: bool,
+    pub proof_refs: Vec<WalletProofRef>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WalletProofRef {
+    pub txid: String,
+    pub block_hash: Option<String>,
+    pub sidechain_block_height: Option<u32>,
+    pub bmm_inclusions: Vec<String>,
+    pub best_main_verification: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -290,34 +304,40 @@ struct StoredWallet {
     seed_hex: String,
     next_index: u32,
     addresses: Vec<StoredAddress>,
+    confirmed_utxos: Vec<WalletUtxo>,
+    mempool_utxos: Vec<WalletUtxo>,
+    spent_outpoints: Vec<WalletOutPoint>,
+    last_tip_hash: Option<String>,
+    last_tip_height: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
 pub struct NativeBitAssetsWallet {
     path: PathBuf,
+    rpc_url: String,
     stored: StoredWallet,
 }
 
 impl NativeBitAssetsWallet {
     pub fn open(
         path: impl AsRef<Path>,
+        rpc_url: String,
         seed_hex: Option<&str>,
         create: bool,
-    ) -> Result<Self, NativeBitAssetsWalletError> {
+    ) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
         if path.exists() {
-            if create && seed_hex.is_some() {
-                return Err(NativeBitAssetsWalletError::AlreadyExists(
-                    path.display().to_string(),
-                ));
-            }
             let bytes = fs::read(&path)?;
             let stored = serde_json::from_slice(&bytes)?;
-            return Ok(Self { path, stored });
+            return Ok(Self {
+                path,
+                rpc_url,
+                stored,
+            });
         }
 
         if !create && seed_hex.is_none() {
-            return Err(NativeBitAssetsWalletError::CreateRequired);
+            return Err(Error::CreateRequired);
         }
 
         let seed = match seed_hex {
@@ -328,26 +348,35 @@ impl NativeBitAssetsWallet {
                 seed
             }
         };
-        let stored = StoredWallet {
-            version: 1,
-            seed_hex: hex::encode(seed),
-            next_index: 0,
-            addresses: Vec::new(),
+        let wallet = Self {
+            path,
+            rpc_url,
+            stored: StoredWallet {
+                version: 1,
+                seed_hex: hex::encode(seed),
+                next_index: 0,
+                addresses: Vec::new(),
+                confirmed_utxos: Vec::new(),
+                mempool_utxos: Vec::new(),
+                spent_outpoints: Vec::new(),
+                last_tip_hash: None,
+                last_tip_height: None,
+            },
         };
-        let wallet = Self { path, stored };
         wallet.save()?;
         Ok(wallet)
     }
 
-    pub fn get_new_address(&mut self) -> Result<String, NativeBitAssetsWalletError> {
+    pub fn get_new_address(&mut self) -> Result<String, Error> {
         let index = self.stored.next_index;
         let signing_key = self.signing_key(index)?;
         let address = VerifyingKey(signing_key.verifying_key()).address();
         let address_string = address.as_base58();
-        self.stored.next_index =
-            self.stored.next_index.checked_add(1).ok_or_else(|| {
-                NativeBitAssetsWalletError::Rpc("address index overflow".to_string())
-            })?;
+        self.stored.next_index = self
+            .stored
+            .next_index
+            .checked_add(1)
+            .ok_or_else(|| Error::Rpc("address index overflow".to_string()))?;
         self.stored.addresses.push(StoredAddress {
             index,
             address: address_string.clone(),
@@ -356,35 +385,88 @@ impl NativeBitAssetsWallet {
         Ok(address_string)
     }
 
+    pub fn wallet_info(&self) -> Value {
+        json!({
+            "enabled": true,
+            "address_count": self.stored.addresses.len(),
+            "confirmed_utxo_count": self.stored.confirmed_utxos.len(),
+            "mempool_utxo_count": self.stored.mempool_utxos.len(),
+            "last_tip_hash": self.stored.last_tip_hash,
+            "last_tip_height": self.stored.last_tip_height,
+            "balances": self.balances(),
+        })
+    }
+
+    pub fn list_utxos(&self) -> Value {
+        json!({
+            "confirmed": self.stored.confirmed_utxos,
+            "mempool": self.stored.mempool_utxos,
+        })
+    }
+
+    pub fn get_balance(&self, asset_id: Option<&str>) -> Value {
+        let balances = self.balances();
+        match asset_id {
+            Some(asset_id) => json!({
+                "asset_id": asset_id,
+                "confirmed": balances.get(asset_id).copied().unwrap_or(0),
+            }),
+            None => json!(balances),
+        }
+    }
+
+    pub fn sync(&mut self) -> Result<Value, Error> {
+        let addresses = self
+            .stored
+            .addresses
+            .iter()
+            .map(|address| json!(address.address))
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Ok(self.wallet_info());
+        }
+        let update = bitassets_rpc_call_with_params(
+            &self.rpc_url,
+            "get_lite_wallet_update",
+            vec![json!(addresses), json!(self.stored.last_tip_hash)],
+        )?;
+        self.apply_update(&update)?;
+        self.save()?;
+        Ok(self.wallet_info())
+    }
+
     pub fn transfer(
         &mut self,
-        rpc_url: &str,
         destination: &str,
         asset_id_hex: &str,
         amount: u64,
         fee_sats: u64,
         memo: Option<Vec<u8>>,
-    ) -> Result<Value, NativeBitAssetsWalletError> {
+    ) -> Result<Value, Error> {
         if fee_sats != 0 {
-            return Err(NativeBitAssetsWalletError::Rpc(
+            return Err(Error::Rpc(
                 "native BitAsset transfer currently supports fee_sats=0".to_string(),
             ));
         }
         let _asset_id = BitAssetId(Hash::from_hex(asset_id_hex)?);
         let mut selected = Vec::new();
         let mut total = 0u64;
-        for utxo in self.native_bitasset_utxos(rpc_url, asset_id_hex)? {
-            selected.push(utxo);
-            total = selected
-                .iter()
-                .try_fold(0u64, |sum, utxo| sum.checked_add(utxo.amount))
-                .ok_or_else(|| NativeBitAssetsWalletError::Rpc("amount overflow".to_string()))?;
+        for utxo in self
+            .stored
+            .confirmed_utxos
+            .iter()
+            .filter(|utxo| utxo.asset_id == asset_id_hex)
+        {
+            selected.push(utxo.clone());
+            total = total
+                .checked_add(utxo.amount)
+                .ok_or_else(|| Error::Rpc("amount overflow".to_string()))?;
             if total >= amount {
                 break;
             }
         }
         if total < amount {
-            return Err(NativeBitAssetsWalletError::NotEnoughFunds {
+            return Err(Error::NotEnoughFunds {
                 asset_id: asset_id_hex.to_string(),
                 amount,
             });
@@ -406,7 +488,15 @@ impl NativeBitAssetsWallet {
         }
 
         let transaction = Transaction {
-            inputs: selected.iter().map(|utxo| utxo.outpoint).collect(),
+            inputs: selected
+                .iter()
+                .map(|utxo| {
+                    Ok(OutPoint::Regular {
+                        txid: Txid(Hash::from_hex(&utxo.outpoint.txid)?),
+                        vout: utxo.outpoint.vout,
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()?,
             outputs,
             memo: Vec::new(),
             data: None,
@@ -414,13 +504,11 @@ impl NativeBitAssetsWallet {
         let tx_bytes = borsh::to_vec(&transaction)?;
         let mut authorizations = Vec::with_capacity(selected.len());
         for utxo in &selected {
-            let index = self.index_for_address(&utxo.address.as_base58())?;
+            let index = self.index_for_address(&utxo.address)?;
             let signing_key = self.signing_key(index)?;
             let verifying_key = VerifyingKey(signing_key.verifying_key());
-            if verifying_key.address() != utxo.address {
-                return Err(NativeBitAssetsWalletError::NoSigningAddress(
-                    utxo.address.as_base58(),
-                ));
+            if verifying_key.address().as_base58() != utxo.address {
+                return Err(Error::NoSigningAddress(utxo.address.clone()));
             }
             let message = [&[0u8], tx_bytes.as_slice()].concat();
             authorizations.push(Authorization {
@@ -435,7 +523,7 @@ impl NativeBitAssetsWallet {
         };
         let authorized_hex = hex::encode(borsh::to_vec(&authorized)?);
         let txid = bitassets_rpc_call_with_params(
-            rpc_url,
+            &self.rpc_url,
             "submit_authorized_transaction",
             vec![json!(authorized_hex)],
         )?;
@@ -446,65 +534,42 @@ impl NativeBitAssetsWallet {
         }))
     }
 
-    fn native_bitasset_utxos(
-        &self,
-        rpc_url: &str,
-        asset_id_hex: &str,
-    ) -> Result<Vec<NativeUtxo>, NativeBitAssetsWalletError> {
-        let utxos = bitassets_rpc_call_with_params(rpc_url, "list_utxos", vec![])?;
-        let utxos = utxos.as_array().ok_or_else(|| {
-            NativeBitAssetsWalletError::Rpc("list_utxos did not return an array".to_string())
-        })?;
-        let mut native = Vec::new();
-        for utxo in utxos {
-            let Some(address) = utxo.pointer("/output/address").and_then(Value::as_str) else {
-                continue;
-            };
-            if self.index_for_address(address).is_err() {
-                continue;
-            }
-            let Some(bitasset) = utxo
-                .pointer("/output/content/BitAsset")
-                .and_then(Value::as_array)
-            else {
-                continue;
-            };
-            let Some(utxo_asset_id) = bitasset.first().and_then(Value::as_str) else {
-                continue;
-            };
-            if utxo_asset_id != asset_id_hex {
-                continue;
-            }
-            let amount = bitasset.get(1).and_then(Value::as_u64).ok_or_else(|| {
-                NativeBitAssetsWalletError::Rpc("BitAsset UTXO missing amount".to_string())
-            })?;
-            let regular = utxo.pointer("/outpoint/Regular").ok_or_else(|| {
-                NativeBitAssetsWalletError::Rpc(
-                    "native transfer only supports regular outpoints".to_string(),
-                )
-            })?;
-            let txid = regular.get("txid").and_then(Value::as_str).ok_or_else(|| {
-                NativeBitAssetsWalletError::Rpc("regular outpoint missing txid".to_string())
-            })?;
-            let vout = regular.get("vout").and_then(Value::as_u64).ok_or_else(|| {
-                NativeBitAssetsWalletError::Rpc("regular outpoint missing vout".to_string())
-            })?;
-            let vout = u32::try_from(vout).map_err(|_| {
-                NativeBitAssetsWalletError::Rpc("regular outpoint vout overflow".to_string())
-            })?;
-            native.push(NativeUtxo {
-                outpoint: OutPoint::Regular {
-                    txid: Txid(Hash::from_hex(txid)?),
-                    vout,
-                },
-                address: Address::from_base58(address)?,
-                amount,
-            });
+    fn apply_update(&mut self, update: &Value) -> Result<(), Error> {
+        let proof_refs = parse_proof_refs(update.get("proof_refs"))?;
+        let spent = parse_outpoints(update.get("spent_outpoints"))?
+            .into_iter()
+            .chain(parse_outpoints(update.get("mempool_spent_outpoints"))?)
+            .collect::<BTreeSet<_>>();
+        self.stored
+            .confirmed_utxos
+            .retain(|utxo| !spent.contains(&utxo.outpoint));
+        self.stored.spent_outpoints = spent.iter().cloned().collect();
+
+        for utxo in parse_utxos(update.get("created_utxos"), true, &proof_refs)? {
+            upsert_utxo(&mut self.stored.confirmed_utxos, utxo);
         }
-        Ok(native)
+        self.stored.mempool_utxos = parse_utxos(update.get("mempool_created_utxos"), false, &[])?;
+        self.stored.last_tip_hash = update
+            .get("tip_hash")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        self.stored.last_tip_height = update
+            .get("tip_height")
+            .and_then(Value::as_u64)
+            .and_then(|height| u32::try_from(height).ok());
+        Ok(())
     }
 
-    fn save(&self) -> Result<(), NativeBitAssetsWalletError> {
+    fn balances(&self) -> BTreeMap<String, u64> {
+        let mut balances = BTreeMap::new();
+        for utxo in &self.stored.confirmed_utxos {
+            let entry = balances.entry(utxo.asset_id.clone()).or_insert(0u64);
+            *entry = entry.saturating_add(utxo.amount);
+        }
+        balances
+    }
+
+    fn save(&self) -> Result<(), Error> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -513,14 +578,11 @@ impl NativeBitAssetsWallet {
         Ok(())
     }
 
-    fn seed(&self) -> Result<[u8; 64], NativeBitAssetsWalletError> {
+    fn seed(&self) -> Result<[u8; 64], Error> {
         decode_seed(&self.stored.seed_hex)
     }
 
-    fn signing_key(
-        &self,
-        index: u32,
-    ) -> Result<ed25519_dalek::SigningKey, NativeBitAssetsWalletError> {
+    fn signing_key(&self, index: u32) -> Result<ed25519_dalek::SigningKey, Error> {
         let master = Xpriv::new_master(bitcoin::NetworkKind::Test, &self.seed()?)?;
         let derivation_path = DerivationPath::master()
             .child(ChildNumber::Hardened { index: 0 })
@@ -531,29 +593,171 @@ impl NativeBitAssetsWallet {
         ))
     }
 
-    fn index_for_address(&self, address: &str) -> Result<u32, NativeBitAssetsWalletError> {
+    fn index_for_address(&self, address: &str) -> Result<u32, Error> {
         self.stored
             .addresses
             .iter()
             .find(|entry| entry.address == address)
             .map(|entry| entry.index)
-            .ok_or_else(|| NativeBitAssetsWalletError::NoSigningAddress(address.to_string()))
+            .ok_or_else(|| Error::NoSigningAddress(address.to_string()))
     }
 }
 
-fn decode_seed(seed_hex: &str) -> Result<[u8; 64], NativeBitAssetsWalletError> {
+fn decode_seed(seed_hex: &str) -> Result<[u8; 64], Error> {
     let bytes = hex::decode(seed_hex)?;
     let len = bytes.len();
     bytes
         .try_into()
-        .map_err(|_: Vec<u8>| NativeBitAssetsWalletError::SeedLength(len))
+        .map_err(|_: Vec<u8>| Error::SeedLength(len))
+}
+
+fn parse_outpoints(value: Option<&Value>) -> Result<Vec<WalletOutPoint>, Error> {
+    let Some(array) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    array.iter().map(parse_outpoint).collect()
+}
+
+fn parse_outpoint(value: &Value) -> Result<WalletOutPoint, Error> {
+    let regular = value
+        .get("Regular")
+        .ok_or_else(|| Error::Rpc("lite wallet V1 only supports regular outpoints".to_string()))?;
+    let txid = regular
+        .get("txid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Rpc("regular outpoint missing txid".to_string()))?
+        .to_string();
+    let vout = regular
+        .get("vout")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::Rpc("regular outpoint missing vout".to_string()))?;
+    Ok(WalletOutPoint {
+        txid,
+        vout: u32::try_from(vout)
+            .map_err(|_| Error::Rpc("regular outpoint vout overflow".to_string()))?,
+    })
+}
+
+fn parse_utxos(
+    value: Option<&Value>,
+    confirmed: bool,
+    proof_refs: &[WalletProofRef],
+) -> Result<Vec<WalletUtxo>, Error> {
+    let Some(array) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    array
+        .iter()
+        .filter_map(|value| parse_utxo(value, confirmed, proof_refs).transpose())
+        .collect()
+}
+
+fn parse_utxo(
+    value: &Value,
+    confirmed: bool,
+    proof_refs: &[WalletProofRef],
+) -> Result<Option<WalletUtxo>, Error> {
+    let outpoint = parse_outpoint(
+        value
+            .get("outpoint")
+            .ok_or_else(|| Error::Rpc("UTXO missing outpoint".to_string()))?,
+    )?;
+    let output = value
+        .get("output")
+        .ok_or_else(|| Error::Rpc("UTXO missing output".to_string()))?;
+    let address = output
+        .get("address")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Rpc("UTXO missing address".to_string()))?
+        .to_string();
+    let Some(bitasset) = output
+        .pointer("/content/BitAsset")
+        .and_then(Value::as_array)
+    else {
+        return Ok(None);
+    };
+    let asset_id = bitasset
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Rpc("BitAsset UTXO missing asset id".to_string()))?
+        .to_string();
+    let amount = bitasset
+        .get(1)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::Rpc("BitAsset UTXO missing amount".to_string()))?;
+    Ok(Some(WalletUtxo {
+        outpoint: outpoint.clone(),
+        address,
+        asset_id,
+        amount,
+        confirmed,
+        proof_refs: proof_refs
+            .iter()
+            .filter(|proof| proof.txid == outpoint.txid)
+            .cloned()
+            .collect(),
+    }))
+}
+
+fn parse_proof_refs(value: Option<&Value>) -> Result<Vec<WalletProofRef>, Error> {
+    let Some(array) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    array
+        .iter()
+        .map(|proof| {
+            let txid = proof
+                .get("txid")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::Rpc("proof ref missing txid".to_string()))?
+                .to_string();
+            let bmm_inclusions = proof
+                .get("bmm_inclusions")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(WalletProofRef {
+                txid,
+                block_hash: proof
+                    .get("block_hash")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                sidechain_block_height: proof
+                    .get("sidechain_block_height")
+                    .and_then(Value::as_u64)
+                    .and_then(|height| u32::try_from(height).ok()),
+                bmm_inclusions,
+                best_main_verification: proof
+                    .get("best_main_verification")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            })
+        })
+        .collect()
+}
+
+fn upsert_utxo(utxos: &mut Vec<WalletUtxo>, utxo: WalletUtxo) {
+    if let Some(existing) = utxos
+        .iter_mut()
+        .find(|existing| existing.outpoint == utxo.outpoint)
+    {
+        *existing = utxo;
+    } else {
+        utxos.push(utxo);
+    }
 }
 
 fn bitassets_rpc_call_with_params(
     rpc_url: &str,
     method: &str,
     params: Vec<Value>,
-) -> Result<Value, NativeBitAssetsWalletError> {
+) -> Result<Value, Error> {
     let body = json!({
         "jsonrpc": "2.0",
         "id": "floresta-native-bitassets-wallet",
@@ -563,20 +767,18 @@ fn bitassets_rpc_call_with_params(
     let mut response = ureq::post(rpc_url)
         .header("content-type", "application/json")
         .send_json(body)
-        .map_err(|err| {
-            NativeBitAssetsWalletError::Rpc(format!("request failed for {method}: {err}"))
-        })?;
-    let value = response.body_mut().read_json::<Value>().map_err(|err| {
-        NativeBitAssetsWalletError::Rpc(format!("invalid JSON response for {method}: {err}"))
-    })?;
+        .map_err(|err| Error::Rpc(format!("request failed for {method}: {err}")))?;
+    let value = response
+        .body_mut()
+        .read_json::<Value>()
+        .map_err(|err| Error::Rpc(format!("invalid JSON response for {method}: {err}")))?;
     if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
-        return Err(NativeBitAssetsWalletError::Rpc(format!(
-            "RPC error for {method}: {error}"
-        )));
+        return Err(Error::Rpc(format!("RPC error for {method}: {error}")));
     }
-    value.get("result").cloned().ok_or_else(|| {
-        NativeBitAssetsWalletError::Rpc(format!("RPC response for {method} did not include result"))
-    })
+    value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| Error::Rpc(format!("RPC response for {method} did not include result")))
 }
 
 #[cfg(test)]
@@ -589,7 +791,13 @@ mod tests {
     fn derives_plain_bitassets_style_addresses() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wallet.json");
-        let mut wallet = NativeBitAssetsWallet::open(&path, Some(ZERO_SEED), true).unwrap();
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
 
         assert_eq!(
             wallet.get_new_address().unwrap(),
@@ -599,6 +807,58 @@ mod tests {
             wallet.get_new_address().unwrap(),
             "3GfJ72KNjMfLBpQTw2pBxq9XPSg1"
         );
+    }
+
+    #[test]
+    fn applies_lite_wallet_update_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
+
+        let update = json!({
+            "tip_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tip_height": 7,
+            "created_utxos": [{
+                "outpoint": {"Regular": {
+                    "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "vout": 0
+                }},
+                "output": {
+                    "address": "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+                    "content": {"BitAsset": [
+                        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                        42
+                    ]},
+                    "memo": ""
+                }
+            }],
+            "spent_outpoints": [],
+            "mempool_created_utxos": [],
+            "mempool_spent_outpoints": [],
+            "proof_refs": [{
+                "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sidechain_block_height": 7,
+                "bmm_inclusions": [],
+                "best_main_verification": null
+            }]
+        });
+
+        wallet.apply_update(&update).unwrap();
+        wallet.save().unwrap();
+        let reloaded =
+            NativeBitAssetsWallet::open(&path, "http://127.0.0.1:6004".to_string(), None, false)
+                .unwrap();
+
+        assert_eq!(reloaded.stored.confirmed_utxos.len(), 1);
+        assert_eq!(reloaded.balances().values().copied().sum::<u64>(), 42);
+        assert_eq!(reloaded.stored.last_tip_height, Some(7));
     }
 
     #[test]
@@ -616,9 +876,9 @@ mod tests {
             memo: Vec::new(),
             data: None,
         };
-        let bytes = borsh::to_vec(&tx).unwrap();
+
         assert_eq!(
-            hex::encode(bytes),
+            hex::encode(borsh::to_vec(&tx).unwrap()),
             "0100000000010101010101010101010101010101010101010101010101010101010101010102000000010000000303030303030303030303030303030303030303022a00000000000000000000000000000000"
         );
     }

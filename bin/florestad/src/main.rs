@@ -92,6 +92,12 @@ fn main() {
         bitassets_rpc_url: params.bitassets_rpc_url,
         #[cfg(feature = "bitassets")]
         bitassets_rpc_refresh_seconds: params.bitassets_rpc_refresh_seconds,
+        #[cfg(feature = "bitassets")]
+        enable_bitassets_native_wallet: params.enable_bitassets_native_wallet,
+        #[cfg(feature = "bitassets")]
+        bitassets_wallet_create: params.bitassets_wallet_create,
+        #[cfg(feature = "bitassets")]
+        bitassets_wallet_seed: params.bitassets_wallet_seed,
         enable_electrum_tls: params.enable_electrum_tls,
         electrum_address_tls: params.electrum_address_tls,
         tls_cert_path: params.tls_cert_path,

@@ -87,6 +87,10 @@ pub enum FlorestadError {
     /// Setting up the watch-only wallet.
     CouldNotSetupWallet(String),
 
+    #[cfg(feature = "bitassets")]
+    /// Setting up the native BitAssets wallet.
+    CouldNotSetupBitAssetsWallet(String),
+
     #[cfg(feature = "compact-filters")]
     /// Loading the compact filters store.
     CouldNotLoadCompactFiltersStore(IterableFilterStoreError),
@@ -175,6 +179,10 @@ impl Display for FlorestadError {
             }
             FlorestadError::CouldNotSetupWallet(err) => {
                 write!(f, "Could not setup wallet: {err}")
+            }
+            #[cfg(feature = "bitassets")]
+            FlorestadError::CouldNotSetupBitAssetsWallet(err) => {
+                write!(f, "Could not setup native BitAssets wallet: {err}")
             }
 
             #[cfg(feature = "compact-filters")]

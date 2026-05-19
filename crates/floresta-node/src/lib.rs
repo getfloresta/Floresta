@@ -7,6 +7,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
 )]
 
+#[cfg(feature = "bitassets")]
+mod bitassets_wallet;
 mod config_file;
 mod error;
 mod florestad;

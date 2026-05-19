@@ -82,6 +82,8 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+#[cfg(feature = "bitassets")]
+use crate::bitassets_wallet::NativeBitAssetsWallet;
 use crate::config_file::ConfigFile;
 use crate::error::FlorestadError;
 use crate::florestad::fs::OpenOptions;
@@ -92,6 +94,8 @@ use crate::zmq::ZMQServer;
 
 #[cfg(feature = "bitassets")]
 const BITASSETS_INDEX_FILE: &str = "bitassets-index.json";
+#[cfg(feature = "bitassets")]
+const BITASSETS_WALLET_FILE: &str = "bitassets-wallet.json";
 
 #[cfg(feature = "bitassets")]
 #[derive(Debug, Deserialize, Serialize)]
@@ -283,6 +287,18 @@ pub struct Config {
     /// Optional refresh interval in seconds for the trusted sidechain data source.
     pub bitassets_rpc_refresh_seconds: Option<u64>,
 
+    #[cfg(feature = "bitassets")]
+    /// Whether to enable the Floresta-owned native BitAssets wallet.
+    pub enable_bitassets_native_wallet: bool,
+
+    #[cfg(feature = "bitassets")]
+    /// Whether to create the native BitAssets wallet if missing.
+    pub bitassets_wallet_create: bool,
+
+    #[cfg(feature = "bitassets")]
+    /// Optional 64-byte hex seed used when creating the native BitAssets wallet.
+    pub bitassets_wallet_seed: Option<String>,
+
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,
 
@@ -352,6 +368,12 @@ impl Config {
             bitassets_rpc_url: None,
             #[cfg(feature = "bitassets")]
             bitassets_rpc_refresh_seconds: None,
+            #[cfg(feature = "bitassets")]
+            enable_bitassets_native_wallet: false,
+            #[cfg(feature = "bitassets")]
+            bitassets_wallet_create: false,
+            #[cfg(feature = "bitassets")]
+            bitassets_wallet_seed: None,
             enable_electrum_tls: false,
             electrum_address_tls: None,
             generate_cert: false,
@@ -565,6 +587,26 @@ impl Florestad {
 
         info!("Starting server");
         let wallet = Arc::new(wallet);
+        #[cfg(feature = "bitassets")]
+        let native_bitassets_wallet = if self.config.enable_bitassets_native_wallet {
+            let Some(rpc_url) = self.config.bitassets_rpc_url.clone() else {
+                return Err(FlorestadError::CouldNotSetupBitAssetsWallet(
+                    "--enable-bitassets-native-wallet requires --bitassets-rpc-url".to_string(),
+                ));
+            };
+            let wallet_path = Self::bitassets_wallet_path(&self.config.data_dir);
+            Some(Arc::new(tokio::sync::Mutex::new(
+                NativeBitAssetsWallet::open(
+                    wallet_path,
+                    rpc_url,
+                    self.config.bitassets_wallet_seed.as_deref(),
+                    self.config.bitassets_wallet_create,
+                )
+                .map_err(|err| FlorestadError::CouldNotSetupBitAssetsWallet(err.to_string()))?,
+            )))
+        } else {
+            None
+        };
 
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
@@ -586,6 +628,8 @@ impl Florestad {
                     .to_str()
                     .expect("infallible")
                     .to_owned(),
+                #[cfg(feature = "bitassets")]
+                native_bitassets_wallet.clone(),
             ));
 
             if self.json_rpc.set(server).is_err() {
@@ -983,6 +1027,11 @@ impl Florestad {
     #[cfg(feature = "bitassets")]
     fn bitassets_index_path(data_dir: &str) -> String {
         format!("{data_dir}/{BITASSETS_INDEX_FILE}")
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_wallet_path(data_dir: &str) -> String {
+        format!("{data_dir}/{BITASSETS_WALLET_FILE}")
     }
 
     #[cfg(feature = "bitassets")]

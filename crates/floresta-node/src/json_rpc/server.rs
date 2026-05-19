@@ -36,6 +36,8 @@ use floresta_watch_only::CachedTransaction;
 use floresta_wire::node_interface::NodeInterface;
 use serde_json::json;
 use serde_json::Value;
+#[cfg(feature = "bitassets")]
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use tracing::debug;
@@ -49,6 +51,8 @@ use super::res::ScriptPubKeyJson;
 use super::res::ScriptSigJson;
 use super::res::TxInJson;
 use super::res::TxOutJson;
+#[cfg(feature = "bitassets")]
+use crate::bitassets_wallet::NativeBitAssetsWallet;
 use crate::json_rpc::request::arg_parser::get_bool;
 use crate::json_rpc::request::arg_parser::get_hash;
 use crate::json_rpc::request::arg_parser::get_hashes_array;
@@ -81,6 +85,8 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
     pub(super) log_path: String,
     pub(super) start_time: Instant,
+    #[cfg(feature = "bitassets")]
+    pub(super) bitassets_wallet: Option<Arc<AsyncMutex<NativeBitAssetsWallet>>>,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -298,6 +304,88 @@ async fn handle_json_rpc_request(
         }
 
         "getroots" => state.get_roots().map(|v| serde_json::to_value(v).unwrap()),
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_getnewaddress" => {
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            let address = wallet
+                .lock()
+                .await
+                .get_new_address()
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))?;
+            Ok(json!(address))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_walletinfo" => {
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            Ok(wallet.lock().await.wallet_info())
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_sync" => {
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .sync()
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_listutxos" => {
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            Ok(wallet.lock().await.list_utxos())
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_getbalance" => {
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            let asset_id = params.first().and_then(Value::as_str);
+            Ok(wallet.lock().await.get_balance(asset_id))
+        }
+
+        #[cfg(feature = "bitassets")]
+        "bitassets_transfer" => {
+            let destination = get_string(&params, 0, "destination")?;
+            let asset_id = get_string(&params, 1, "asset_id")?;
+            let amount = get_numeric(&params, 2, "amount")?;
+            let fee_sats = get_numeric(&params, 3, "fee_sats")?;
+            let memo = params
+                .get(4)
+                .and_then(Value::as_str)
+                .map(|memo| hex::decode(memo).unwrap_or_else(|_| memo.as_bytes().to_vec()));
+            let Some(wallet) = state.bitassets_wallet.as_ref() else {
+                return Err(JsonRpcError::Wallet(
+                    "native BitAssets wallet is not enabled".to_string(),
+                ));
+            };
+            wallet
+                .lock()
+                .await
+                .transfer(&destination, &asset_id, amount, fee_sats, memo)
+                .map_err(|err| JsonRpcError::Wallet(err.to_string()))
+        }
 
         "findtxout" => {
             let txid = get_hash(&params, 0, "txid")?;
@@ -735,6 +823,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         address: Option<SocketAddr>,
         log_path: String,
+        #[cfg(feature = "bitassets")] bitassets_wallet: Option<
+            Arc<AsyncMutex<NativeBitAssetsWallet>>,
+        >,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -775,6 +866,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 log_path,
                 start_time: Instant::now(),
+                #[cfg(feature = "bitassets")]
+                bitassets_wallet,
             }));
 
         axum::serve(listener, router)
