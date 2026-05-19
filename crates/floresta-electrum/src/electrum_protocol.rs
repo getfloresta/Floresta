@@ -16,6 +16,10 @@ use bitcoin::Transaction;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
+#[cfg(feature = "bitassets")]
+use floresta_chain::AssetId;
+#[cfg(feature = "bitassets")]
+use floresta_chain::BitAssetIndex;
 use floresta_common::get_hash_from_u8;
 use floresta_common::get_spk_hash;
 use floresta_common::spsc::Channel;
@@ -214,6 +218,16 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
     /// sure our transactions don't get stuck in the mempool if they are not getting confirmed for
     /// some reason. We keep track of this time to know when to re-broadcast them.
     last_rebroadcast: Option<Instant>,
+
+    /// Optional BitAsset index used by the experimental asset-aware Electrum
+    /// methods. This is feature-gated and never affects normal Electrum.
+    #[cfg(feature = "bitassets")]
+    bitasset_index: Option<Arc<BitAssetIndex>>,
+
+    /// Optional trusted plain-bitassets JSON-RPC endpoint used for wallet
+    /// actions that must be delegated to the sidechain wallet.
+    #[cfg(feature = "bitassets")]
+    bitassets_rpc_url: Option<String>,
 }
 
 impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
@@ -236,6 +250,61 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             message_transmitter: tx,
             client_addresses: HashMap::new(),
             addresses_to_scan: Vec::new(),
+            #[cfg(feature = "bitassets")]
+            bitasset_index: None,
+            #[cfg(feature = "bitassets")]
+            bitassets_rpc_url: None,
+        })
+    }
+
+    #[cfg(feature = "bitassets")]
+    pub fn with_bitasset_index(mut self, bitasset_index: Arc<BitAssetIndex>) -> Self {
+        self.bitasset_index = Some(bitasset_index);
+        self
+    }
+
+    #[cfg(feature = "bitassets")]
+    pub fn with_bitassets_rpc_url(mut self, bitassets_rpc_url: String) -> Self {
+        self.bitassets_rpc_url = Some(bitassets_rpc_url);
+        self
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_rpc_call_with_params(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+    ) -> Result<Value, super::error::Error> {
+        let Some(rpc_url) = self.bitassets_rpc_url.as_ref() else {
+            return Err(super::error::Error::BitAssetsRpcUnavailable);
+        };
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "floresta-electrum-bitassets-wallet",
+            "method": method,
+            "params": params
+        });
+        let mut response = ureq::post(rpc_url)
+            .header("content-type", "application/json")
+            .send_json(body)
+            .map_err(|err| {
+                super::error::Error::BitAssetsRpc(format!("request failed for {method}: {err}"))
+            })?;
+        let value = response.body_mut().read_json::<Value>().map_err(|err| {
+            super::error::Error::BitAssetsRpc(format!("invalid JSON response for {method}: {err}"))
+        })?;
+
+        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+            return Err(super::error::Error::BitAssetsRpc(format!(
+                "RPC error for {method}: {error}"
+            )));
+        }
+
+        value.get("result").cloned().ok_or_else(|| {
+            super::error::Error::BitAssetsRpc(format!(
+                "RPC response for {method} did not include result"
+            ))
         })
     }
 
@@ -294,6 +363,127 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "hex": String::from_iter(headers),
                     "max": MAX_COUNT,
                 })
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.get_new_address" => {
+                let address = self.bitassets_rpc_call_with_params("get_new_address", vec![])?;
+                json_rpc_res!(request, address)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.get_balance" => {
+                let asset_id = get_arg!(request, AssetId, 0);
+                let Some(index) = self.bitasset_index.as_ref() else {
+                    return Err(super::error::Error::BitAssetsUnavailable);
+                };
+                let balance = index.get_asset_balance(&asset_id);
+                json_rpc_res!(request, {
+                    "asset_id": asset_id.to_string(),
+                    "confirmed": balance,
+                    "unconfirmed": 0
+                })
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.get_history" => {
+                let asset_id = get_arg!(request, AssetId, 0);
+                let Some(index) = self.bitasset_index.as_ref() else {
+                    return Err(super::error::Error::BitAssetsUnavailable);
+                };
+                let history = index
+                    .get_asset_history(&asset_id)
+                    .into_iter()
+                    .map(|entry| {
+                        json!({
+                            "height": entry.height,
+                            "tx_hash": entry.txid.to_string(),
+                            "block_hash": entry.block_hash.map(|hash| hash.to_string()),
+                            "tx_pos": entry.vout,
+                            "asset_amount": entry.amount,
+                            "event": entry.event_kind.as_str(),
+                            "proof": entry.proof_status.as_str(),
+                            "sidechain_height": entry.proof_refs.sidechain_block_height,
+                            "bmm_inclusions": entry.proof_refs.bmm_inclusions,
+                            "best_main_verification": entry.proof_refs.best_main_verification
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                json_rpc_res!(request, history)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.register" => {
+                let plaintext_name = get_arg!(request, String, 0);
+                let initial_supply = get_arg!(request, u64, 1);
+                let txid = self.bitassets_rpc_call_with_params(
+                    "register_bitasset",
+                    vec![json!(plaintext_name), json!(initial_supply), Value::Null],
+                )?;
+                json_rpc_res!(request, txid)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.reserve" => {
+                let plaintext_name = get_arg!(request, String, 0);
+                let txid = self.bitassets_rpc_call_with_params(
+                    "reserve_bitasset",
+                    vec![json!(plaintext_name)],
+                )?;
+                json_rpc_res!(request, txid)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.transfer" => {
+                let dest = get_arg!(request, String, 0);
+                let asset_id = get_arg!(request, AssetId, 1);
+                let amount = get_arg!(request, u64, 2);
+                let fee_sats = get_arg!(request, u64, 3);
+                let memo = request.params.get(4).cloned().unwrap_or(Value::Null);
+                let txid = self.bitassets_rpc_call_with_params(
+                    "transfer_bitasset",
+                    vec![
+                        json!(dest),
+                        json!(asset_id.to_string()),
+                        json!(amount),
+                        json!(fee_sats),
+                        memo,
+                    ],
+                )?;
+                json_rpc_res!(request, txid)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.list" => {
+                let Some(index) = self.bitasset_index.as_ref() else {
+                    return Err(super::error::Error::BitAssetsUnavailable);
+                };
+                let assets = index
+                    .list_assets()
+                    .into_iter()
+                    .map(|asset_id| asset_id.to_string())
+                    .collect::<Vec<_>>();
+                json_rpc_res!(request, assets)
+            }
+            #[cfg(feature = "bitassets")]
+            "blockchain.asset.listunspent" => {
+                let asset_id = get_arg!(request, AssetId, 0);
+                let Some(index) = self.bitasset_index.as_ref() else {
+                    return Err(super::error::Error::BitAssetsUnavailable);
+                };
+                let utxos = index
+                    .get_asset_utxo_records(&asset_id)
+                    .into_iter()
+                    .map(|utxo| {
+                        json!({
+                            "asset_id": utxo.asset_id.to_string(),
+                            "tx_hash": utxo.outpoint.txid.to_string(),
+                            "tx_pos": utxo.outpoint.vout,
+                            "block_hash": utxo.block_hash.map(|hash| hash.to_string()),
+                            "height": utxo.height,
+                            "asset_amount": utxo.asset_amount,
+                            "bitcoin_value": utxo.bitcoin_value,
+                            "proof": utxo.proof_status.as_str(),
+                            "sidechain_height": utxo.proof_refs.sidechain_block_height,
+                            "bmm_inclusions": utxo.proof_refs.bmm_inclusions,
+                            "best_main_verification": utxo.proof_refs.best_main_verification
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                json_rpc_res!(request, utxos)
             }
             "blockchain.estimatefee" => json_rpc_res!(request, 0.0001),
             "blockchain.headers.subscribe" => {
@@ -748,13 +938,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                     if let Ok(res) = res {
                         client.write(serde_json::to_string(&res).unwrap().as_bytes())?;
-                    } else {
+                    } else if let Err(error) = res {
                         let res = json!({
                             "jsonrpc": "2.0",
                             "error": {
                                 "code": -32000,
                                 "message": "Internal JSON-RPC error.",
-                                "data": null
+                                "data": error.to_string()
                             },
                             "id": id
                         });
@@ -774,13 +964,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                         if let Ok(res) = res {
                             results.push(res);
-                        } else {
+                        } else if let Err(error) = res {
                             let res = json!({
                                 "jsonrpc": "2.0",
                                 "error": {
                                     "code": -32000,
                                     "message": "Internal JSON-RPC error.",
-                                    "data": null
+                                    "data": error.to_string()
                                 },
                                 "id": id
                             });
@@ -945,16 +1135,52 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
 
+    #[cfg(feature = "bitassets")]
+    use bitcoin::absolute::LockTime;
     use bitcoin::address::NetworkChecked;
     use bitcoin::block::Header as BlockHeader;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::block::Header;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::blockdata::transaction::Version;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::Decodable;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::hashes::Hash;
     use bitcoin::Address;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::Amount;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::Block;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::OutPoint;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::ScriptBuf;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::Sequence;
     use bitcoin::Transaction;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::TxIn;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::TxMerkleNode;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::TxOut;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::Txid;
+    #[cfg(feature = "bitassets")]
+    use bitcoin::Witness;
+    #[cfg(feature = "bitassets")]
+    use floresta_chain::AssetId;
     use floresta_chain::AssumeValidArg;
+    #[cfg(feature = "bitassets")]
+    use floresta_chain::BitAssetIndex;
+    #[cfg(feature = "bitassets")]
+    use floresta_chain::BlockConsumer;
     use floresta_chain::ChainState;
     use floresta_chain::FlatChainStore;
     use floresta_chain::FlatChainStoreConfig;
@@ -1150,6 +1376,122 @@ mod test {
         assigned_port
     }
 
+    #[cfg(feature = "bitassets")]
+    async fn start_bitasset_electrum(bitasset_index: Arc<BitAssetIndex>) -> u16 {
+        let e_addr = "0.0.0.0:0";
+        let wallet = get_test_cache();
+
+        let test_id = rand::random::<u32>();
+        let conf = FlatChainStoreConfig::new(format!("./tmp-db/{test_id}.floresta/"));
+        let chainstore = FlatChainStore::new(conf).unwrap();
+        let chain = ChainState::<FlatChainStore>::open(
+            chainstore,
+            Network::Signet,
+            AssumeValidArg::Hardcoded,
+        )
+        .unwrap();
+
+        let headers = get_test_signet_headers();
+        chain.push_headers(headers, 1).unwrap();
+        let chain = Arc::new(chain);
+
+        let u_config = UtreexoNodeConfig {
+            disable_dns_seeds: true,
+            network: Network::Signet,
+            pow_fraud_proofs: true,
+            datadir: "/tmp-db".to_string(),
+            user_agent: "floresta".to_string(),
+            ..Default::default()
+        };
+
+        let chain_provider: UtreexoNode<Arc<ChainState<FlatChainStore>>, RunningNode> =
+            UtreexoNode::new(
+                u_config,
+                chain.clone(),
+                Arc::new(Mutex::new(Mempool::new(MEMPOOL_SIZE))),
+                None,
+                Arc::new(RwLock::new(false)),
+                AddressMan::new(None, SUPPORTED_NETWORKS),
+            )
+            .unwrap();
+
+        let node_interface = chain_provider.get_handle();
+        let electrum_server: ElectrumServer<ChainState<FlatChainStore>> =
+            ElectrumServer::new(wallet, chain, None, node_interface)
+                .unwrap()
+                .with_bitasset_index(bitasset_index);
+
+        let non_tls_listener = Arc::new(TcpListener::bind(e_addr).await.unwrap());
+        let assigned_port = non_tls_listener.local_addr().unwrap().port();
+
+        let (stop_signal, _) = tokio::sync::oneshot::channel();
+        task::spawn(chain_provider.run(stop_signal));
+        task::spawn(client_accept_loop(
+            non_tls_listener,
+            electrum_server.message_transmitter.clone(),
+            None,
+        ));
+        task::spawn(electrum_server.main_loop());
+        assigned_port
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn build_test_bitasset_index() -> (Arc<BitAssetIndex>, AssetId) {
+        let coinbase = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(50_000_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let asset_tx = Transaction {
+            version: Version(12),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: coinbase.compute_txid(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(100),
+                    script_pubkey: ScriptBuf::new(),
+                },
+                TxOut {
+                    value: Amount::from_sat(900),
+                    script_pubkey: ScriptBuf::new(),
+                },
+            ],
+        };
+        let asset_id = asset_tx.compute_txid();
+        let block = Block {
+            header: Header {
+                version: bitcoin::block::Version::ONE,
+                prev_blockhash: bitcoin::BlockHash::all_zeros(),
+                merkle_root: TxMerkleNode::all_zeros(),
+                time: 0,
+                bits: CompactTarget::from_consensus(0),
+                nonce: 0,
+            },
+            txdata: vec![coinbase, asset_tx],
+        };
+
+        let index = Arc::new(BitAssetIndex::new());
+        index.on_block(&block, 777, None);
+        (index, asset_id)
+    }
+
     /// Create a tls config thats valid for localhost with a random
     /// created key
     fn create_tls_config() -> Result<Arc<ServerConfig>, crate::error::Error> {
@@ -1281,6 +1623,125 @@ mod test {
         request.push('\n');
 
         assert_ok!(send_request(request, port).await);
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[tokio::test]
+    async fn test_bitasset_electrum_methods_require_enabled_index() {
+        let port = start_electrum().await;
+        let asset_id = Txid::all_zeros().to_string();
+        let request = json!({
+            "id": 42,
+            "method": "blockchain.asset.get_balance",
+            "jsonrpc": "2.0",
+            "params": [asset_id]
+        })
+        .to_string()
+            + "\n";
+
+        let response = send_request(request, port).await.unwrap();
+        assert_eq!(response["id"], 42);
+        assert_eq!(response["error"]["code"], -32000);
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[tokio::test]
+    async fn test_bitasset_electrum_methods() {
+        let (index, asset_id) = build_test_bitasset_index();
+        let port = start_bitasset_electrum(index).await;
+
+        let list_req = json!({
+            "id": 1,
+            "method": "blockchain.asset.list",
+            "jsonrpc": "2.0",
+            "params": []
+        })
+        .to_string()
+            + "\n";
+        let list_response = send_request(list_req, port).await.unwrap();
+        assert_eq!(
+            list_response["result"],
+            json!([asset_id.to_string()]),
+            "asset list should expose known BitAsset ids"
+        );
+
+        let balance_req = json!({
+            "id": 2,
+            "method": "blockchain.asset.get_balance",
+            "jsonrpc": "2.0",
+            "params": [asset_id.to_string()]
+        })
+        .to_string()
+            + "\n";
+        let balance_response = send_request(balance_req, port).await.unwrap();
+        assert_eq!(balance_response["result"]["asset_id"], asset_id.to_string());
+        assert_eq!(balance_response["result"]["confirmed"], 2);
+        assert_eq!(balance_response["result"]["unconfirmed"], 0);
+
+        let utxo_req = json!({
+            "id": 3,
+            "method": "blockchain.asset.listunspent",
+            "jsonrpc": "2.0",
+            "params": [asset_id.to_string()]
+        })
+        .to_string()
+            + "\n";
+        let utxo_response = send_request(utxo_req, port).await.unwrap();
+        let utxos = utxo_response["result"].as_array().unwrap();
+        assert_eq!(utxos.len(), 2);
+        assert_eq!(utxos[0]["asset_id"], asset_id.to_string());
+        assert_eq!(utxos[0]["proof"], "trusted_snapshot");
+        assert_eq!(utxos[0]["sidechain_height"], Value::Null);
+        assert_eq!(utxos[0]["bmm_inclusions"], json!([]));
+        assert_eq!(utxos[0]["best_main_verification"], Value::Null);
+
+        let history_req = json!({
+            "id": 4,
+            "method": "blockchain.asset.get_history",
+            "jsonrpc": "2.0",
+            "params": [asset_id.to_string()]
+        })
+        .to_string()
+            + "\n";
+        let history_response = send_request(history_req, port).await.unwrap();
+        assert_eq!(
+            history_response["result"],
+            json!([{
+                "height": 777,
+                "tx_hash": asset_id.to_string(),
+                "block_hash": null,
+                "tx_pos": 0,
+                "asset_amount": 0,
+                "event": "mainchain_stub",
+                "proof": "trusted_snapshot",
+                "sidechain_height": null,
+                "bmm_inclusions": [],
+                "best_main_verification": null
+            }])
+        );
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[tokio::test]
+    async fn test_bitasset_wallet_write_methods_require_rpc_url() {
+        let (index, asset_id) = build_test_bitasset_index();
+        let port = start_bitasset_electrum(index).await;
+        let request = json!({
+            "id": 5,
+            "method": "blockchain.asset.transfer",
+            "jsonrpc": "2.0",
+            "params": ["bs1qexampledestination", asset_id.to_string(), 1, 0]
+        })
+        .to_string()
+            + "\n";
+
+        let response = send_request(request, port).await.unwrap();
+        assert_eq!(response["id"], 5);
+        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(
+            response["error"]["data"],
+            "BitAssets sidechain RPC is not configured for this Electrum server"
+        );
     }
 
     #[tokio::test]

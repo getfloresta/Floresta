@@ -151,12 +151,12 @@ impl_error_from!(TransportError, encode::Error, SerdeV1);
 impl_error_from!(TransportError, Socks5Error, Proxy);
 
 pub enum ReadTransport<R: AsyncRead + Unpin + Send> {
-    V1(R, Network),
+    V1(R, Magic),
     V2(ProtocolReader<R>),
 }
 
 pub enum WriteTransport<W: AsyncWrite + Unpin + Send + Sync> {
-    V1(W, Network),
+    V1(W, Magic),
     V2(ProtocolWriter<W>),
 }
 
@@ -233,14 +233,19 @@ impl Encodable for V1MessageHeader {
 pub async fn connect<A: ToSocketAddrs>(
     address: A,
     network: Network,
+    network_magic: Option<Magic>,
     allow_v1_fallback: bool,
 ) -> TransportResult {
-    match try_connection(&address, network, false).await {
+    if network_magic.is_some() {
+        return try_connection(&address, network, network_magic, true).await;
+    }
+
+    match try_connection(&address, network, network_magic, false).await {
         Ok(transport) => Ok(transport),
         Err(TransportError::Protocol(ProtocolError::Io(_, ProtocolFailureSuggestion::RetryV1)))
             if allow_v1_fallback =>
         {
-            try_connection(&address, network, true).await
+            try_connection(&address, network, network_magic, true).await
         }
         Err(e) => Err(e),
     }
@@ -249,6 +254,7 @@ pub async fn connect<A: ToSocketAddrs>(
 async fn try_connection<A: ToSocketAddrs>(
     address: &A,
     network: Network,
+    network_magic: Option<Magic>,
     force_v1: bool,
 ) -> TransportResult {
     let tcp_stream = TcpStream::connect(address).await?;
@@ -268,8 +274,8 @@ async fn try_connection<A: ToSocketAddrs>(
         true => {
             debug!("Established a P2PV1 connection with peer={peer_addr}");
             Ok((
-                ReadTransport::V1(reader, network),
-                WriteTransport::V1(writer, network),
+                ReadTransport::V1(reader, network_magic.unwrap_or_else(|| network.magic())),
+                WriteTransport::V1(writer, network_magic.unwrap_or_else(|| network.magic())),
                 TransportProtocol::V1,
             ))
         }
@@ -317,6 +323,7 @@ pub async fn connect_proxy<A: ToSocketAddrs + Clone + Debug>(
     proxy_addr: A,
     address: LocalAddress,
     network: Network,
+    network_magic: Option<Magic>,
     allow_v1_fallback: bool,
 ) -> TransportResult {
     let addr = match address.get_addrv2() {
@@ -331,12 +338,41 @@ pub async fn connect_proxy<A: ToSocketAddrs + Clone + Debug>(
         }
     };
 
-    match try_proxy_connection(&proxy_addr, &addr, address.get_port(), network, false).await {
+    if network_magic.is_some() {
+        return try_proxy_connection(
+            &proxy_addr,
+            &addr,
+            address.get_port(),
+            network,
+            network_magic,
+            true,
+        )
+        .await;
+    }
+
+    match try_proxy_connection(
+        &proxy_addr,
+        &addr,
+        address.get_port(),
+        network,
+        network_magic,
+        false,
+    )
+    .await
+    {
         Ok(transport) => Ok(transport),
         Err(TransportError::Protocol(ProtocolError::Io(_, ProtocolFailureSuggestion::RetryV1)))
             if allow_v1_fallback =>
         {
-            try_proxy_connection(&proxy_addr, &addr, address.get_port(), network, true).await
+            try_proxy_connection(
+                &proxy_addr,
+                &addr,
+                address.get_port(),
+                network,
+                network_magic,
+                true,
+            )
+            .await
         }
         Err(e) => Err(e),
     }
@@ -347,6 +383,7 @@ async fn try_proxy_connection<A: ToSocketAddrs + Clone + Debug>(
     target_addr: &Socks5Addr,
     port: u16,
     network: Network,
+    network_magic: Option<Magic>,
     force_v1: bool,
 ) -> TransportResult {
     let proxy = TcpStream::connect(proxy_addr.clone()).await?;
@@ -357,8 +394,8 @@ async fn try_proxy_connection<A: ToSocketAddrs + Clone + Debug>(
         true => {
             debug!("Established a P2PV1 connection over SOCKS5 using proxy={proxy_addr:?} with peer={target_addr:?}");
             Ok((
-                ReadTransport::V1(reader, network),
-                WriteTransport::V1(writer, network),
+                ReadTransport::V1(reader, network_magic.unwrap_or_else(|| network.magic())),
+                WriteTransport::V1(writer, network_magic.unwrap_or_else(|| network.magic())),
                 TransportProtocol::V1,
             ))
         }
@@ -407,7 +444,7 @@ where
                 let msg = deserialize_v2(contents)?;
                 Ok(msg)
             }
-            ReadTransport::V1(reader, network) => {
+            ReadTransport::V1(reader, network_magic) => {
                 let mut data: Vec<u8> = vec![0; 24];
                 reader.read_exact(&mut data).await?;
 
@@ -419,10 +456,10 @@ where
                     });
                 }
 
-                if header.magic != network.magic() {
+                if header.magic != *network_magic {
                     return Err(TransportError::BadMagicBits {
                         provided: header.magic,
-                        expected: network.magic(),
+                        expected: *network_magic,
                     });
                 }
 
@@ -476,7 +513,7 @@ where
                 let data = serialize_v2(message);
                 protocol.write(&Payload::genuine(data)).await?;
             }
-            WriteTransport::V1(writer, network) => {
+            WriteTransport::V1(writer, network_magic) => {
                 if let NetworkMessage::Unknown { payload, command } = message {
                     let expected_cmd = CommandString::try_from_static("getuproof").unwrap();
                     assert_eq!(
@@ -490,7 +527,7 @@ where
                     let checksum = P2PV1MessageChecksum::from_payload(&payload);
 
                     let mut message_header = [0u8; 24];
-                    message_header[0..4].copy_from_slice(&network.magic().to_bytes());
+                    message_header[0..4].copy_from_slice(&network_magic.to_bytes());
                     message_header[4..13].copy_from_slice("getuproof".as_bytes());
                     message_header[16..20].copy_from_slice(&(payload.len() as u32).to_le_bytes());
                     message_header[20..24].copy_from_slice(checksum.as_ref());
@@ -501,7 +538,7 @@ where
                     return Ok(());
                 }
 
-                let data = &mut RawNetworkMessage::new(network.magic(), message);
+                let data = &mut RawNetworkMessage::new(*network_magic, message);
                 let data = serialize(&data);
                 writer.write_all(&data).await?;
                 writer.flush().await?;

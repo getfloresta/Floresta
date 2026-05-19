@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use bitcoin::p2p::Magic;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 #[cfg(unix)]
@@ -102,6 +103,10 @@ pub struct Cli {
     /// address in the format `<address>[:<port>]`.
     pub connect: Option<String>,
 
+    #[arg(long, value_name = "HEX")]
+    /// Override P2P message magic bytes, for example private signet magic derived from signetchallenge.
+    pub p2p_magic: Option<Magic>,
+
     #[arg(long, value_name = "address[:<port>]")]
     /// The address where our json-rpc server should listen to, in the format `<address>[:<port>]`
     pub rpc_address: Option<String>,
@@ -124,6 +129,21 @@ pub struct Cli {
     #[arg(long, value_name = "address[:<port>]")]
     /// The address where the Electrum Server should listen to, in the format `<address>[:<port>]`
     pub electrum_address: Option<String>,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, default_value_t = false)]
+    /// Enable experimental BitAssets indexing and asset-aware Electrum methods.
+    pub enable_bitassets: bool,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, value_name = "URL")]
+    /// Trusted plain-bitassets JSON-RPC URL used to populate the experimental asset index.
+    pub bitassets_rpc_url: Option<String>,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, value_name = "SECONDS")]
+    /// Refresh interval for the trusted plain-bitassets JSON-RPC import.
+    pub bitassets_rpc_refresh_seconds: Option<u64>,
 
     #[arg(long, default_value_t = false)]
     /// Whether to enable the Electrum TLS server.

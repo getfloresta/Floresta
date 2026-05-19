@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use bitcoin::p2p::address::AddrV2;
+use bitcoin::p2p::Magic;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Network;
 use floresta_chain::ChainBackend;
@@ -180,6 +181,7 @@ where
                     kind,
                     self.mempool.clone(),
                     self.network,
+                    self.config.network_magic,
                     self.node_tx.clone(),
                     peer_address.clone(),
                     requests_rx,
@@ -202,6 +204,7 @@ where
                     self.peer_id_count,
                     self.mempool.clone(),
                     self.network,
+                    self.config.network_magic,
                     self.node_tx.clone(),
                     self.config.user_agent.clone(),
                     self.chain
@@ -268,6 +271,7 @@ where
         peer_id_count: u32,
         mempool: Arc<Mutex<Mempool>>,
         network: Network,
+        network_magic: Option<Magic>,
         node_tx: UnboundedSender<NodeNotification>,
         our_user_agent: String,
         our_best_block: u32,
@@ -276,6 +280,7 @@ where
         let (transport_reader, transport_writer, transport_protocol) = transport::connect(
             (peer_address.get_net_address(), peer_address.get_port()),
             network,
+            network_magic,
             allow_v1_fallback,
         )
         .await?;
@@ -315,6 +320,7 @@ where
         kind: ConnectionKind,
         mempool: Arc<Mutex<Mempool>>,
         network: Network,
+        network_magic: Option<Magic>,
         node_tx: UnboundedSender<NodeNotification>,
         peer_address: LocalAddress,
         requests_rx: UnboundedReceiver<NodeRequest>,
@@ -323,9 +329,14 @@ where
         our_best_block: u32,
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
-        let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect_proxy(proxy, peer_address.clone(), network, allow_v1_fallback)
-                .await?;
+        let (transport_reader, transport_writer, transport_protocol) = transport::connect_proxy(
+            proxy,
+            peer_address.clone(),
+            network,
+            network_magic,
+            allow_v1_fallback,
+        )
+        .await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);

@@ -21,6 +21,7 @@ tokio-rustls = { workspace = true }
 toml = { workspace = true }
 tower-http = { version = "0.6", optional = true, features = ["cors"] }
 tracing = { workspace = true }
+ureq = { version = "3.1", features = ["json", "rustls-no-provider"], default-features = false }
 zmq = { version = "0.10", optional = true, default-features = false }
 
 # Local dependencies
@@ -48,6 +49,7 @@ zmq-server = ["dep:zmq"]
 json-rpc = ["dep:axum", "dep:tower-http", "compact-filters"]
 default = ["json-rpc"]
 metrics = ["dep:metrics", "floresta-wire/metrics", "floresta-chain/metrics"]
+bitassets = ["floresta-chain/bitassets", "floresta-electrum/bitassets"]
 
 [lints]
 workspace = true

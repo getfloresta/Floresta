@@ -86,11 +86,18 @@ fn main() {
         user_agent: env!("USER_AGENT").to_owned(),
         assumeutreexo_value: None,
         electrum_address: params.electrum_address,
+        #[cfg(feature = "bitassets")]
+        enable_bitassets: params.enable_bitassets,
+        #[cfg(feature = "bitassets")]
+        bitassets_rpc_url: params.bitassets_rpc_url,
+        #[cfg(feature = "bitassets")]
+        bitassets_rpc_refresh_seconds: params.bitassets_rpc_refresh_seconds,
         enable_electrum_tls: params.enable_electrum_tls,
         electrum_address_tls: params.electrum_address_tls,
         tls_cert_path: params.tls_cert_path,
         tls_key_path: params.tls_key_path,
         allow_v1_fallback: params.allow_v1_fallback,
+        p2p_magic: params.p2p_magic,
         backfill: !params.no_backfill,
     };
 

@@ -23,6 +23,7 @@ thiserror = "2.0"
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tracing = { workspace = true }
+ureq = { version = "3.1", features = ["json", "rustls-no-provider"], default-features = false, optional = true }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["bitcoinkernel"] }
@@ -39,6 +40,10 @@ zstd = { workspace = true }
 # Local dev-dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-mempool = { workspace = true }
+
+[features]
+default = []
+bitassets = ["dep:ureq", "floresta-chain/bitassets"]
 
 [lints]
 workspace = true

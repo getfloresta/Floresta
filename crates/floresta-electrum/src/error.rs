@@ -8,6 +8,15 @@ pub enum Error {
     #[error("Invalid params passed in")]
     InvalidParams,
 
+    #[error("BitAssets support is not enabled for this Electrum server")]
+    BitAssetsUnavailable,
+
+    #[error("BitAssets sidechain RPC is not configured for this Electrum server")]
+    BitAssetsRpcUnavailable,
+
+    #[error("BitAssets sidechain RPC error: {0}")]
+    BitAssetsRpc(String),
+
     #[error("Invalid json string {0}")]
     Parsing(#[from] serde_json::Error),
 

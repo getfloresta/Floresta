@@ -1012,7 +1012,11 @@ mod tests {
 
     /// Phase 3.1 stub helper: build a transaction with an explicit version (for bitasset v10/v11/v12 testing).
     /// All other fields match the original `build_tx` (zero locktime).
-    fn build_tx_with_version(version: Version, input: Vec<TxIn>, output: Vec<TxOut>) -> Transaction {
+    fn build_tx_with_version(
+        version: Version,
+        input: Vec<TxIn>,
+        output: Vec<TxOut>,
+    ) -> Transaction {
         Transaction {
             version,
             lock_time: LockTime::ZERO,
@@ -1804,8 +1808,14 @@ mod tests {
         for v in [10i32, 11, 12] {
             let tx = make_minimal_high_version_tx(Version(v));
             let hex = serialize_hex(&tx);
-            let decoded: Transaction = deserialize_hex(&hex).expect("deserialize of v{v} tx must succeed");
-            assert_eq!(decoded.version, Version(v), "version must roundtrip for bitasset tx v{}", v);
+            let decoded: Transaction =
+                deserialize_hex(&hex).expect("deserialize of v{v} tx must succeed");
+            assert_eq!(
+                decoded.version,
+                Version(v),
+                "version must roundtrip for bitasset tx v{}",
+                v
+            );
             assert_eq!(decoded.input.len(), 1);
             assert_eq!(decoded.output.len(), 1);
         }
@@ -1872,7 +1882,10 @@ mod tests {
 
     /// Variant of make_minimal... that lets us specify the exact outpoint being spent
     /// (needed for the block-level test above).
-    fn make_minimal_high_version_tx_with_outpoint(version: Version, outpoint: OutPoint) -> Transaction {
+    fn make_minimal_high_version_tx_with_outpoint(
+        version: Version,
+        outpoint: OutPoint,
+    ) -> Transaction {
         let ins = vec![txin!(outpoint)];
         let outs = vec![txout!(1_000, ScriptBuf::new())];
         build_tx_with_version(version, ins, outs)
@@ -1892,8 +1905,10 @@ mod tests {
 
     #[cfg(feature = "bitassets")]
     use crate::pruned_utreexo::chain_state::{
-        classify_bitasset_transaction, transaction_contains_op_split, validate_bitasset_transaction,
-        AssetId, BitAssetIndex, BitAssetTxKind, BitAssetValidationError, BlockConsumer,
+        classify_bitasset_transaction, transaction_contains_op_split,
+        validate_bitasset_transaction, AssetHistoryEventKind, AssetId, AssetProofRefs,
+        AssetProofStatus, BitAssetIndex, BitAssetTxKind, BitAssetValidationError, BlockConsumer,
+        TrustedSidechainAssetUtxo,
     };
 
     #[cfg(feature = "bitassets")]
@@ -1938,12 +1953,152 @@ mod tests {
         // The v12 tx's txid becomes the stub AssetId; its single output must be tracked.
         let asset_id: AssetId = spend.compute_txid();
         let utxos = index.get_asset_utxos(&asset_id);
-        assert_eq!(utxos.len(), 1, "exactly one output should be indexed for this asset");
+        assert_eq!(
+            utxos.len(),
+            1,
+            "exactly one output should be indexed for this asset"
+        );
         assert_eq!(utxos[0].txid, spend.compute_txid());
         assert_eq!(utxos[0].vout, 0);
 
         // The outpoint reverse map also works
         assert_eq!(index.get_asset_for_outpoint(&utxos[0]), Some(asset_id));
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_bitasset_index_phase_3_4_query_views() {
+        let coinbase = {
+            let script_sig = ScriptBuf::from_hex("03f0a2a4d9f0a2").unwrap();
+            let ins = vec![txin!(OutPoint::null(), script_sig)];
+            let outs = vec![txout!(50_000_000, ScriptBuf::new())];
+            build_tx_with_version(Version::ONE, ins, outs)
+        };
+        let spend_outpoint = OutPoint {
+            txid: coinbase.compute_txid(),
+            vout: 0,
+        };
+        let spend = build_tx_with_version(
+            Version(12),
+            vec![txin!(spend_outpoint)],
+            vec![txout!(100, ScriptBuf::new()), txout!(900, ScriptBuf::new())],
+        );
+
+        let block = Block {
+            header: bitcoin::block::Header {
+                version: bitcoin::block::Version::ONE,
+                prev_blockhash: bitcoin::BlockHash::all_zeros(),
+                merkle_root: bitcoin::TxMerkleNode::all_zeros(),
+                time: 0,
+                bits: bitcoin::CompactTarget::from_consensus(0),
+                nonce: 0,
+            },
+            txdata: vec![coinbase, spend.clone()],
+        };
+
+        let index = BitAssetIndex::new();
+        let asset_id = spend.compute_txid();
+        index.on_block(&block, 777, None);
+
+        assert_eq!(index.list_assets(), vec![asset_id]);
+        assert_eq!(index.get_asset_output_count(&asset_id), 2);
+
+        let mut records = index.get_asset_utxo_records(&asset_id);
+        records.sort_by_key(|record| record.outpoint.vout);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].asset_id, asset_id);
+        assert_eq!(records[0].outpoint.vout, 0);
+        assert_eq!(records[0].bitcoin_value, 100);
+        assert_eq!(records[1].asset_id, asset_id);
+        assert_eq!(records[1].outpoint.vout, 1);
+        assert_eq!(records[1].bitcoin_value, 900);
+
+        let history = index.get_asset_history(&asset_id);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].height, 777);
+        assert_eq!(history[0].txid, asset_id);
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn test_bitasset_index_trusted_sidechain_utxos() {
+        let index = BitAssetIndex::new();
+        let asset_id = Txid::all_zeros();
+        let txid =
+            Txid::from_str("1111111111111111111111111111111111111111111111111111111111111111")
+                .expect("valid txid");
+        let records = vec![
+            TrustedSidechainAssetUtxo {
+                asset_id,
+                outpoint: OutPoint { txid, vout: 0 },
+                amount: 100,
+                height: 14,
+                block_hash: Some(txid),
+                event_kind: AssetHistoryEventKind::SidechainUnspent,
+                proof_status: AssetProofStatus::SidechainRpcProof,
+                proof_refs: AssetProofRefs {
+                    sidechain_block_height: Some(14),
+                    bmm_inclusions: vec![
+                        "0000000000000000000000000000000000000000000000000000000000000001"
+                            .to_string(),
+                    ],
+                    best_main_verification: Some(
+                        "0000000000000000000000000000000000000000000000000000000000000002"
+                            .to_string(),
+                    ),
+                },
+            },
+            TrustedSidechainAssetUtxo {
+                asset_id,
+                outpoint: OutPoint { txid, vout: 1 },
+                amount: 900,
+                height: 14,
+                block_hash: Some(txid),
+                event_kind: AssetHistoryEventKind::SidechainUnspent,
+                proof_status: AssetProofStatus::SidechainRpcProof,
+                proof_refs: AssetProofRefs {
+                    sidechain_block_height: Some(14),
+                    bmm_inclusions: vec![
+                        "0000000000000000000000000000000000000000000000000000000000000001"
+                            .to_string(),
+                    ],
+                    best_main_verification: Some(
+                        "0000000000000000000000000000000000000000000000000000000000000002"
+                            .to_string(),
+                    ),
+                },
+            },
+        ];
+
+        assert_eq!(index.replace_with_trusted_sidechain_utxos(records), 2);
+        assert_eq!(index.list_assets(), vec![asset_id]);
+        assert_eq!(index.get_asset_output_count(&asset_id), 2);
+        assert_eq!(index.get_asset_balance(&asset_id), 1_000);
+
+        let mut records = index.get_asset_utxo_records(&asset_id);
+        records.sort_by_key(|record| record.outpoint.vout);
+        assert_eq!(records[0].asset_amount, 100);
+        assert_eq!(records[0].bitcoin_value, 0);
+        assert_eq!(records[0].height, 14);
+        assert_eq!(records[0].proof_refs.sidechain_block_height, Some(14));
+        assert_eq!(records[0].proof_refs.bmm_inclusions.len(), 1);
+        assert_eq!(
+            records[0].proof_refs.best_main_verification.as_deref(),
+            Some("0000000000000000000000000000000000000000000000000000000000000002")
+        );
+        assert_eq!(records[1].asset_amount, 900);
+        assert_eq!(records[1].height, 14);
+
+        let history = index.get_asset_history(&asset_id);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].proof_status, AssetProofStatus::SidechainRpcProof);
+        assert_eq!(history[0].proof_refs.sidechain_block_height, Some(14));
+        assert!(history.iter().all(|entry| entry.height == 14));
+        assert!(history.iter().all(|entry| entry.txid == txid));
+        assert!(history.iter().all(|entry| entry.block_hash == Some(txid)));
+        assert!(history
+            .iter()
+            .all(|entry| entry.event_kind == AssetHistoryEventKind::SidechainUnspent));
     }
 
     #[cfg(feature = "bitassets")]
@@ -2080,7 +2235,10 @@ mod tests {
         let tx = build_tx_with_version(Version(10), vec![txin!(dummy_outpoint())], outs);
 
         let err = validate_bitasset_transaction(&tx).unwrap_err();
-        assert_eq!(err, BitAssetValidationError::IssuanceRequiresAtLeastTwoOutputs);
+        assert_eq!(
+            err,
+            BitAssetValidationError::IssuanceRequiresAtLeastTwoOutputs
+        );
     }
 
     #[cfg(feature = "bitassets")]

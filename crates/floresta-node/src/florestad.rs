@@ -14,17 +14,30 @@ use std::sync::Mutex;
 #[cfg(feature = "json-rpc")]
 use std::sync::OnceLock;
 
+use bitcoin::p2p::Magic;
 use bitcoin::Address;
 pub use bitcoin::Network;
 use bitcoin::ScriptBuf;
-#[cfg(feature = "zmq-server")]
-use floresta_chain::pruned_utreexo::BlockchainInterface;
+#[cfg(feature = "bitassets")]
+use floresta_chain::AssetHistoryEventKind;
+#[cfg(feature = "bitassets")]
+use floresta_chain::AssetProofRefs;
+#[cfg(feature = "bitassets")]
+use floresta_chain::AssetProofStatus;
+#[cfg(feature = "bitassets")]
+use floresta_chain::AssetUtxo;
 pub use floresta_chain::AssumeUtreexoValue;
 pub use floresta_chain::AssumeValidArg;
+#[cfg(feature = "bitassets")]
+use floresta_chain::BitAssetIndex;
+#[cfg(any(feature = "zmq-server", feature = "bitassets"))]
+use floresta_chain::BlockchainInterface;
 use floresta_chain::ChainParams;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore as ChainStore;
 use floresta_chain::FlatChainStoreConfig;
+#[cfg(feature = "bitassets")]
+use floresta_chain::TrustedSidechainAssetUtxo;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 #[cfg(feature = "compact-filters")]
@@ -44,10 +57,18 @@ use rcgen::BasicConstraints;
 use rcgen::CertificateParams;
 use rcgen::IsCa;
 use rcgen::KeyPair;
+#[cfg(feature = "bitassets")]
+use serde::Deserialize;
+#[cfg(feature = "bitassets")]
+use serde::Serialize;
+#[cfg(feature = "bitassets")]
+use serde_json::json;
+#[cfg(feature = "bitassets")]
+use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio::task;
-#[cfg(feature = "metrics")]
+#[cfg(any(feature = "metrics", feature = "bitassets"))]
 use tokio::time::Duration;
 #[cfg(feature = "metrics")]
 use tokio::time::{self};
@@ -68,6 +89,70 @@ use crate::florestad::fs::OpenOptions;
 use crate::json_rpc;
 #[cfg(feature = "zmq-server")]
 use crate::zmq::ZMQServer;
+
+#[cfg(feature = "bitassets")]
+const BITASSETS_INDEX_FILE: &str = "bitassets-index.json";
+
+#[cfg(feature = "bitassets")]
+#[derive(Debug, Deserialize, Serialize)]
+struct PersistedBitAssetIndex {
+    version: u32,
+    #[serde(default)]
+    sidechain_height: Option<u32>,
+    #[serde(default)]
+    sidechain_tip: Option<String>,
+    utxos: Vec<PersistedAssetUtxo>,
+}
+
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BitAssetsSidechainTip {
+    height: u32,
+    hash: Option<String>,
+}
+
+#[cfg(feature = "bitassets")]
+#[derive(Debug, Deserialize, Serialize)]
+struct PersistedAssetUtxo {
+    asset_id: String,
+    txid: String,
+    vout: u32,
+    asset_amount: u64,
+    bitcoin_value: u64,
+    height: u32,
+    #[serde(default)]
+    block_hash: Option<String>,
+    #[serde(default)]
+    event_kind: String,
+    #[serde(default)]
+    proof_status: String,
+    #[serde(default)]
+    sidechain_block_height: Option<u32>,
+    #[serde(default)]
+    bmm_inclusions: Vec<String>,
+    #[serde(default)]
+    best_main_verification: Option<String>,
+}
+
+#[cfg(feature = "bitassets")]
+impl From<AssetUtxo> for PersistedAssetUtxo {
+    fn from(utxo: AssetUtxo) -> Self {
+        Self {
+            asset_id: utxo.asset_id.to_string(),
+            txid: utxo.outpoint.txid.to_string(),
+            vout: utxo.outpoint.vout,
+            asset_amount: utxo.asset_amount,
+            bitcoin_value: utxo.bitcoin_value,
+            height: utxo.height,
+            block_hash: utxo.block_hash.map(|hash| hash.to_string()),
+            event_kind: AssetHistoryEventKind::SidechainUnspent.as_str().to_string(),
+            proof_status: utxo.proof_status.as_str().to_string(),
+            sidechain_block_height: utxo.proof_refs.sidechain_block_height,
+            bmm_inclusions: utxo.proof_refs.bmm_inclusions,
+            best_main_verification: utxo.proof_refs.best_main_verification,
+        }
+    }
+}
 
 /// The default maximum size of the mempool in bytes.
 ///
@@ -186,6 +271,18 @@ pub struct Config {
     /// Address the Electrum Server will listen to.
     pub electrum_address: Option<String>,
 
+    #[cfg(feature = "bitassets")]
+    /// Whether to enable experimental BitAssets indexing and asset Electrum methods.
+    pub enable_bitassets: bool,
+
+    #[cfg(feature = "bitassets")]
+    /// Optional plain-bitassets JSON-RPC URL used as a trusted sidechain data source.
+    pub bitassets_rpc_url: Option<String>,
+
+    #[cfg(feature = "bitassets")]
+    /// Optional refresh interval in seconds for the trusted sidechain data source.
+    pub bitassets_rpc_refresh_seconds: Option<u64>,
+
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,
 
@@ -213,6 +310,8 @@ pub struct Config {
 
     /// Whether to allow fallback to v1 transport if v2 connection fails.
     pub allow_v1_fallback: bool,
+    /// Optional P2P message magic override for private signets.
+    pub p2p_magic: Option<Magic>,
     /// Whether we should backfill
     ///
     /// If we assumeutreexo or use pow fraud proofs, you have the option to download and validate
@@ -247,12 +346,19 @@ impl Config {
             user_agent: String::new(),
             assumeutreexo_value: None,
             electrum_address: None,
+            #[cfg(feature = "bitassets")]
+            enable_bitassets: false,
+            #[cfg(feature = "bitassets")]
+            bitassets_rpc_url: None,
+            #[cfg(feature = "bitassets")]
+            bitassets_rpc_refresh_seconds: None,
             enable_electrum_tls: false,
             electrum_address_tls: None,
             generate_cert: false,
             tls_key_path: None,
             tls_cert_path: None,
             allow_v1_fallback: false,
+            p2p_magic: None,
             backfill: false,
         }
     }
@@ -415,6 +521,7 @@ impl Florestad {
             proxy,
             datadir: datadir.clone(),
             fixed_peer: self.config.connect.clone(),
+            network_magic: self.config.p2p_magic,
             compact_filters: self.config.cfilters,
             assume_utreexo: self.config.assumeutreexo_value.clone().or(assume_utreexo),
             backfill: self.config.backfill,
@@ -487,15 +594,81 @@ impl Florestad {
         }
 
         // Electrum Server configuration.
+        #[cfg(feature = "bitassets")]
+        let bitasset_index = if self.config.enable_bitassets {
+            let bitasset_index = Arc::new(BitAssetIndex::new());
+            blockchain_state.subscribe(bitasset_index.clone());
+            info!("BitAssets index enabled for Electrum asset methods");
+            let persistence_path = Self::bitassets_index_path(&self.config.data_dir);
+
+            match Self::load_persisted_bitassets_index(&persistence_path, &bitasset_index) {
+                Ok(0) => {}
+                Ok(indexed) => info!(
+                    "Loaded {indexed} persisted plain-bitassets sidechain UTXO(s) from {persistence_path}"
+                ),
+                Err(err) => warn!(
+                    "Could not load persisted plain-bitassets sidechain UTXOs from {persistence_path}: {err}"
+                ),
+            }
+
+            if let Some(rpc_url) = self.config.bitassets_rpc_url.as_ref() {
+                match Self::sync_trusted_bitassets_utxos(rpc_url, &bitasset_index) {
+                    Ok((indexed, tip)) => {
+                        info!(
+                            "Indexed {indexed} trusted plain-bitassets sidechain UTXO(s) from {rpc_url} at sidechain height {} tip {:?}",
+                            tip.height,
+                            tip.hash
+                        );
+                        match Self::persist_bitassets_index(
+                            &persistence_path,
+                            &bitasset_index,
+                            Some(&tip),
+                        ) {
+                            Ok(persisted) => info!(
+                                "Persisted {persisted} plain-bitassets sidechain UTXO(s) to {persistence_path}"
+                            ),
+                            Err(err) => warn!(
+                                "Could not persist plain-bitassets sidechain UTXOs to {persistence_path}: {err}"
+                            ),
+                        }
+                    }
+                    Err(err) => warn!(
+                        "Could not index trusted plain-bitassets sidechain UTXOs from {rpc_url}: {err}"
+                    ),
+                }
+                if let Some(refresh_seconds) = self.config.bitassets_rpc_refresh_seconds {
+                    if refresh_seconds > 0 {
+                        Self::spawn_bitassets_refresh_loop(
+                            rpc_url.clone(),
+                            bitasset_index.clone(),
+                            persistence_path.clone(),
+                            refresh_seconds,
+                        );
+                    }
+                }
+            }
+            Some(bitasset_index)
+        } else {
+            None
+        };
 
         // Instantiate the Electrum Server.
-        let electrum_server = ElectrumServer::new(
+        let mut electrum_server = ElectrumServer::new(
             wallet,
             blockchain_state,
             cfilters,
             chain_provider.get_handle(),
         )
         .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
+
+        #[cfg(feature = "bitassets")]
+        if let Some(bitasset_index) = bitasset_index {
+            electrum_server = electrum_server.with_bitasset_index(bitasset_index);
+        }
+        #[cfg(feature = "bitassets")]
+        if let Some(rpc_url) = self.config.bitassets_rpc_url.clone() {
+            electrum_server = electrum_server.with_bitassets_rpc_url(rpc_url);
+        }
 
         // Default Electrum Server port.
         let default_electrum_port: u16 =
@@ -722,6 +895,375 @@ impl Florestad {
             .map_err(FlorestadError::CouldNotLoadFlatChainStore)
     }
 
+    #[cfg(feature = "bitassets")]
+    fn sync_trusted_bitassets_utxos(
+        rpc_url: &str,
+        index: &BitAssetIndex,
+    ) -> Result<(usize, BitAssetsSidechainTip), String> {
+        let height = Self::bitassets_rpc_call(rpc_url, "getblockcount")?
+            .as_u64()
+            .ok_or_else(|| "getblockcount result was not a u64".to_string())?
+            as u32;
+        let hash = Self::bitassets_rpc_call(rpc_url, "get_best_sidechain_block_hash")?
+            .as_str()
+            .map(ToOwned::to_owned);
+        let tip = BitAssetsSidechainTip { height, hash };
+        let utxos = Self::bitassets_rpc_call(rpc_url, "list_utxos")?;
+        let utxos = utxos
+            .as_array()
+            .ok_or_else(|| "list_utxos result was not an array".to_string())?;
+
+        let mut records = Vec::new();
+        for utxo in utxos {
+            let Some(bitasset) = utxo
+                .pointer("/output/content/BitAsset")
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+
+            let asset_id = bitasset
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "BitAsset content missing asset id".to_string())?
+                .parse()
+                .map_err(|err| format!("invalid BitAsset asset id: {err}"))?;
+            let amount = bitasset
+                .get(1)
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "BitAsset content missing amount".to_string())?;
+
+            let regular = utxo
+                .pointer("/outpoint/Regular")
+                .ok_or_else(|| "BitAsset UTXO did not have a regular outpoint".to_string())?;
+            let txid: bitcoin::Txid = regular
+                .get("txid")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "regular outpoint missing txid".to_string())?
+                .parse()
+                .map_err(|err| format!("invalid regular outpoint txid: {err}"))?;
+            let vout = regular
+                .get("vout")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "regular outpoint missing vout".to_string())?;
+            let vout = u32::try_from(vout)
+                .map_err(|err| format!("regular outpoint vout overflow: {err}"))?;
+            let (block_hash, proof_status, proof_refs) =
+                match Self::bitassets_tx_proof_metadata(rpc_url, &txid.to_string()) {
+                    Ok(metadata) => metadata,
+                    Err(_) => Self::bitassets_tx_block_hash(rpc_url, &txid.to_string())
+                        .map(|block_hash| {
+                            (
+                                block_hash,
+                                AssetProofStatus::TrustedSnapshot,
+                                AssetProofRefs::default(),
+                            )
+                        })
+                        .map_err(|err| {
+                            format!("could not get transaction info for {txid}: {err}")
+                        })?,
+                };
+
+            records.push(TrustedSidechainAssetUtxo {
+                asset_id,
+                outpoint: bitcoin::OutPoint { txid, vout },
+                amount,
+                height,
+                block_hash,
+                event_kind: AssetHistoryEventKind::SidechainUnspent,
+                proof_status,
+                proof_refs,
+            });
+        }
+
+        let indexed = index.replace_with_trusted_sidechain_utxos(records);
+        Ok((indexed, tip))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_index_path(data_dir: &str) -> String {
+        format!("{data_dir}/{BITASSETS_INDEX_FILE}")
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn load_persisted_bitassets_index(path: &str, index: &BitAssetIndex) -> Result<usize, String> {
+        if !Path::new(path).exists() {
+            return Ok(0);
+        }
+
+        let bytes = fs::read(path).map_err(|err| format!("read failed: {err}"))?;
+        let persisted: PersistedBitAssetIndex =
+            serde_json::from_slice(&bytes).map_err(|err| format!("decode failed: {err}"))?;
+        if persisted.version != 1 {
+            return Err(format!(
+                "unsupported persisted bitassets index version {}",
+                persisted.version
+            ));
+        }
+
+        let mut records = Vec::with_capacity(persisted.utxos.len());
+        for utxo in persisted.utxos {
+            records.push(TrustedSidechainAssetUtxo {
+                asset_id: utxo
+                    .asset_id
+                    .parse()
+                    .map_err(|err| format!("invalid persisted asset id: {err}"))?,
+                outpoint: bitcoin::OutPoint {
+                    txid: utxo
+                        .txid
+                        .parse()
+                        .map_err(|err| format!("invalid persisted txid: {err}"))?,
+                    vout: utxo.vout,
+                },
+                amount: utxo.asset_amount,
+                height: utxo.height,
+                block_hash: utxo
+                    .block_hash
+                    .map(|hash| {
+                        hash.parse()
+                            .map_err(|err| format!("invalid persisted block hash: {err}"))
+                    })
+                    .transpose()?,
+                event_kind: match utxo.event_kind.as_str() {
+                    "sidechain_unspent" => AssetHistoryEventKind::SidechainUnspent,
+                    _ => AssetHistoryEventKind::SidechainUnspent,
+                },
+                proof_status: match utxo.proof_status.as_str() {
+                    "sidechain_rpc_proof" => AssetProofStatus::SidechainRpcProof,
+                    _ => AssetProofStatus::TrustedSnapshot,
+                },
+                proof_refs: AssetProofRefs {
+                    sidechain_block_height: utxo.sidechain_block_height,
+                    bmm_inclusions: utxo.bmm_inclusions,
+                    best_main_verification: utxo.best_main_verification,
+                },
+            });
+        }
+
+        Ok(index.replace_with_trusted_sidechain_utxos(records))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn persist_bitassets_index(
+        path: &str,
+        index: &BitAssetIndex,
+        tip: Option<&BitAssetsSidechainTip>,
+    ) -> Result<usize, String> {
+        let utxos = index
+            .get_all_asset_utxo_records()
+            .into_iter()
+            .map(PersistedAssetUtxo::from)
+            .collect::<Vec<_>>();
+        let persisted_count = utxos.len();
+        let persisted = PersistedBitAssetIndex {
+            version: 1,
+            sidechain_height: tip.map(|tip| tip.height),
+            sidechain_tip: tip.and_then(|tip| tip.hash.clone()),
+            utxos,
+        };
+        let bytes =
+            serde_json::to_vec_pretty(&persisted).map_err(|err| format!("encode failed: {err}"))?;
+        let tmp_path = format!("{path}.tmp");
+        fs::write(&tmp_path, bytes).map_err(|err| format!("write failed: {err}"))?;
+        fs::rename(&tmp_path, path).map_err(|err| format!("rename failed: {err}"))?;
+
+        Ok(persisted_count)
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_rpc_call(rpc_url: &str, method: &str) -> Result<Value, String> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "florestad-bitassets-sync",
+            "method": method,
+            "params": []
+        });
+        let mut response = ureq::post(rpc_url)
+            .header("content-type", "application/json")
+            .send_json(body)
+            .map_err(|err| format!("request failed for {method}: {err}"))?;
+        let value = response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|err| format!("invalid JSON response for {method}: {err}"))?;
+
+        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+            return Err(format!("RPC error for {method}: {error}"));
+        }
+
+        value
+            .get("result")
+            .cloned()
+            .ok_or_else(|| format!("RPC response for {method} did not include result"))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_rpc_call_with_params(
+        rpc_url: &str,
+        method: &str,
+        params: Vec<Value>,
+    ) -> Result<Value, String> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "florestad-bitassets-sync",
+            "method": method,
+            "params": params
+        });
+        let mut response = ureq::post(rpc_url)
+            .header("content-type", "application/json")
+            .send_json(body)
+            .map_err(|err| format!("request failed for {method}: {err}"))?;
+        let value = response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|err| format!("invalid JSON response for {method}: {err}"))?;
+
+        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+            return Err(format!("RPC error for {method}: {error}"));
+        }
+
+        value
+            .get("result")
+            .cloned()
+            .ok_or_else(|| format!("RPC response for {method} did not include result"))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_tx_block_hash(rpc_url: &str, txid: &str) -> Result<Option<bitcoin::Txid>, String> {
+        let Some(block_hash) = Self::bitassets_rpc_call_with_params(
+            rpc_url,
+            "get_transaction_info",
+            vec![json!(txid)],
+        )?
+        .pointer("/txin/block_hash")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned) else {
+            return Ok(None);
+        };
+
+        block_hash
+            .parse()
+            .map(Some)
+            .map_err(|err| format!("invalid transaction block hash: {err}"))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_tx_proof_metadata(
+        rpc_url: &str,
+        txid: &str,
+    ) -> Result<(Option<bitcoin::Txid>, AssetProofStatus, AssetProofRefs), String> {
+        let proof = Self::bitassets_rpc_call_with_params(
+            rpc_url,
+            "get_transaction_proof",
+            vec![json!(txid)],
+        )?;
+        if proof.is_null() {
+            return Ok((
+                None,
+                AssetProofStatus::TrustedSnapshot,
+                AssetProofRefs::default(),
+            ));
+        }
+
+        let block_hash = proof
+            .pointer("/txin/block_hash")
+            .and_then(Value::as_str)
+            .map(str::parse)
+            .transpose()
+            .map_err(|err| format!("invalid transaction proof block hash: {err}"))?;
+        let sidechain_block_height = proof
+            .get("sidechain_block_height")
+            .and_then(Value::as_u64)
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|err| format!("invalid transaction proof sidechain height: {err}"))?;
+        let bmm_inclusions = proof
+            .get("bmm_inclusions")
+            .and_then(Value::as_array)
+            .map(|inclusions| {
+                inclusions
+                    .iter()
+                    .map(|inclusion| {
+                        inclusion
+                            .as_str()
+                            .map(ToOwned::to_owned)
+                            .ok_or_else(|| "BMM inclusion was not a string".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let best_main_verification = proof
+            .get("best_main_verification")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let has_sidechain_archive = block_hash.is_some()
+            && proof.get("block").is_some_and(|block| !block.is_null())
+            && !bmm_inclusions.is_empty()
+            && best_main_verification.is_some();
+        let proof_status = if has_sidechain_archive {
+            AssetProofStatus::SidechainRpcProof
+        } else {
+            AssetProofStatus::TrustedSnapshot
+        };
+
+        Ok((
+            block_hash,
+            proof_status,
+            AssetProofRefs {
+                sidechain_block_height,
+                bmm_inclusions,
+                best_main_verification,
+            },
+        ))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn spawn_bitassets_refresh_loop(
+        rpc_url: String,
+        bitasset_index: Arc<BitAssetIndex>,
+        persistence_path: String,
+        refresh_seconds: u64,
+    ) {
+        info!(
+            "Refreshing trusted plain-bitassets sidechain UTXOs every {refresh_seconds} second(s)"
+        );
+        task::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(refresh_seconds));
+            loop {
+                interval.tick().await;
+                let rpc_url = rpc_url.clone();
+                let bitasset_index = bitasset_index.clone();
+                let persistence_path = persistence_path.clone();
+                let sync_result = task::spawn_blocking(move || {
+                    let (indexed, tip) =
+                        Self::sync_trusted_bitassets_utxos(&rpc_url, &bitasset_index)?;
+                    let persisted = Self::persist_bitassets_index(
+                        &persistence_path,
+                        &bitasset_index,
+                        Some(&tip),
+                    )?;
+                    Ok::<_, String>((indexed, persisted, tip))
+                })
+                .await;
+
+                match sync_result {
+                    Ok(Ok((indexed, persisted, tip))) => {
+                        info!(
+                            "Refreshed {indexed} trusted plain-bitassets sidechain UTXO(s), persisted {persisted}, sidechain height {} tip {:?}",
+                            tip.height,
+                            tip.hash
+                        )
+                    }
+                    Ok(Err(err)) => {
+                        warn!("Could not refresh trusted plain-bitassets sidechain UTXOs: {err}")
+                    }
+                    Err(err) => warn!("Trusted plain-bitassets refresh task failed: {err}"),
+                }
+            }
+        });
+    }
+
     /// Setup the wallet by initializing the database and adding descriptors, xpubs, and addresses.
     fn setup_wallet(&self) -> Result<AddressCache<KvDatabase>, FlorestadError> {
         let database = KvDatabase::new(self.config.data_dir.clone())
@@ -910,5 +1452,125 @@ impl From<Config> for Florestad {
             #[cfg(feature = "json-rpc")]
             json_rpc: OnceLock::new(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "bitassets"))]
+mod tests {
+    use super::*;
+    use bitcoin::Txid;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_cache_path(name: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("florestad-bitassets-{name}-{nanos}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir.join(BITASSETS_INDEX_FILE)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn sample_txid(byte: u8) -> Txid {
+        let hex = format!("{byte:02x}").repeat(32);
+        hex.parse().expect("valid txid")
+    }
+
+    #[test]
+    fn persisted_bitassets_index_loads_legacy_cache_as_trusted_snapshot() {
+        let path = unique_cache_path("legacy");
+        let asset_id = sample_txid(0x11);
+        let txid = sample_txid(0x22);
+        let cache = json!({
+            "version": 1,
+            "sidechain_height": 42,
+            "sidechain_tip": sample_txid(0x33).to_string(),
+            "utxos": [{
+                "asset_id": asset_id.to_string(),
+                "txid": txid.to_string(),
+                "vout": 0,
+                "asset_amount": 100,
+                "bitcoin_value": 0,
+                "height": 42,
+                "block_hash": sample_txid(0x44).to_string(),
+                "event_kind": "sidechain_unspent"
+            }]
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&cache).unwrap()).unwrap();
+
+        let index = BitAssetIndex::new();
+        assert_eq!(
+            Florestad::load_persisted_bitassets_index(&path, &index),
+            Ok(1)
+        );
+
+        let records = index.get_asset_utxo_records(&asset_id);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].asset_amount, 100);
+        assert_eq!(records[0].proof_status, AssetProofStatus::TrustedSnapshot);
+        assert_eq!(records[0].proof_refs, AssetProofRefs::default());
+    }
+
+    #[test]
+    fn persisted_bitassets_index_roundtrips_compact_proof_refs() {
+        let path = unique_cache_path("proof-refs");
+        let asset_id = sample_txid(0x55);
+        let txid = sample_txid(0x66);
+        let block_hash = sample_txid(0x77);
+        let bmm_inclusion = sample_txid(0x88).to_string();
+        let best_main_verification = sample_txid(0x99).to_string();
+        let index = BitAssetIndex::new();
+        index.replace_with_trusted_sidechain_utxos([TrustedSidechainAssetUtxo {
+            asset_id,
+            outpoint: bitcoin::OutPoint { txid, vout: 1 },
+            amount: 900,
+            height: 77,
+            block_hash: Some(block_hash),
+            event_kind: AssetHistoryEventKind::SidechainUnspent,
+            proof_status: AssetProofStatus::SidechainRpcProof,
+            proof_refs: AssetProofRefs {
+                sidechain_block_height: Some(77),
+                bmm_inclusions: vec![bmm_inclusion.clone()],
+                best_main_verification: Some(best_main_verification.clone()),
+            },
+        }]);
+
+        let tip = BitAssetsSidechainTip {
+            height: 77,
+            hash: Some(block_hash.to_string()),
+        };
+        assert_eq!(
+            Florestad::persist_bitassets_index(&path, &index, Some(&tip)),
+            Ok(1)
+        );
+
+        let reloaded = BitAssetIndex::new();
+        assert_eq!(
+            Florestad::load_persisted_bitassets_index(&path, &reloaded),
+            Ok(1)
+        );
+        let records = reloaded.get_asset_utxo_records(&asset_id);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].proof_status, AssetProofStatus::SidechainRpcProof);
+        assert_eq!(records[0].proof_refs.sidechain_block_height, Some(77));
+        assert_eq!(records[0].proof_refs.bmm_inclusions, vec![bmm_inclusion]);
+        assert_eq!(
+            records[0].proof_refs.best_main_verification.as_deref(),
+            Some(best_main_verification.as_str())
+        );
+    }
+
+    #[test]
+    fn persisted_bitassets_index_rejects_malformed_cache() {
+        let path = unique_cache_path("malformed");
+        fs::write(&path, b"{not-json").unwrap();
+
+        let index = BitAssetIndex::new();
+        let err = Florestad::load_persisted_bitassets_index(&path, &index)
+            .expect_err("malformed cache should fail");
+        assert!(err.contains("decode failed"));
+        assert!(index.list_assets().is_empty());
     }
 }

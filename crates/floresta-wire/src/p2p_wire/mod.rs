@@ -6,6 +6,7 @@
 use core::net::SocketAddr;
 use std::path::PathBuf;
 
+use bitcoin::p2p::Magic;
 use bitcoin::Network;
 use floresta_chain::AssumeUtreexoValue;
 
@@ -15,6 +16,11 @@ pub struct UtreexoNodeConfig {
     /// The blockchain we are in, defaults to Bitcoin. Possible values are Bitcoin,
     /// Testnet, Regtest and Signet.
     pub network: Network,
+    /// Optional P2P message magic override.
+    ///
+    /// This is needed for private signets, whose message start bytes are derived
+    /// from their custom signet challenge rather than public signet defaults.
+    pub network_magic: Option<Magic>,
     /// Whether to use PoW fraud proofs. Defaults to false.
     ///
     /// PoW fraud proof is a mechanism to skip the verification of the whole blockchain,
@@ -73,6 +79,7 @@ impl Default for UtreexoNodeConfig {
         UtreexoNodeConfig {
             disable_dns_seeds: false,
             network: Network::Bitcoin,
+            network_magic: None,
             pow_fraud_proofs: false,
             compact_filters: false,
             fixed_peer: None,

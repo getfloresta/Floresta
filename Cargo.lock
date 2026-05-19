@@ -1114,6 +1114,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "ureq",
  "zstd",
 ]
 
@@ -1170,6 +1171,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tower-http",
  "tracing",
+ "ureq",
  "zmq",
 ]
 

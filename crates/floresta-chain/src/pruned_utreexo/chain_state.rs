@@ -150,7 +150,92 @@ pub type AssetId = bitcoin::Txid;
 pub struct AssetUtxo {
     pub asset_id: AssetId,
     pub outpoint: OutPoint,
+    pub asset_amount: u64,
     pub bitcoin_value: u64,
+    pub height: u32,
+    pub block_hash: Option<Txid>,
+    pub proof_status: AssetProofStatus,
+    pub proof_refs: AssetProofRefs,
+}
+
+/// Trusted sidechain-sourced asset UTXO record.
+///
+/// This is intentionally separate from Bitcoin block observation. The
+/// plain-bitassets sidechain exposes asset UTXOs over its own RPC API; Phase
+/// 3.4 uses those trusted local sidechain records to populate the lite-wallet
+/// asset view while the validation story matures.
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TrustedSidechainAssetUtxo {
+    pub asset_id: AssetId,
+    pub outpoint: OutPoint,
+    pub amount: u64,
+    pub height: u32,
+    pub block_hash: Option<Txid>,
+    pub event_kind: AssetHistoryEventKind,
+    pub proof_status: AssetProofStatus,
+    pub proof_refs: AssetProofRefs,
+}
+
+/// Minimal transaction history entry for the optional BitAsset index.
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssetHistoryEntry {
+    pub height: u32,
+    pub txid: Txid,
+    pub block_hash: Option<Txid>,
+    pub amount: u64,
+    pub vout: u32,
+    pub event_kind: AssetHistoryEventKind,
+    pub proof_status: AssetProofStatus,
+    pub proof_refs: AssetProofRefs,
+}
+
+/// Compact proof provenance stored by the lite wallet.
+///
+/// This deliberately stores enough sidechain/mainchain references to refetch a
+/// full proof bundle on demand, without persisting the entire sidechain block
+/// or transaction proof payload in the Floresta cache.
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AssetProofRefs {
+    pub sidechain_block_height: Option<u32>,
+    pub bmm_inclusions: Vec<String>,
+    pub best_main_verification: Option<String>,
+}
+
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AssetProofStatus {
+    TrustedSnapshot,
+    SidechainRpcProof,
+}
+
+#[cfg(feature = "bitassets")]
+impl AssetProofStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TrustedSnapshot => "trusted_snapshot",
+            Self::SidechainRpcProof => "sidechain_rpc_proof",
+        }
+    }
+}
+
+#[cfg(feature = "bitassets")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AssetHistoryEventKind {
+    MainchainStub,
+    SidechainUnspent,
+}
+
+#[cfg(feature = "bitassets")]
+impl AssetHistoryEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MainchainStub => "mainchain_stub",
+            Self::SidechainUnspent => "sidechain_unspent",
+        }
+    }
 }
 
 /// A minimal, orthogonal, optional per-asset UTXO index.
@@ -172,8 +257,12 @@ pub struct BitAssetIndex {
 struct BitAssetIndexInner {
     /// Primary per-asset UTXO set view.
     asset_utxos: HashMap<AssetId, HashSet<OutPoint>>,
+    /// Richer UTXO records keyed by outpoint.
+    asset_utxo_records: HashMap<OutPoint, AssetUtxo>,
     /// Reverse lookup for quick membership tests (used by future transfer logic).
     outpoint_to_asset: HashMap<OutPoint, AssetId>,
+    /// Minimal per-asset transaction history.
+    asset_history: HashMap<AssetId, Vec<AssetHistoryEntry>>,
     /// Simple counters for tests and diagnostics (creation/transfer events).
     blocks_observed: u64,
     high_version_txs_seen: u64,
@@ -220,19 +309,154 @@ impl BitAssetIndex {
         self.inner.read().blocks_observed
     }
 
+    /// Returns all asset ids currently known to the index.
+    /// The returned vector order is undefined.
+    pub fn list_assets(&self) -> Vec<AssetId> {
+        self.inner.read().asset_utxos.keys().cloned().collect()
+    }
+
+    /// Returns the current richer UTXO records belonging to the given asset.
+    /// The returned vector order is undefined.
+    pub fn get_asset_utxo_records(&self, asset_id: &AssetId) -> Vec<AssetUtxo> {
+        let inner = self.inner.read();
+        inner
+            .asset_utxos
+            .get(asset_id)
+            .map(|set| {
+                set.iter()
+                    .filter_map(|outpoint| inner.asset_utxo_records.get(outpoint).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Returns every currently indexed asset UTXO record.
+    /// The returned vector order is undefined.
+    pub fn get_all_asset_utxo_records(&self) -> Vec<AssetUtxo> {
+        self.inner
+            .read()
+            .asset_utxo_records
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Returns the number of currently indexed outputs for an asset.
+    ///
+    /// Phase 3.4 uses this as the first conservative "asset balance" view
+    /// because the current index does not yet decode protocol-level asset
+    /// quantities from plain-bitassets sidechain transaction payloads.
+    pub fn get_asset_output_count(&self, asset_id: &AssetId) -> u64 {
+        self.inner
+            .read()
+            .asset_utxos
+            .get(asset_id)
+            .map(|set| set.len() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Returns the indexed asset-unit balance for an asset.
+    ///
+    /// Mainchain high-version transaction stubs record one unit per indexed
+    /// output. Trusted sidechain ingestion records real plain-bitassets
+    /// amounts from the sidechain node's UTXO set.
+    pub fn get_asset_balance(&self, asset_id: &AssetId) -> u64 {
+        self.get_asset_utxo_records(asset_id)
+            .iter()
+            .map(|utxo| utxo.asset_amount)
+            .sum()
+    }
+
+    /// Returns known history entries for an asset.
+    ///
+    /// The Phase 3.4 in-memory index records one entry whenever it observes a
+    /// high-version transaction and indexes its outputs under the stub asset id.
+    /// The returned vector order is undefined.
+    pub fn get_asset_history(&self, asset_id: &AssetId) -> Vec<AssetHistoryEntry> {
+        let inner = self.inner.read();
+        inner
+            .asset_history
+            .get(asset_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Number of v10–v12 transactions observed (for tests).
     pub fn high_version_txs_seen(&self) -> u64 {
         self.inner.read().high_version_txs_seen
     }
 
-    fn process_high_version_tx(&self, tx: &Transaction) {
+    /// Replace the index contents with trusted records read from the
+    /// plain-bitassets sidechain node.
+    ///
+    /// This is a deliberately explicit trusted-source API. It is useful for
+    /// the current local signet lite-wallet loop, where asset state lives in
+    /// sidechain blocks and the sidechain node already exposes the canonical
+    /// asset UTXO set over RPC.
+    pub fn replace_with_trusted_sidechain_utxos(
+        &self,
+        records: impl IntoIterator<Item = TrustedSidechainAssetUtxo>,
+    ) -> usize {
+        let mut inner = self.inner.write();
+        inner.asset_utxos.clear();
+        inner.asset_utxo_records.clear();
+        inner.outpoint_to_asset.clear();
+        inner.asset_history.clear();
+        inner.asset_utxos_indexed = 0;
+
+        for record in records {
+            inner
+                .asset_utxos
+                .entry(record.asset_id)
+                .or_default()
+                .insert(record.outpoint);
+            inner.asset_utxo_records.insert(
+                record.outpoint,
+                AssetUtxo {
+                    asset_id: record.asset_id,
+                    outpoint: record.outpoint,
+                    asset_amount: record.amount,
+                    bitcoin_value: 0,
+                    height: record.height,
+                    block_hash: record.block_hash,
+                    proof_status: record.proof_status,
+                    proof_refs: record.proof_refs.clone(),
+                },
+            );
+            inner
+                .outpoint_to_asset
+                .insert(record.outpoint, record.asset_id);
+            inner
+                .asset_history
+                .entry(record.asset_id)
+                .or_default()
+                .push(AssetHistoryEntry {
+                    height: record.height,
+                    txid: record.outpoint.txid,
+                    block_hash: record.block_hash,
+                    amount: record.amount,
+                    vout: record.outpoint.vout,
+                    event_kind: record.event_kind,
+                    proof_status: record.proof_status,
+                    proof_refs: record.proof_refs,
+                });
+            inner.asset_utxos_indexed += 1;
+        }
+
+        inner.asset_utxos_indexed as usize
+    }
+
+    fn process_high_version_tx(&self, tx: &Transaction, height: u32) {
         let mut inner = self.inner.write();
         inner.high_version_txs_seen += 1;
 
         // Phase 3.3: exercise the new classifier so that issuance events are
         // tallied. The classification result itself is not yet used to change
         // asset_id derivation or storage (kept for later phases).
-        if matches!(classify_bitasset_transaction(tx), BitAssetTxKind::Issuance { .. }) {
+        if matches!(
+            classify_bitasset_transaction(tx),
+            BitAssetTxKind::Issuance { .. }
+        ) {
             inner.issuance_events_seen += 1;
         }
 
@@ -248,8 +472,22 @@ impl BitAssetIndex {
         //   - When wants_spent_utxos() == true, remove spent asset utxos and
         //     propagate the original asset_id to the new outputs (transfer).
         let asset_id: AssetId = tx.compute_txid();
+        inner
+            .asset_history
+            .entry(asset_id)
+            .or_default()
+            .push(AssetHistoryEntry {
+                height,
+                txid: tx.compute_txid(),
+                block_hash: None,
+                amount: 0,
+                vout: 0,
+                event_kind: AssetHistoryEventKind::MainchainStub,
+                proof_status: AssetProofStatus::TrustedSnapshot,
+                proof_refs: AssetProofRefs::default(),
+            });
 
-        for (vout, _txout) in tx.output.iter().enumerate() {
+        for (vout, txout) in tx.output.iter().enumerate() {
             let outpoint = OutPoint {
                 txid: tx.compute_txid(),
                 vout: vout as u32,
@@ -260,6 +498,19 @@ impl BitAssetIndex {
                 .entry(asset_id)
                 .or_default()
                 .insert(outpoint);
+            inner.asset_utxo_records.insert(
+                outpoint,
+                AssetUtxo {
+                    asset_id,
+                    outpoint,
+                    asset_amount: 1,
+                    bitcoin_value: txout.value.to_sat(),
+                    height,
+                    block_hash: None,
+                    proof_status: AssetProofStatus::TrustedSnapshot,
+                    proof_refs: AssetProofRefs::default(),
+                },
+            );
             inner.outpoint_to_asset.insert(outpoint, asset_id);
 
             inner.asset_utxos_indexed += 1;
@@ -279,7 +530,7 @@ impl BlockConsumer for BitAssetIndex {
     fn on_block(
         &self,
         block: &Block,
-        _height: u32,
+        height: u32,
         _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     ) {
         let mut inner = self.inner.write();
@@ -292,7 +543,7 @@ impl BlockConsumer for BitAssetIndex {
                 // Drop the write guard before the more involved per-tx work
                 // to keep critical section tiny (good practice, even if tiny here).
                 drop(inner);
-                self.process_high_version_tx(tx);
+                self.process_high_version_tx(tx, height);
                 inner = self.inner.write(); // re-acquire for next iteration if needed
             }
         }
@@ -367,11 +618,7 @@ pub fn classify_bitasset_transaction(tx: &Transaction) -> BitAssetTxKind {
     match tx.version.0 {
         10 => {
             let has_controller = tx.output.len() >= 2 && tx.output[0].value.to_sat() == 1;
-            let genesis_amount = tx
-                .output
-                .get(1)
-                .map(|o| o.value.to_sat())
-                .unwrap_or(0);
+            let genesis_amount = tx.output.get(1).map(|o| o.value.to_sat()).unwrap_or(0);
             BitAssetTxKind::Issuance {
                 has_controller,
                 genesis_amount,
