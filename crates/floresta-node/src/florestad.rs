@@ -25,10 +25,8 @@ use floresta_chain::ChainParams;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore as ChainStore;
 use floresta_chain::FlatChainStoreConfig;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_compact_filters::filters_man::FiltersMan;
+use floresta_compact_filters::FlatFilterStore;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_mempool::Mempool;
@@ -376,24 +374,6 @@ impl Florestad {
             self.config.assume_valid,
         )?);
 
-        #[cfg(feature = "compact-filters")]
-        let cfilters = if self.config.cfilters {
-            let filter_store = FlatFiltersStore::new(datadir.join("cfilters"));
-            let cfilters = Arc::new(NetworkFilters::new(filter_store));
-
-            let height = cfilters
-                .get_height()
-                .map_err(FlorestadError::CouldNotLoadCompactFiltersStore)?;
-
-            info!("Loaded compact filters store at height {height}");
-            Some(cfilters)
-        } else {
-            None
-        };
-
-        #[cfg(not(feature = "compact-filters"))]
-        let cfilters = None;
-
         // If this network already allows pow fraud proofs, we should use it instead of assumeutreexo
         let assume_utreexo = match self.config.assume_utreexo {
             true => Some(ChainParams::get_assume_utreexo(self.config.network)),
@@ -433,7 +413,6 @@ impl Florestad {
             Arc::new(tokio::sync::Mutex::new(Mempool::new(
                 DEFAULT_MEMPOOL_MAX_SIZE_BYTES,
             ))),
-            cfilters.clone(),
             kill_signal.clone(),
             AddressMan::new(None, SUPPORTED_NETWORKS),
         )
@@ -468,7 +447,6 @@ impl Florestad {
                 chain_provider.get_handle(),
                 self.stop_signal.clone(),
                 self.config.network,
-                cfilters.clone(),
                 self.config
                     .json_rpc_address
                     .as_ref()
@@ -489,13 +467,9 @@ impl Florestad {
         // Electrum Server configuration.
 
         // Instantiate the Electrum Server.
-        let electrum_server = ElectrumServer::new(
-            wallet,
-            blockchain_state,
-            cfilters,
-            chain_provider.get_handle(),
-        )
-        .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
+        let electrum_server =
+            ElectrumServer::new(wallet, blockchain_state, chain_provider.get_handle())
+                .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
         // Default Electrum Server port.
         let default_electrum_port: u16 =
