@@ -13,6 +13,8 @@ pub struct EmbeddedWalletConfig {
     pub seed_hex: Option<String>,
     #[serde(default)]
     pub create: bool,
+    #[serde(default = "default_persist_seed")]
+    pub persist_seed: bool,
 }
 
 pub struct EmbeddedBitAssetsWallet {
@@ -27,6 +29,18 @@ impl EmbeddedBitAssetsWallet {
                 config.rpc_url,
                 config.seed_hex.as_deref(),
                 config.create,
+            )?,
+        })
+    }
+
+    pub fn open_with_seed_storage(config: EmbeddedWalletConfig) -> Result<Self, Error> {
+        Ok(Self {
+            wallet: NativeBitAssetsWallet::open_with_seed_storage(
+                config.path,
+                config.rpc_url,
+                config.seed_hex.as_deref(),
+                config.create,
+                config.persist_seed,
             )?,
         })
     }
@@ -154,6 +168,10 @@ impl EmbeddedBitAssetsWallet {
             params.fee_sats.unwrap_or(0),
         )?)
     }
+}
+
+fn default_persist_seed() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -297,6 +315,7 @@ mod tests {
             rpc_url: "http://127.0.0.1:6004".to_string(),
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
+            persist_seed: true,
         })
         .unwrap();
 
@@ -317,6 +336,7 @@ mod tests {
             rpc_url: "http://127.0.0.1:6004".to_string(),
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
+            persist_seed: true,
         })
         .unwrap();
 

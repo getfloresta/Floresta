@@ -23,7 +23,7 @@ pub extern "C" fn floresta_bitassets_string_free(value: *mut c_char) {
 pub extern "C" fn floresta_bitassets_wallet_open(config_json: *const c_char) -> FfiResult {
     ffi_result(|| {
         let config: EmbeddedWalletConfig = serde_json::from_str(read_str(config_json)?)?;
-        let wallet = EmbeddedBitAssetsWallet::open(config)?;
+        let wallet = EmbeddedBitAssetsWallet::open_with_seed_storage(config)?;
         let handle = Box::into_raw(Box::new(wallet)) as usize;
         Ok(handle.to_string())
     })

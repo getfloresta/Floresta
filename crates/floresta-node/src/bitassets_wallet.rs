@@ -430,6 +430,8 @@ pub struct NativeBitAssetsWallet {
     path: PathBuf,
     rpc_url: String,
     stored: StoredWallet,
+    runtime_seed_hex: Option<String>,
+    persist_seed: bool,
     quic_status: QuicStatus,
     subscription_generation: u64,
 }
@@ -441,23 +443,48 @@ impl NativeBitAssetsWallet {
         seed_hex: Option<&str>,
         create: bool,
     ) -> Result<Self, Error> {
+        Self::open_with_seed_storage(path, rpc_url, seed_hex, create, true)
+    }
+
+    pub fn open_with_seed_storage(
+        path: impl AsRef<Path>,
+        rpc_url: String,
+        seed_hex: Option<&str>,
+        create: bool,
+        persist_seed: bool,
+    ) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
         if path.exists() {
             let bytes = fs::read(&path)?;
             let mut stored: StoredWallet = serde_json::from_slice(&bytes)?;
+            if stored.seed_hex.is_empty() && seed_hex.is_none() {
+                return Err(Error::CreateRequired);
+            }
+            let runtime_seed_hex = seed_hex.map(ToOwned::to_owned);
+            if persist_seed {
+                if let Some(seed_hex) = seed_hex {
+                    stored.seed_hex = seed_hex.to_string();
+                }
+            } else {
+                stored.seed_hex.clear();
+            }
             for address in &mut stored.addresses {
                 if address.script_hash.is_none() {
                     address.script_hash =
                         Some(Address::from_base58(&address.address)?.script_hash());
                 }
             }
-            return Ok(Self {
+            let wallet = Self {
                 path,
                 rpc_url,
                 stored,
+                runtime_seed_hex,
+                persist_seed,
                 quic_status: QuicStatus::default(),
                 subscription_generation: 0,
-            });
+            };
+            wallet.save()?;
+            return Ok(wallet);
         }
 
         if !create && seed_hex.is_none() {
@@ -477,7 +504,11 @@ impl NativeBitAssetsWallet {
             rpc_url,
             stored: StoredWallet {
                 version: 1,
-                seed_hex: hex::encode(seed),
+                seed_hex: if persist_seed {
+                    hex::encode(seed)
+                } else {
+                    String::new()
+                },
                 next_index: 0,
                 addresses: Vec::new(),
                 confirmed_utxos: Vec::new(),
@@ -486,6 +517,12 @@ impl NativeBitAssetsWallet {
                 last_tip_hash: None,
                 last_tip_height: None,
             },
+            runtime_seed_hex: if persist_seed {
+                None
+            } else {
+                Some(hex::encode(seed))
+            },
+            persist_seed,
             quic_status: QuicStatus::default(),
             subscription_generation: 0,
         };
@@ -1136,12 +1173,19 @@ impl NativeBitAssetsWallet {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let bytes = serde_json::to_vec_pretty(&self.stored)?;
+        let mut stored = self.stored.clone();
+        if !self.persist_seed {
+            stored.seed_hex.clear();
+        }
+        let bytes = serde_json::to_vec_pretty(&stored)?;
         fs::write(&self.path, bytes)?;
         Ok(())
     }
 
     fn seed(&self) -> Result<[u8; 64], Error> {
+        if let Some(seed_hex) = &self.runtime_seed_hex {
+            return decode_seed(seed_hex);
+        }
         decode_seed(&self.stored.seed_hex)
     }
 
@@ -1760,6 +1804,41 @@ mod tests {
         );
         assert_eq!(
             wallet.get_new_address().unwrap(),
+            "3GfJ72KNjMfLBpQTw2pBxq9XPSg1"
+        );
+    }
+
+    #[test]
+    fn can_keep_seed_out_of_persisted_wallet_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open_with_seed_storage(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            wallet.get_new_address().unwrap(),
+            "46wMdKN8vRVCHCKw77eqsRkpc6yT"
+        );
+        let persisted = fs::read_to_string(&path).unwrap();
+        assert!(persisted.contains("\"seed_hex\": \"\""));
+        assert!(!persisted.contains(ZERO_SEED));
+
+        let mut reloaded = NativeBitAssetsWallet::open_with_seed_storage(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            reloaded.get_new_address().unwrap(),
             "3GfJ72KNjMfLBpQTw2pBxq9XPSg1"
         );
     }
