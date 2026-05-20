@@ -18,7 +18,23 @@ fi
 
 for target in "${TARGETS[@]}"; do
   rustup target add "$target"
-  cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p "$CRATE" --release --target "$target"
+  case "$target" in
+    aarch64-linux-android)
+      (cd "$ROOT_DIR" && cargo ndk -t arm64-v8a build -p "$CRATE" --release)
+      ;;
+    armv7-linux-androideabi)
+      (cd "$ROOT_DIR" && cargo ndk -t armeabi-v7a build -p "$CRATE" --release)
+      ;;
+    i686-linux-android)
+      (cd "$ROOT_DIR" && cargo ndk -t x86 build -p "$CRATE" --release)
+      ;;
+    x86_64-linux-android)
+      (cd "$ROOT_DIR" && cargo ndk -t x86_64 build -p "$CRATE" --release)
+      ;;
+    *)
+      cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p "$CRATE" --release --target "$target"
+      ;;
+  esac
 done
 
 echo "Built $CRATE for: ${TARGETS[*]}"

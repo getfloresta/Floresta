@@ -221,7 +221,7 @@ fn string_to_ptr(value: String) -> *mut c_char {
 
 #[cfg(target_os = "android")]
 mod android_jni {
-    use std::ffi::{CStr, CString};
+    use std::ffi::{c_char, CStr, CString};
 
     use jni::{
         objects::{JObject, JString},
@@ -252,7 +252,9 @@ mod android_jni {
         result_to_java_string(
             &mut env,
             match config_json {
-                Ok(config_json) => with_c_string(&config_json, floresta_bitassets_wallet_open),
+                Ok(config_json) => with_c_string(&config_json, |config_json| {
+                    floresta_bitassets_wallet_open(config_json)
+                }),
                 Err(error) => json_error(error),
             },
         )
@@ -326,9 +328,9 @@ mod android_jni {
         result_to_java_string(
             &mut env,
             match asset_id {
-                Ok(asset_id) if asset_id.is_empty() => {
-                    result_json(floresta_bitassets_wallet_get_balance(handle as usize, std::ptr::null()))
-                }
+                Ok(asset_id) if asset_id.is_empty() => result_json(
+                    floresta_bitassets_wallet_get_balance(handle as usize, std::ptr::null()),
+                ),
                 Ok(asset_id) => with_c_string(&asset_id, |asset_id| {
                     floresta_bitassets_wallet_get_balance(handle as usize, asset_id)
                 }),
@@ -403,7 +405,7 @@ mod android_jni {
             .map_err(|error| error.to_string())
     }
 
-    fn with_c_string(value: &str, f: impl FnOnce(*const i8) -> FfiResult) -> String {
+    fn with_c_string(value: &str, f: impl FnOnce(*const c_char) -> FfiResult) -> String {
         match CString::new(value) {
             Ok(value) => result_json(f(value.as_ptr())),
             Err(error) => json_error(error.to_string()),

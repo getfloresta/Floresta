@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{
-    parse_asset_id, BitAssetData, DutchAuctionParams, Error, NativeBitAssetsWallet,
-};
+use crate::{parse_asset_id, BitAssetData, DutchAuctionParams, Error, NativeBitAssetsWallet};
 
 #[derive(Debug, Deserialize)]
 pub struct EmbeddedWalletConfig {
