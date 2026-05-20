@@ -1233,6 +1233,7 @@ dependencies = [
  "borsh",
  "ed25519-dalek",
  "hex",
+ "jni",
  "rand 0.8.5",
  "rustreexo",
  "serde",

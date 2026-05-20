@@ -6,12 +6,16 @@ license.workspace = true
 readme.workspace = true
 authors = ["Floresta Developers <contact@getfloresta.org>"]
 
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
 [dependencies]
 bitcoin = { workspace = true, features = ["std"] }
 blake3 = "1.8"
 borsh = { version = "1.6", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["serde"] }
 hex = { workspace = true }
+jni = "0.21"
 rand = { workspace = true }
 rustreexo = { workspace = true }
 serde = { workspace = true }

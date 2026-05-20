@@ -6,6 +6,7 @@
 mod wallet;
 
 pub mod mobile;
+pub mod mobile_ffi;
 
 pub use wallet::{
     parse_asset_id, AssetId, BitAssetData, BitAssetId, DutchAuctionParams, EncryptionPubKey, Error,

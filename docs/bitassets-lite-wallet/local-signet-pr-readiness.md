@@ -42,6 +42,24 @@ The native JSON-RPC methods are:
 
 Constructor V1 accepts only `fee_sats = 0`; nonzero fees fail explicitly until Bitcoin UTXO fee selection is added.
 
+## Mobile Embedding Surface
+
+`crates/floresta-bitassets-wallet` is now the reusable wallet boundary for daemon and mobile callers. It still reuses the proven native wallet implementation, but exports a mobile-safe facade:
+
+- `mobile::EmbeddedBitAssetsWallet` accepts JSON-shaped params matching the Floresta JSON-RPC methods.
+- `mobile_ffi` exposes a C ABI for iOS and JNI exports for Android.
+- The crate builds as `rlib`, `staticlib`, and `cdylib` so RedWallet can link it directly.
+- `include/floresta_bitassets_wallet.h` documents the C ABI used by Swift or C/C++ bridges.
+
+Build example:
+
+```bash
+cd /Users/lukekensik/drivechain-wallet-dev/floresta-bitassets
+./scripts/build-bitassets-wallet-mobile.sh aarch64-apple-ios-sim
+```
+
+Android targets require the Android Rust targets plus an NDK linker environment before producing `.so` files for RedWallet `jniLibs`.
+
 ## Canonical Live Smoke
 
 The local smoke harness lives in `local-dev`, which is not a git repository here, so it should be referenced from PR notes rather than committed in this branch:
