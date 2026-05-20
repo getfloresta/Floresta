@@ -1,0 +1,26 @@
+[package]
+name = "floresta-bitassets-wallet"
+version = "0.9.0"
+edition = "2021"
+license.workspace = true
+readme.workspace = true
+authors = ["Floresta Developers <contact@getfloresta.org>"]
+
+[dependencies]
+bitcoin = { workspace = true, features = ["std"] }
+blake3 = "1.8"
+borsh = { version = "1.6", features = ["derive"] }
+ed25519-dalek = { version = "2.2", features = ["serde"] }
+hex = { workspace = true }
+rand = { workspace = true }
+rustreexo = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2.0"
+ureq = { version = "3.1", features = ["json", "rustls-no-provider"], default-features = false }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

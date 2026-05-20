@@ -1644,7 +1644,7 @@ fn selected_to_outpoints(selected: &[WalletUtxo]) -> Result<Vec<OutPoint>, Error
         .collect()
 }
 
-pub(crate) fn parse_asset_id(asset: &str) -> Result<AssetId, Error> {
+pub fn parse_asset_id(asset: &str) -> Result<AssetId, Error> {
     let normalized = asset.trim();
     if normalized.eq_ignore_ascii_case("bitcoin") {
         return Ok(AssetId::Bitcoin);

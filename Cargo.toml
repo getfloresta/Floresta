@@ -12,6 +12,7 @@ members = [
     "crates/floresta-watch-only",
     "crates/floresta-wire",
     "crates/floresta-mempool",
+    "crates/floresta-bitassets-wallet",
 
     # Binaries
     "bin/florestad",
@@ -74,6 +75,7 @@ floresta-chain = { path = "crates/floresta-chain" }
 floresta-common = { path = "crates/floresta-common" }
 floresta-compact-filters = { path = "crates/floresta-compact-filters" }
 floresta-electrum = { path = "crates/floresta-electrum" }
+floresta-bitassets-wallet = { path = "crates/floresta-bitassets-wallet" }
 floresta-node = { path = "crates/floresta-node", default-features = false }
 floresta-rpc = { path = "crates/floresta-rpc" }
 floresta-watch-only = { path = "crates/floresta-watch-only" }

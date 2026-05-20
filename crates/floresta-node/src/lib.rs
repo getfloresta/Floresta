@@ -8,7 +8,7 @@
 )]
 
 #[cfg(feature = "bitassets")]
-mod bitassets_wallet;
+pub use floresta_bitassets_wallet as bitassets_wallet;
 mod config_file;
 mod error;
 mod florestad;

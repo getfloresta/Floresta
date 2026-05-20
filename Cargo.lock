@@ -1225,6 +1225,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "floresta-bitassets-wallet"
+version = "0.9.0"
+dependencies = [
+ "bitcoin",
+ "blake3",
+ "borsh",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.8.5",
+ "rustreexo",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "ureq",
+]
+
+[[package]]
 name = "floresta-chain"
 version = "0.5.0"
 dependencies = [
@@ -1342,6 +1360,7 @@ dependencies = [
  "corepc-types",
  "dns-lookup",
  "ed25519-dalek",
+ "floresta-bitassets-wallet",
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
