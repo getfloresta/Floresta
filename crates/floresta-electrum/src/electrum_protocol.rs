@@ -1546,7 +1546,7 @@ mod test {
             disable_dns_seeds: true,
             network: Network::Signet,
             pow_fraud_proofs: true,
-            datadir: "/tmp-db".to_string(),
+            datadir: "/tmp-db".into(),
             user_agent: "floresta".to_string(),
             ..Default::default()
         };

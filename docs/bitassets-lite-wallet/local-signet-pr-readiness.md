@@ -2,113 +2,150 @@
 
 ## Current Architecture
 
-The bitassets lite-wallet path is intentionally split into three layers:
+The issue #28 path now uses a native Floresta BitAssets wallet instead of the old delegated Electrum write path:
 
-- `plain-bitassets` remains the sidechain authority for asset state and exposes proof-oriented archive context through `get_transaction_proof`.
-- `florestad --features bitassets` imports the sidechain UTXO view through JSON-RPC, records compact proof provenance, persists it in `bitassets-index.json`, and can delegate wallet-write actions to the configured sidechain RPC.
-- `floresta-electrum` serves asset wallet views and delegated wallet actions through `blockchain.asset.*` methods.
+- `plain-bitassets` remains the sidechain authority and exposes script-hash lite-wallet updates, proof refs, and raw authorized transaction broadcast.
+- `florestad --features bitassets` owns BitAssets seed persistence, deterministic addresses, watched script hashes, wallet UTXOs, proof-verified sync, local signing, and native transaction construction.
+- QUIC lite-wallet subscription is the primary live update path; `get_lite_wallet_update` JSON-RPC polling remains the recovery/debug mirror.
+- Existing Electrum `blockchain.asset.*` methods remain available for compatibility, but they are no longer the main wallet architecture.
 
-Mainchain Utreexo changes are out of scope for this path. The relevant proof and archive material belongs to the bitassets sidechain. Floresta uses mainchain connectivity for Drivechain context and uses sidechain RPC/proof metadata for asset provenance.
+The native wallet file is stored separately from the Electrum cache as `bitassets-wallet.json` under the Floresta data directory. It persists owned addresses, script hashes, wallet UTXOs, last sidechain tip, and proof refs.
 
-## Proof Status
+## Public Floresta Surface
 
-Electrum asset UTXOs and history entries include:
-
-- `proof`: either `sidechain_rpc_proof` or `trusted_snapshot`
-- `block_hash`: sidechain block containing the asset transaction, when known
-- `sidechain_height`: sidechain block height, when proof RPC supplied it
-- `bmm_inclusions`: mainchain blocks committing to the sidechain block
-- `best_main_verification`: best mainchain verification hash reported by the sidechain node
-
-`sidechain_rpc_proof` means Floresta received sidechain archive context from `get_transaction_proof`. It does not mean Floresta has independently verified the full sidechain state machine. Full verifier-backed persistence is a later design step.
-
-## Electrum Wallet Surface
-
-When built with `--features bitassets` and started with `--enable-bitassets`, Floresta exposes:
-
-- `blockchain.asset.list`
-- `blockchain.asset.get_balance`
-- `blockchain.asset.listunspent`
-- `blockchain.asset.get_history`
-
-When `--bitassets-rpc-url` is also configured, Floresta exposes delegated wallet actions:
-
-- `blockchain.asset.get_new_address`
-- `blockchain.asset.reserve`
-- `blockchain.asset.register`
-- `blockchain.asset.transfer`
-
-The write methods intentionally use the plain-bitassets sidechain wallet/RPC for construction, signing, and broadcast in this v1 scope. Floresta then observes the resulting sidechain state through its refresh loop and persists the compact proof-backed view.
-
-## Canonical Local Validation
-
-From the Mac local signet:
+Start `florestad` with:
 
 ```bash
-cd ~/drivechain-wallet-dev/local-dev
-BITASSETS_IMAGE=local/plain-bitassets:codex-proof \
-  ./scripts/pr-ready-bitassets-smoke.sh
+--enable-bitassets
+--bitassets-rpc-url http://127.0.0.1:6004
+--enable-bitassets-native-wallet
+--bitassets-lite-wallet-quic-url 127.0.0.1:6104
+--bitassets-wallet-create
 ```
 
-The smoke:
+The native JSON-RPC methods are:
 
-- checks available disk before doing heavy work
-- optionally rebuilds patched bitassets with `REBUILD_BITASSETS=1`
-- optionally resets the stack with `RESET_STACK=1` or `RESET_STACK=1 RESET_VOLUMES=1`
-- creates/loads the local mainchain miner wallet after a clean reset
-- activates sidechain ID 4 from `local-dev/activate-plain-bitassets-id4.json` when needed
-- funds the enforcer wallet through dynamic wallet-owned coinbase recipients
-- mines bitassets sidechain blocks through BMM
-- creates/registers/transfers a fresh asset
-- verifies `get-transaction-proof` for the transfer and `null` for an unknown txid
-- starts Floresta in live sidechain RPC mode
-- verifies asset Electrum balance/UTXOs/history with `sidechain_rpc_proof`
-- initiates an additional asset transfer through Floresta Electrum and verifies the refreshed wallet state
-- restarts Floresta without sidechain RPC and verifies persisted-cache service
+- `bitassets_getnewaddress`
+- `bitassets_walletinfo`
+- `bitassets_sync`
+- `bitassets_listutxos`
+- `bitassets_getbalance`
+- `bitassets_transfer`
+- `bitassets_reserve`
+- `bitassets_register`
+- `bitassets_amm_mint`
+- `bitassets_amm_swap`
+- `bitassets_amm_burn`
+- `bitassets_dutch_auction_create`
+- `bitassets_dutch_auction_bid`
+- `bitassets_dutch_auction_collect`
 
-Latest Mac validation:
+Constructor V1 accepts only `fee_sats = 0`; nonzero fees fail explicitly until Bitcoin UTXO fee selection is added.
+
+## Canonical Live Smoke
+
+The local smoke harness lives in `local-dev`, which is not a git repository here, so it should be referenced from PR notes rather than committed in this branch:
 
 ```bash
-RESET_STACK=1 RESET_VOLUMES=1 REBUILD_BITASSETS=0 MIN_FREE_GB=6 \
+cd /Users/lukekensik/drivechain-wallet-dev/local-dev
+PREPARE_STACK=0 \
 BITASSETS_IMAGE=local/plain-bitassets:codex-proof \
-EXPECTED_PROOF_STATUS=sidechain_rpc_proof \
-./scripts/pr-ready-bitassets-smoke.sh
+BITASSETS_QUIC_URL=127.0.0.1:6104 \
+BMM_MINE_ATTEMPTS=8 \
+BMM_REQUEST_SETTLE_SECS=40 \
+BITASSETS_MINE_TIMEOUT=120 \
+./scripts/floresta-bitassets-native-wallet-smoke.sh
 ```
 
-This passed from fresh compose volumes, activated sidechain ID 4, mined sidechain blocks through BMM, created/transferred a fresh asset, and verified both live RPC refresh and persisted-cache service. The canonical Floresta proof smoke also passed again after restarting mainchain, enforcer, and bitassets.
+The smoke proves all native wallet flows against Docker signet using QUIC-driven wallet updates and a restart persistence check:
 
-Latest wallet-action smoke:
+- native address creation
+- reserve/register for two assets
+- transfer
+- AMM mint/swap/burn
+- Dutch auction create/bid/collect
+- direct plain-bitassets transaction shape checks
+- persisted Floresta native wallet balances after restart
+
+The post-rebase validation run used stack preparation and longer Mac/QEMU wait windows:
 
 ```bash
+PREPARE_STACK=1 \
 BITASSETS_IMAGE=local/plain-bitassets:codex-proof \
-EXPECTED_PROOF_STATUS=sidechain_rpc_proof \
-./scripts/floresta-bitassets-electrum-smoke-test.sh
+BITASSETS_QUIC_URL=127.0.0.1:6104 \
+BMM_MINE_ATTEMPTS=12 \
+BMM_REQUEST_SETTLE_SECS=40 \
+BITASSETS_MINE_TIMEOUT=180 \
+WALLET_WAIT_SECS=240 \
+QUIC_WAIT_SECS=90 \
+./scripts/floresta-bitassets-native-wallet-smoke.sh
 ```
+
+Latest passing result:
 
 ```json
-{"mode":"rpc-refresh","asset_id":"9b2b37b359067deb1414d05a2ecc6ff94016e5a78d788af5285472db0a169fb0","balance":1000,"utxos":2,"history":2}
-{"mode":"rpc-refresh-wallet-transfer","asset_id":"9b2b37b359067deb1414d05a2ecc6ff94016e5a78d788af5285472db0a169fb0","balance":1000,"utxos":3,"history":3}
-{"mode":"persisted-cache","asset_id":"9b2b37b359067deb1414d05a2ecc6ff94016e5a78d788af5285472db0a169fb0","balance":1000,"utxos":3,"history":3}
+{
+  "mode": "native-wallet",
+  "asset_a": "7c7bc226ca3a53bc549cdb17c6b7002fc2c56c2086e48579598ff6a950ea482f",
+  "asset_b": "993f25719b66763ffcb36683b58cfa0edd42a9defa0ddb2d3bdd920f5d732c58",
+  "txids": {
+    "transfer": "2c50b836c2d49441112060a0a4bc6e6ba0d34a211fc1d61c5b4dcc3a45eeebe1",
+    "reserve_a": "0a057b47396b4541821ac896713bfe33c0e6cc3aced6166bdf2039a9b8b9082b",
+    "register_a": "ead5fc378486d91ab32e3e1dcb4e277c18f51db55cdb051ecd1ab642040b8221",
+    "reserve_b": "772a996b6f957bcaab427ccc853e54e569a6df33a5e62ad162056c09305fa885",
+    "register_b": "bb48994f50d81c0f5eb325b6227009958415ef08674dedc6a2cb34d4a32eeda9",
+    "amm_mint": "d9e8a63e925631a6e7a991fc7a643043e0dda4a17214f8d291f59636062e0bc7",
+    "amm_swap": "4dafb6dbb72638e480cece9d774526364c63f688d65c74eb2d3dce0e6a624cc4",
+    "amm_burn": "e3480003519a2141945fbf5c6242dc1150c61c6fdc0341b1c055f75ab9731d5f",
+    "dutch_auction_create": "9e294e6f60c705e7d7f197ca6c85792c2bedfd1436ad18362523fda086204e63",
+    "dutch_auction_bid": "2b34ef4cde69036fcbf22f93b9cc13e5c5d8ae610d60f6d0daac38438f18decc",
+    "dutch_auction_collect": "de5d48259183581b9d2ad4b25e928f21c162d134308527dfdc977106242d7c90"
+  },
+  "final_balances": {
+    "7c7bc226ca3a53bc549cdb17c6b7002fc2c56c2086e48579598ff6a950ea482f": 9090,
+    "993f25719b66763ffcb36683b58cfa0edd42a9defa0ddb2d3bdd920f5d732c58": 9106,
+    "control:7c7bc226ca3a53bc549cdb17c6b7002fc2c56c2086e48579598ff6a950ea482f": 1,
+    "control:993f25719b66763ffcb36683b58cfa0edd42a9defa0ddb2d3bdd920f5d732c58": 1,
+    "lp:7c7bc226ca3a53bc549cdb17c6b7002fc2c56c2086e48579598ff6a950ea482f:993f25719b66763ffcb36683b58cfa0edd42a9defa0ddb2d3bdd920f5d732c58": 900
+  }
+}
 ```
 
 ## Required Rust Checks
 
 ```bash
-cd ~/drivechain-wallet-dev/plain-bitassets
-cargo check -p plain_bitassets_app_rpc_api -p plain_bitassets_app_cli -p plain_bitassets_app
-cargo test -p plain_bitassets_app_rpc_api
-
-cd ~/drivechain-wallet-dev/floresta-bitassets
-cargo fmt --check
+cd /Users/lukekensik/drivechain-wallet-dev/floresta-bitassets
 cargo check -p florestad --features bitassets
-cargo test -p floresta-chain --features bitassets --lib -- --quiet
-cargo test -p floresta-electrum --features bitassets --lib -- --quiet
 cargo test -p floresta-node --features bitassets --lib -- --quiet
+cargo test -p floresta-electrum --features bitassets --lib -- --quiet
 ```
 
-## Known Limits
+The coordinating `plain-bitassets` PR should also report:
 
-- Apple Silicon runs the LayerTwo Docker images under amd64 emulation. Use native amd64 for final heavy validation if Docker or disk pressure becomes unstable.
-- The local enforcer may return a `broadcast deposit transaction failed` response after the BMM request has already been persisted. The patched local `plain-bitassets` miner treats that Mac/QEMU-specific response as non-fatal and confirms the BMM after the paired L1 block is mined.
-- The v1 Floresta cache stores compact proof refs, not full proof bundles.
-- Floresta exposes delegated wallet-write methods for address creation, reservation, registration, and transfer. Transaction construction/signing/broadcast remains delegated to plain-bitassets for this PR-ready increment rather than implementing an independent Floresta signer.
+```bash
+cd /Users/lukekensik/drivechain-wallet-dev/plain-bitassets
+cargo check -p plain_bitassets_app_rpc_api -p plain_bitassets_app_cli -p plain_bitassets_app
+cargo test -p plain_bitassets --lib -- --quiet
+cargo test -p plain_bitassets_app --bin plain_bitassets_app -- --quiet
+```
+
+## PR Draft Notes
+
+Suggested title:
+
+```text
+Add native BitAssets lite wallet with QUIC sync and constructors
+```
+
+Summary bullets:
+
+- Adds a Floresta-owned native BitAssets wallet with seed persistence, deterministic plain-bitassets-compatible address derivation, script-hash watches, proof-verified sync, and local signing.
+- Adds native JSON-RPC wallet methods for address creation, sync, balances, UTXOs, transfer, reserve/register, AMM, and Dutch auction flows.
+- Starts a QUIC subscription task when configured and falls back to explicit JSON-RPC sync for recovery/debug.
+- Preserves existing delegated Electrum asset methods for compatibility.
+
+Known limits for reviewers:
+
+- Sidechain Bitcoin fees are intentionally zero-fee only in this PR.
+- Compact filters and stronger privacy are out of scope for issue #28 closure.
+- QUIC uses newline-delimited JSON messages for this PR-ready protocol pass.
