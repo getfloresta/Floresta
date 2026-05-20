@@ -29,7 +29,6 @@ ureq = { version = "3.1", features = ["socks-proxy", "json", "rustls-no-provider
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
-floresta-compact-filters = { workspace = true }
 floresta-common = { workspace = true }
 floresta-mempool = { workspace = true }
 metrics = { workspace = true,  optional = true }

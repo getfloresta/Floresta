@@ -8,7 +8,6 @@ use std::io;
 
 use floresta_chain::BlockchainError;
 use floresta_common::impl_error_from;
-use floresta_compact_filters::IterableFilterStoreError;
 use tokio::sync::mpsc::error::SendError;
 
 use super::peer::PeerError;
@@ -64,9 +63,6 @@ pub enum WireError {
     /// Peer timed out some request
     PeerTimeout,
 
-    /// Compact block filters storage error
-    CompactBlockFiltersError(IterableFilterStoreError),
-
     /// Poisoned lock
     PoisonedLock,
 
@@ -118,9 +114,6 @@ impl Display for WireError {
                 write!(f, "We couldn't find a peer to send the request")
             }
             WireError::PeerTimeout => write!(f, "Peer timed out"),
-            WireError::CompactBlockFiltersError(err) => {
-                write!(f, "Compact block filters error: {err:?}")
-            }
             WireError::PoisonedLock => write!(f, "Poisoned lock"),
             WireError::InvalidAddress(err) => {
                 write!(f, "We couldn't parse the provided address due to: {err:?}")
@@ -140,11 +133,6 @@ impl Display for WireError {
 
 impl_error_from!(WireError, PeerError, PeerError);
 impl_error_from!(WireError, BlockchainError, Blockchain);
-impl_error_from!(
-    WireError,
-    IterableFilterStoreError,
-    CompactBlockFiltersError
-);
 impl_error_from!(WireError, AddrParseError, InvalidAddress);
 impl_error_from!(WireError, SendError<NodeRequest>, ChannelSend);
 impl_error_from!(WireError, serde_json::Error, Serde);

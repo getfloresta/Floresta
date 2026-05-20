@@ -70,7 +70,6 @@ async fn main() {
         config,
         chain.clone(),
         Arc::new(Mutex::new(Mempool::new(MEMPOOL_SIZE))),
-        None,
         Arc::new(tokio::sync::RwLock::new(false)),
         AddressMan::new(None, SUPPORTED_NETWORKS),
     )
