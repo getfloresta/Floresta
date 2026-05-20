@@ -154,6 +154,28 @@ pub const fn validate_hash_compile_time(s: &str) -> Result<(), &str> {
     Ok(())
 }
 
+#[macro_export]
+/// Run a task and log any errors that might occur.
+macro_rules! try_and_log {
+    ($what:expr) => {
+        if let Err(error) = $what {
+            tracing::error!("{}: {} - {:?}", line!(), file!(), error);
+        }
+    };
+}
+
+#[macro_export]
+/// Run a task and warn any errors that might occur.
+///
+/// `try_and_log!` variant for tasks that can fail safely.
+macro_rules! try_and_warn {
+    ($what:expr) => {
+        if let Err(warning) = $what {
+            tracing::warn!("{}", warning);
+        }
+    };
+}
+
 #[cfg(test)]
 mod test {
     use super::validate_hash_compile_time as validate_hash;
