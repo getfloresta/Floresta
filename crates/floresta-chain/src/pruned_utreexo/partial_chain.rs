@@ -40,6 +40,7 @@ use super::error::BlockchainError;
 use super::BlockchainInterface;
 use super::UpdatableChainstate;
 use crate::pruned_utreexo::utxo_data::UtxoData;
+use crate::pruned_utreexo::IBDSate;
 
 #[doc(hidden)]
 #[derive(Debug)]
@@ -284,8 +285,9 @@ impl UpdatableChainstate for PartialChainState {
         Ok(())
     }
 
-    fn toggle_ibd(&self, _is_ibd: bool) {
-        // no-op: we know if we finished by looking at our current and end height
+    fn update_ibd(&self, _ibd_state: super::IBDSate) {
+        // no-op: we are only used for IBD, so we are always in IBD, and we don't need to update
+        // anything
     }
 
     // these are unimplemented, and will panic if called
@@ -326,6 +328,10 @@ impl UpdatableChainstate for PartialChainState {
 
 impl BlockchainInterface for PartialChainState {
     type Error = BlockchainError;
+
+    fn ibd_state(&self) -> super::IBDSate {
+        IBDSate::DownlodingBlocks
+    }
 
     fn get_params(&self) -> bitcoin::params::Params {
         self.inner().chain_params().params

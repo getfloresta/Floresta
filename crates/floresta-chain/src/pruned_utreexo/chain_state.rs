@@ -65,6 +65,7 @@ use super::UpdatableChainstate;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
+use crate::pruned_utreexo::IBDSate;
 use crate::read_lock;
 use crate::write_lock;
 use crate::BestChain;
@@ -133,7 +134,7 @@ pub struct ChainStateInner<PersistedState: ChainStore> {
     /// Fee estimation for 1, 10 and 20 blocks
     fee_estimation: (f64, f64, f64),
     /// Are we in Initial Block Download?
-    ibd: bool,
+    ibd: IBDSate,
     /// Parameters for the chain and functions that verify the chain.
     consensus: Consensus,
     /// Assume valid is a Core-specific config that tells the node to not validate signatures
@@ -603,7 +604,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
                 },
                 subscribers: Vec::new(),
                 fee_estimation: (1_f64, 1_f64, 1_f64),
-                ibd: true,
+                ibd: IBDSate::HeadersSync,
                 consensus: Consensus { parameters },
                 assume_valid,
             }),
@@ -765,7 +766,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             chainstore,
             fee_estimation: (1_f64, 1_f64, 1_f64),
             subscribers: Vec::new(),
-            ibd: true,
+            ibd: IBDSate::HeadersSync,
             consensus: Consensus {
                 parameters: network.into(),
             },
@@ -1127,7 +1128,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
     }
 
     fn is_in_ibd(&self) -> bool {
-        self.inner.read().ibd
+        self.inner.read().ibd != IBDSate::Done
     }
 
     fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
@@ -1227,6 +1228,11 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
 
         Ok(height + chain_params.coinbase_maturity <= current_height)
     }
+
+    fn ibd_state(&self) -> super::IBDSate {
+        let inner = read_lock!(self);
+        inner.ibd
+    }
 }
 
 impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedState> {
@@ -1294,9 +1300,9 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         Ok(())
     }
 
-    fn toggle_ibd(&self, is_ibd: bool) {
+    fn update_ibd(&self, ibd_state: IBDSate) {
         let mut inner = write_lock!(self);
-        inner.ibd = is_ibd;
+        inner.ibd = ibd_state;
     }
 
     fn connect_block(
@@ -1485,7 +1491,7 @@ impl<T: ChainStore> TryFrom<ChainStateBuilder<T>> for ChainState<T> {
             chainstore: builder.chainstore()?,
             best_block: builder.best_block()?,
             assume_valid: builder.assume_valid(),
-            ibd: builder.ibd(),
+            ibd: IBDSate::HeadersSync,
             subscribers: Vec::new(),
             fee_estimation: (1_f64, 1_f64, 1_f64),
             consensus: Consensus {

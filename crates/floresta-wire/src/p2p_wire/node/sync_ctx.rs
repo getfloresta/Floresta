@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::proof_util;
+use floresta_chain::pruned_utreexo::IBDSate;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::service_flags;
 use rand::seq::IteratorRandom;
@@ -242,7 +243,7 @@ where
 
         if validation_index == best_block {
             info!("IBD is finished, switching to normal operation mode");
-            self.chain.toggle_ibd(false);
+            self.chain.update_ibd(IBDSate::Done);
             return LoopControl::Break;
         }
 

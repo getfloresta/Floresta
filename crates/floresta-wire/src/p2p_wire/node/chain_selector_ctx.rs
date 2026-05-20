@@ -56,6 +56,7 @@ use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use floresta_chain::proof_util;
+use floresta_chain::pruned_utreexo::IBDSate;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
 use floresta_common::service_flags;
@@ -729,7 +730,7 @@ where
 
                 self.context.state = ChainSelectorState::Done;
                 self.chain.mark_chain_as_assumed(acc, tips[0]).unwrap();
-                self.chain.toggle_ibd(false);
+                self.chain.update_ibd(IBDSate::Done);
             }
             // if we have more than one tip, we need to check if our best chain has an invalid block
             tips.remove(0); // no need to check our best one
@@ -842,7 +843,7 @@ where
 
         // Checks if we need to open a new connection
         periodic_job!(
-            self.last_connection => self.maybe_open_connection(ServiceFlags::NONE),
+            self.last_connection => self.maybe_open_connection(ServiceFlags::COMPACT_FILTERS),
             ChainSelector::TRY_NEW_CONNECTION,
             no_log,
         );
@@ -882,6 +883,7 @@ where
         // We downloaded all headers in the most-pow chain, and all our peers agree
         // this is the most-pow chain, we're done!
         if self.context.state == ChainSelectorState::Done {
+            self.chain.update_ibd(IBDSate::DownlodingBlocks);
             try_and_log!(self.chain.flush());
             return Ok(LoopControl::Break);
         }

@@ -41,6 +41,13 @@ use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::BlockConsumer;
 use crate::BlockchainError;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum IBDSate {
+    HeadersSync,
+    DownlodingBlocks,
+    Done,
+}
+
 /// This trait is the main interface between our blockchain backend and other services.
 /// It'll be useful for transitioning from rpc to a p2p based node
 pub trait BlockchainInterface {
@@ -128,6 +135,8 @@ pub trait BlockchainInterface {
 
     /// Returns the amount of [`Work`] associated with a given chain tip
     fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error>;
+
+    fn ibd_state(&self) -> IBDSate;
 }
 
 /// [UpdatableChainstate] is a contract that a is expected from a chainstate
@@ -158,8 +167,8 @@ pub trait UpdatableChainstate {
     fn handle_transaction(&self) -> Result<(), BlockchainError>;
     /// Persists our data. Should be invoked periodically.
     fn flush(&self) -> Result<(), BlockchainError>;
-    /// Toggle IBD on/off
-    fn toggle_ibd(&self, is_ibd: bool);
+    /// Update IBD state
+    fn update_ibd(&self, ibd_state: IBDSate);
     /// Tells this blockchain to consider this block invalid, and not build on top of it
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError>;
     /// Marks one block as being fully validated, this overrides a block that was explicitly
@@ -209,8 +218,8 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
         T::get_acc(self)
     }
 
-    fn toggle_ibd(&self, is_ibd: bool) {
-        T::toggle_ibd(self, is_ibd)
+    fn update_ibd(&self, ibd_state: IBDSate) {
+        T::update_ibd(self, ibd_state)
     }
 
     fn connect_block(
@@ -360,6 +369,10 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
         T::get_fork_point(self, block)
+    }
+
+    fn ibd_state(&self) -> IBDSate {
+        T::ibd_state(self)
     }
 }
 
