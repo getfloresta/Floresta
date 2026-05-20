@@ -41,6 +41,30 @@ use crate::BlockchainError;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+/// Our current IBD state, meaning which startup phase are we, if any.
+///
+/// During startup, our node will go through a bootstrap process called Initial Block Download,
+/// where it will catch up with the network. This enum is a simple state machine that represents
+/// which state we are currently in.
+pub enum IBDState {
+    #[default]
+    /// Downloading headers to stablish which is the most-work chain.
+    ///
+    /// During this phase, we only download and check headers. We will finish when we are convinced
+    /// this is the most work chain available.
+    HeadersSync,
+
+    /// Downloading and checking blocks.
+    ///
+    /// After we find the most work chain, we start downloading blocks and connecting them to our
+    /// chain. This step usually takes the longest time.
+    DownloadingBlocks,
+
+    /// We've finished IBD and are now listening for new blocks as they are found.
+    Done,
+}
+
 /// This trait is the main interface between our blockchain backend and other services.
 /// It'll be useful for transitioning from rpc to a p2p based node
 pub trait BlockchainInterface {
@@ -128,6 +152,9 @@ pub trait BlockchainInterface {
 
     /// Returns the amount of [`Work`] associated with a given chain tip
     fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error>;
+
+    /// Returns the current state of our chain.
+    fn ibd_state(&self) -> IBDState;
 }
 
 /// [UpdatableChainstate] is a contract that a is expected from a chainstate
@@ -158,8 +185,8 @@ pub trait UpdatableChainstate {
     fn handle_transaction(&self) -> Result<(), BlockchainError>;
     /// Persists our data. Should be invoked periodically.
     fn flush(&self) -> Result<(), BlockchainError>;
-    /// Toggle IBD on/off
-    fn toggle_ibd(&self, is_ibd: bool);
+    /// Update IBD state
+    fn update_ibd(&self, ibd_state: IBDState);
     /// Tells this blockchain to consider this block invalid, and not build on top of it
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError>;
     /// Marks one block as being fully validated, this overrides a block that was explicitly
@@ -209,8 +236,8 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
         T::get_acc(self)
     }
 
-    fn toggle_ibd(&self, is_ibd: bool) {
-        T::toggle_ibd(self, is_ibd)
+    fn update_ibd(&self, ibd_state: IBDState) {
+        T::update_ibd(self, ibd_state)
     }
 
     fn connect_block(
@@ -360,6 +387,10 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
         T::get_fork_point(self, block)
+    }
+
+    fn ibd_state(&self) -> IBDState {
+        T::ibd_state(self)
     }
 }
 
