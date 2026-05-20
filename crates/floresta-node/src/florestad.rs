@@ -13,14 +13,18 @@ use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(feature = "json-rpc")]
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use bitcoin::Address;
 pub use bitcoin::Network;
 use bitcoin::ScriptBuf;
 #[cfg(feature = "zmq-server")]
 use floresta_chain::pruned_utreexo::BlockchainInterface;
+use floresta_chain::pruned_utreexo::IBDSate;
 pub use floresta_chain::AssumeUtreexoValue;
 pub use floresta_chain::AssumeValidArg;
+use floresta_chain::BlockchainError;
+use floresta_chain::BlockchainInterface;
 use floresta_chain::ChainParams;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore as ChainStore;
@@ -45,6 +49,7 @@ use rcgen::KeyPair;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio::task;
+use tokio::time::sleep;
 #[cfg(feature = "metrics")]
 use tokio::time::Duration;
 #[cfg(feature = "metrics")]
@@ -463,6 +468,27 @@ impl Florestad {
                 core::panic!("We should be the first one setting this");
             }
         }
+
+        // Filter handler configuration
+
+        let flat_filter_store_path = format!("{}/cfilter_headers.dat", self.config.data_dir.clone());
+        let flat_filter_store = FlatFilterStore::new(Path::new(&flat_filter_store_path)).unwrap();
+        let mut fman = FiltersMan::new(
+            flat_filter_store,
+            chain_provider.get_handle(),
+            blockchain_state.clone(),
+        );
+        let _blockchain_state = blockchain_state.clone();
+
+        task::spawn(async move {
+            while _blockchain_state.ibd_state() == IBDSate::HeadersSync {
+                sleep(Duration::from_secs(1)).await;
+            }
+
+            println!("Starting filter synchronization");
+
+            fman.main_loop().await;
+        });
 
         // Electrum Server configuration.
 
