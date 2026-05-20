@@ -108,6 +108,11 @@ pub enum NodeRequest {
     /// Proof hashes are the hashes needed to reconstruct the proof, while
     /// leaf data are the actual data of the leaves (i.e., the txouts).
     GetBlockProof((BlockHash, Bitmap, Bitmap)),
+
+    GetCFHeaders {
+        start_height: u32,
+        stop_hash: BlockHash,
+    },
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]

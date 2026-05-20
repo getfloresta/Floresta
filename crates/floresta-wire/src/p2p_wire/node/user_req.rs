@@ -177,6 +177,24 @@ where
                 let _ = responder.send(NodeResponse::TransactionBroadcastResult(Ok(txid)));
                 return;
             }
+
+            UserRequest::GetCFilterHeaders {
+                start_height,
+                stop_hash,
+            } => {
+                let req = NodeRequest::GetCFHeaders {
+                    start_height,
+                    stop_hash,
+                };
+
+                let peer = self.send_to_fast_peer(req, ServiceFlags::COMPACT_FILTERS);
+                if let Ok(peer) = peer {
+                    self.inflight_user_requests
+                        .insert(user_req, (peer, Instant::now(), responder));
+                }
+
+                return;
+            }
         };
 
         let peer = self.send_to_fast_peer(req, ServiceFlags::NONE);

@@ -7,6 +7,7 @@ use core::net::IpAddr;
 use core::net::SocketAddr;
 use std::time::Instant;
 
+use bitcoin::p2p::message_filter::CFHeaders;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
@@ -96,6 +97,13 @@ pub enum UserRequest {
 
     /// Adds a transaction to mempool and advertises it
     SendTransaction(Transaction),
+
+    /// Request compact filter headers from a peer, starting from a given height, until a stop hash
+    /// is reached.
+    GetCFilterHeaders {
+        start_height: u32,
+        stop_hash: BlockHash,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,6 +165,9 @@ pub enum NodeResponse {
 
     /// Transaction broadcast
     TransactionBroadcastResult(Result<Txid, MempoolError>),
+
+    /// Compact Filters headers
+    CFilterHeaders(CFHeaders),
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +337,21 @@ impl NodeInterface {
         let val = self.send_request(UserRequest::Ping).await?;
 
         extract_variant!(Ping, val)
+    }
+
+    pub async fn get_cfilters_headers(
+        &self,
+        start_height: u32,
+        stop_hash: BlockHash,
+    ) -> Result<CFHeaders, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::GetCFilterHeaders {
+                start_height,
+                stop_hash,
+            })
+            .await?;
+
+        extract_variant!(CFilterHeaders, val)
     }
 }
 

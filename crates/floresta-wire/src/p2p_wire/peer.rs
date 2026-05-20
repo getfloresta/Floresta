@@ -18,6 +18,8 @@ use bitcoin::hashes::Hash;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message::NetworkMessage;
 use bitcoin::p2p::message_blockdata::Inventory;
+use bitcoin::p2p::message_filter::CFHeaders;
+use bitcoin::p2p::message_filter::GetCFHeaders;
 use bitcoin::p2p::message_network::VersionMessage;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
@@ -430,6 +432,20 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 })
                 .await?;
             }
+
+            NodeRequest::GetCFHeaders {
+                start_height,
+                stop_hash,
+            } => {
+                let get_cfheaders = GetCFHeaders {
+                    filter_type: 0,
+                    start_height,
+                    stop_hash,
+                };
+
+                self.write(NetworkMessage::GetCFHeaders(get_cfheaders))
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -570,6 +586,20 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     }
                     _ => {}
                 },
+
+                NetworkMessage::CFHeaders(cfheaders) => {
+                    if cfheaders.filter_hashes.len() > 2_000 {
+                        return Err(PeerError::MessageTooBig);
+                    }
+
+                    if cfheaders.filter_type != 0 {
+                        warn!("Unknown filter header type {}", cfheaders.filter_type);
+                        return Err(PeerError::UnexpectedMessage);
+                    }
+
+                    self.send_to_node(PeerMessages::CFHeaders(cfheaders), time);
+                }
+
                 // Explicitly ignore these messages, if something changes in the future
                 // this would cause a compile error.
                 NetworkMessage::Verack
@@ -579,7 +609,6 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 | NetworkMessage::Alert(_)
                 | NetworkMessage::BlockTxn(_)
                 | NetworkMessage::CFCheckpt(_)
-                | NetworkMessage::CFHeaders(_)
                 | NetworkMessage::CmpctBlock(_)
                 | NetworkMessage::FilterAdd(_)
                 | NetworkMessage::FilterClear
@@ -859,10 +888,13 @@ pub enum PeerMessages {
     UtreexoState(Vec<u8>),
 
     /// Remote peer sent us a compact block filter
+    #[allow(dead_code)]
     BlockFilter((BlockHash, BlockFilter)),
 
     /// Remote peer sent us a Utreexo proof,
     UtreexoProof(UtreexoProof),
+
+    CFHeaders(CFHeaders),
 }
 
 #[cfg(test)]
