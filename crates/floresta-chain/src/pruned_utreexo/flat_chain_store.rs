@@ -77,6 +77,7 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use core::mem::size_of;
 use core::num::NonZeroUsize;
+use std::fs;
 use std::fs::DirBuilder;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -621,6 +622,9 @@ pub struct FlatChainStore {
     /// The file containing the accumulators for each blocks
     accumulator_file: File,
 
+    /// Backing-file directory; needed by `size_on_disk` since `MmapMut` drops the file handle.
+    datadir: PathBuf,
+
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
 }
@@ -710,6 +714,7 @@ impl FlatChainStore {
             metadata,
             block_index: BlockIndex::new(index_map, index_size),
             fork_headers,
+            datadir: datadir.to_path_buf(),
             cache: LruCache::new(cache_size).into(),
         })
     }
@@ -781,6 +786,7 @@ impl FlatChainStore {
             metadata: metadata_file,
             block_index: BlockIndex::new(index_map, metadata.index_capacity),
             fork_headers,
+            datadir: datadir.clone(),
             cache: LruCache::new(cache_size).into(),
         })
     }
@@ -1132,13 +1138,38 @@ impl ChainStore for FlatChainStore {
     }
 
     fn size_on_disk(&self) -> Result<u64, Self::Error> {
-        let headers_size = self.headers.len() as u64;
-        let metadata_size = self.metadata.len() as u64;
-        let block_index_size = self.block_index.index_map.len() as u64;
-        let fork_headers_size = self.fork_headers.len() as u64;
-        let accumulator_size = self.accumulator_file.metadata()?.len();
+        // Sum `st_blocks * 512` per file so we report actual disk usage,
+        // not preallocated mmap capacity. See stat(2). Non-Unix falls back
+        // to apparent length (no portable `st_blocks` equivalent in std).
+        const FILES: &[&str] = &[
+            "headers.bin",
+            "metadata.bin",
+            "blocks_index.bin",
+            "fork_headers.bin",
+            "accumulators.bin",
+        ];
 
-        Ok(headers_size + metadata_size + block_index_size + fork_headers_size + accumulator_size)
+        let mut total: u64 = 0;
+        for name in FILES {
+            let path = self.datadir.join(name);
+            match fs::metadata(&path) {
+                Ok(meta) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        total += meta.blocks() * 512;
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        total += meta.len();
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(total)
     }
 
     fn save_roots_for_block(&mut self, roots: Vec<u8>, height: u32) -> Result<(), Self::Error> {
@@ -1721,59 +1752,51 @@ mod tests {
 
     #[test]
     fn test_size_on_disk() {
-        // Baseline matches the formula in `size_on_disk`.
-        let mut store = make_sized_store(32_768, 32_768, 16_384);
-        let baseline = (32_768 * size_of::<u32>()
-            + 32_768 * size_of::<HashedDiskHeader>()
-            + 16_384 * size_of::<HashedDiskHeader>()
+        // Reports actual disk usage, not mmap capacity. Exact bytes depend
+        // on filesystem block size and sparse handling, so we assert invariants.
+
+        // Synthetic store sizes — chosen arbitrarily, large enough that the
+        // apparent mmap capacity (~6 MiB) sits well above an empty store's
+        // actual on-disk footprint (~4 KiB on ext4) so the sparse-vs-apparent
+        // invariants below are meaningful.
+        const BLOCK_INDEX_SIZE: usize = 32_768;
+        const HEADERS_FILE_SIZE: usize = 32_768;
+        const FORK_FILE_SIZE: usize = 16_384;
+
+        let mut store = make_sized_store(BLOCK_INDEX_SIZE, HEADERS_FILE_SIZE, FORK_FILE_SIZE);
+        let apparent_total = (BLOCK_INDEX_SIZE * size_of::<u32>()
+            + HEADERS_FILE_SIZE * size_of::<HashedDiskHeader>()
+            + FORK_FILE_SIZE * size_of::<HashedDiskHeader>()
             + size_of::<Metadata>()) as u64;
-        assert_eq!(store.size_on_disk().unwrap(), baseline);
 
-        // Vary each preallocated field; check the per-field delta so any
-        // dropped or miscounted summand in `size_on_disk` fails here.
-        let bigger_index = make_sized_store(65_536, 32_768, 16_384);
-        assert_eq!(
-            bigger_index.size_on_disk().unwrap() - baseline,
-            (32_768 * size_of::<u32>()) as u64,
+        let initial = store.size_on_disk().unwrap();
+
+        // Actual usage can never exceed apparent capacity.
+        assert!(
+            initial <= apparent_total,
+            "actual {initial} should not exceed apparent capacity {apparent_total}",
         );
 
-        let bigger_headers = make_sized_store(32_768, 65_536, 16_384);
-        assert_eq!(
-            bigger_headers.size_on_disk().unwrap() - baseline,
-            (32_768 * size_of::<HashedDiskHeader>()) as u64,
+        // On sparse-aware filesystems an empty store stays strictly below capacity.
+        #[cfg(unix)]
+        assert!(
+            initial < apparent_total,
+            "sparse-aware filesystem expected; actual {initial} is at or above apparent {apparent_total}",
         );
 
-        let bigger_fork = make_sized_store(32_768, 32_768, 32_768);
-        assert_eq!(
-            bigger_fork.size_on_disk().unwrap() - baseline,
-            (16_384 * size_of::<HashedDiskHeader>()) as u64,
-        );
-
-        // Accumulator file is the only dynamic component; grows by payload.
         let genesis = genesis_block(Network::Regtest);
         store
             .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
             .unwrap();
         store.update_block_index(0, genesis.block_hash()).unwrap();
+        let acc = vec![0xab; 1024];
+        store.save_roots_for_block(acc, 0).unwrap();
+        store.flush().unwrap();
 
-        let acc = vec![0xab; 64];
-        store.save_roots_for_block(acc.clone(), 0).unwrap();
-        assert_eq!(store.size_on_disk().unwrap(), baseline + acc.len() as u64);
-
-        // Cumulative append at height 1.
-        let mut next = genesis.header;
-        next.prev_blockhash = genesis.block_hash();
-        store
-            .save_header(&DiskBlockHeader::FullyValid(next, 1))
-            .unwrap();
-        store.update_block_index(1, next.block_hash()).unwrap();
-
-        let acc2 = vec![0xcd; 32];
-        let pre_second = store.size_on_disk().unwrap();
-        store.save_roots_for_block(acc2.clone(), 1).unwrap();
-        assert_eq!(
-            store.size_on_disk().unwrap(),
-            pre_second + acc2.len() as u64,
+        let after_write = store.size_on_disk().unwrap();
+        assert!(
+            after_write > initial,
+            "size {after_write} should grow after writes + flush (was {initial})",
         );
     }
 
