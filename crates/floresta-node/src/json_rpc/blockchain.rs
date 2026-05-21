@@ -24,6 +24,7 @@ use miniscript::descriptor::checksum;
 use serde_json::json;
 use serde_json::Value;
 use tracing::debug;
+use tracing::error;
 
 use super::res::GetBlockHeaderRes;
 use super::res::GetBlockchainInfoRes;
@@ -53,7 +54,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub fn get_block_by_txid(&self, txid: &Txid) -> Result<Block, JsonRpcError> {
         let height = self
             .wallet
-            .get_height(txid)
+            .get_height(txid)?
             .ok_or(JsonRpcError::TxNotFound)?;
         let blockhash = self.chain.get_block_hash(height).unwrap();
         self.chain
@@ -524,12 +525,14 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         _include_mempool: bool,
     ) -> Result<Option<GetTxOut>, JsonRpcError> {
         let res = match (
-            self.wallet.get_transaction(&txid),
-            self.wallet.get_height(&txid),
-            self.wallet.get_utxo(&OutPoint {
-                txid,
-                vout: outpoint,
-            }),
+            self.wallet.get_transaction(&txid)?,
+            self.wallet.get_height(&txid)?,
+            self.wallet
+                .get_utxo(&OutPoint {
+                    txid,
+                    vout: outpoint,
+                })
+                .ok(),
         ) {
             (Some(cached_tx), Some(height), Some(txout)) => {
                 let is_coinbase = cached_tx.tx.is_coinbase();
@@ -647,8 +650,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         script: ScriptBuf,
         height: u32,
     ) -> Result<Value, JsonRpcError> {
-        if let Some(txout) = self.wallet.get_utxo(&OutPoint { txid, vout }) {
-            return Ok(serde_json::to_value(txout).unwrap());
+        match self.wallet.get_utxo(&OutPoint { txid, vout }) {
+            Ok(txout) => return Ok(serde_json::to_value(txout).unwrap()),
+            Err(e) => {
+                error!("Could not get utxo from wallet: {e}");
+            }
         }
 
         // if we are on IBD, we don't have any filters to find this txout.
@@ -661,7 +667,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::NoBlockFilters);
         };
 
-        self.wallet.cache_address(script.clone());
+        if let Err(e) = self.wallet.cache_address(script.clone()) {
+            error!("Could not cache address: {e}");
+        }
         let filter_key = script.to_bytes();
         let candidates = cfilters
             .match_any(
@@ -690,7 +698,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 return Err(JsonRpcError::BlockNotFound);
             };
 
-            self.wallet.block_process(&candidate, height);
+            if let Err(e) = self.wallet.block_process(&candidate, height) {
+                error!("Error processing block at height {height}: {e}");
+            }
         }
 
         let val = match self.get_tx_out(txid, vout, false)? {
