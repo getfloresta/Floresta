@@ -1567,6 +1567,7 @@ fn parse_utxo(
         .cloned()
         .collect::<Vec<_>>();
     let utreexo_leaf_hash = if confirmed {
+        validate_confirmed_proof_refs(&outpoint, &refs)?;
         let view = utreexo_view
             .ok_or_else(|| Error::Rpc("confirmed UTXO missing Utreexo view".to_string()))?;
         let proof = view
@@ -1610,6 +1611,24 @@ fn parse_utxo(
         lp_asset1: parsed_content.lp_asset1,
         auction_id: parsed_content.auction_id,
     }))
+}
+
+fn validate_confirmed_proof_refs(
+    outpoint: &WalletOutPoint,
+    proof_refs: &[WalletProofRef],
+) -> Result<(), Error> {
+    if proof_refs.is_empty() {
+        return Err(Error::UtreexoProof(format_outpoint(outpoint)));
+    }
+    for proof_ref in proof_refs {
+        if proof_ref.sidechain_block_height.is_none()
+            || proof_ref.bmm_inclusions.is_empty()
+            || proof_ref.best_main_verification.is_none()
+        {
+            return Err(Error::UtreexoProof(format_outpoint(outpoint)));
+        }
+    }
+    Ok(())
 }
 
 fn parse_proof_refs(value: Option<&Value>) -> Result<Vec<WalletProofRef>, Error> {
@@ -1844,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn applies_lite_wallet_update_and_persists() {
+    fn native_wallet_smoke_persists_proof_backed_utxos() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wallet.json");
         let mut wallet = NativeBitAssetsWallet::open(
@@ -1865,8 +1884,8 @@ mod tests {
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             ),
             sidechain_block_height: Some(7),
-            bmm_inclusions: Vec::new(),
-            best_main_verification: None,
+            bmm_inclusions: vec!["bmm-inclusion-1".to_string()],
+            best_main_verification: Some("verified".to_string()),
         };
         let leaf_hash = lite_wallet_leaf_hash(
             &outpoint,
@@ -1902,8 +1921,8 @@ mod tests {
                 "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "sidechain_block_height": 7,
-                "bmm_inclusions": [],
-                "best_main_verification": null
+                "bmm_inclusions": ["bmm-inclusion-1"],
+                "best_main_verification": "verified"
             }],
             "utreexo_proofs": [{
                 "outpoint": {"Regular": {
@@ -1925,6 +1944,29 @@ mod tests {
         assert_eq!(reloaded.stored.confirmed_utxos.len(), 1);
         assert_eq!(reloaded.balances().values().copied().sum::<u64>(), 42);
         assert_eq!(reloaded.stored.last_tip_height, Some(7));
+
+        let persisted_utxo = &reloaded.stored.confirmed_utxos[0];
+        assert_eq!(persisted_utxo.utreexo_leaf_hash.as_deref(), Some(leaf_hash.as_str()));
+        assert_eq!(persisted_utxo.proof_refs.len(), 1);
+        assert_eq!(persisted_utxo.proof_refs[0].sidechain_block_height, Some(7));
+        assert_eq!(
+            persisted_utxo.proof_refs[0].bmm_inclusions,
+            vec!["bmm-inclusion-1".to_string()]
+        );
+        assert_eq!(
+            persisted_utxo.proof_refs[0].best_main_verification.as_deref(),
+            Some("verified")
+        );
+
+        let listed = reloaded.list_utxos();
+        let confirmed = listed["confirmed"].as_array().unwrap();
+        assert_eq!(confirmed[0]["utreexo_leaf_hash"], leaf_hash);
+        assert_eq!(confirmed[0]["proof_refs"][0]["sidechain_block_height"], 7);
+        assert_eq!(confirmed[0]["proof_refs"][0]["bmm_inclusions"][0], "bmm-inclusion-1");
+        assert_eq!(
+            confirmed[0]["proof_refs"][0]["best_main_verification"],
+            "verified"
+        );
     }
 
     #[test]
@@ -2220,8 +2262,8 @@ mod tests {
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             ),
             sidechain_block_height: Some(7),
-            bmm_inclusions: Vec::new(),
-            best_main_verification: None,
+            bmm_inclusions: vec!["bmm-inclusion-1".to_string()],
+            best_main_verification: Some("verified".to_string()),
         };
         let commitment = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
         let leaf_hash = lite_wallet_leaf_hash(
@@ -2258,8 +2300,8 @@ mod tests {
                 "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "sidechain_block_height": 7,
-                "bmm_inclusions": [],
-                "best_main_verification": null
+                "bmm_inclusions": ["bmm-inclusion-1"],
+                "best_main_verification": "verified"
             }],
             "utreexo_proofs": [{
                 "outpoint": {"Regular": {
