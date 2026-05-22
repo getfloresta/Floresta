@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitcoin::base58;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
@@ -435,6 +435,8 @@ pub struct NativeBitAssetsWallet {
     quic_status: QuicStatus,
     subscription_generation: u64,
 }
+
+const BITASSETS_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl NativeBitAssetsWallet {
     pub fn open(
@@ -1782,7 +1784,13 @@ fn bitassets_rpc_call_with_params(
         "method": method,
         "params": params
     });
-    let mut response = ureq::post(rpc_url)
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(BITASSETS_RPC_TIMEOUT))
+            .build(),
+    );
+    let mut response = agent
+        .post(rpc_url)
         .header("content-type", "application/json")
         .send_json(body)
         .map_err(|err| Error::Rpc(format!("request failed for {method}: {err}")))?;
