@@ -22,16 +22,20 @@
 //! and the leaf data for UTXOs being spent. You can then use this data to validate the block, and
 //! update your local Utreexo forest.
 
+use std::str::FromStr;
+
 use bitcoin::BlockHash;
 use bitcoin::VarInt;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
+use bitcoin::hex::FromHex;
 use floresta_chain::CompactLeafData;
 use floresta_chain::ScriptPubKeyKind;
 use floresta_common::read_bounded_len;
 use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::proof::Proof;
 
 /// The maximum possible inputs you can have per block.
 ///
@@ -39,7 +43,7 @@ use rustreexo::node_hash::BitcoinNodeHash;
 /// stackexchange answer, but that doesn't change the max possible input value.
 ///
 /// <https://bitcoin.stackexchange.com/questions/85752/maximum-number-of-inputs-per-transaction>
-const MAX_INPUTS_PER_BLOCK: usize = 24_386;
+pub const MAX_INPUTS_PER_BLOCK: usize = 24_386;
 
 /// How high the Utreexo forest can be.
 const MAX_TREE_DEPTH: usize = 64;
@@ -49,7 +53,135 @@ const MAX_TREE_DEPTH: usize = 64;
 /// Assuming that each UTXO needs a proof, with no overlaps of any kind, the maximum number of
 /// proof hashes is the number of inputs per block multiplied by the maximum number of
 /// elements that each proof requires, in a tree with `MAX_TREE_DEPTH` depth.
-const MAX_PROOF_HASHES: usize = MAX_INPUTS_PER_BLOCK * MAX_TREE_DEPTH;
+pub const MAX_PROOF_HASHES: usize = MAX_INPUTS_PER_BLOCK * MAX_TREE_DEPTH;
+
+/// Maximum serialized size of a [`TipProof`] in bytes.
+///
+/// Accounts for every field in the serialized format:
+/// block hash (32) + targets (varint count + varints) + proof hashes
+/// (varint count + 32-byte hashes) + proven hashes (u32 LE count + 32-byte hashes).
+pub const MAX_PROOF_SIZE_BYTES: usize =
+    // block hash
+    32
+    // targets: varint count + up to MAX_INPUTS_PER_BLOCK varint-encoded targets
+    + 9 + MAX_INPUTS_PER_BLOCK * 9
+    // proof hashes: varint count + up to MAX_PROOF_HASHES 32-byte hashes
+    + 9 + MAX_PROOF_HASHES * 32
+    // proven hashes: u32 LE count + up to MAX_INPUTS_PER_BLOCK 32-byte hashes
+    + 4 + MAX_INPUTS_PER_BLOCK * 32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// A chain-tip inclusion proof as serialized by utreexod.
+///
+/// Responses to `proveutxochaintipinclusion` utreexod RPC.
+pub struct TipProof {
+    /// The block hash at which this proof was generated.
+    pub proved_at_hash: BlockHash,
+
+    /// The Utreexo accumulator proof (targets + sibling hashes).
+    pub proof: Proof,
+
+    /// The raw leaf hashes that were proven.
+    pub hashes_proven: Vec<BitcoinNodeHash>,
+}
+
+impl FromStr for TipProof {
+    type Err = bitcoin::consensus::encode::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Here we expect for `s` to be a hex string, its len() returns
+        // the double of bytes.
+        if (s.len() / 2) > MAX_PROOF_SIZE_BYTES {
+            return Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "Proof exceeds max size allowed",
+            ));
+        }
+
+        let proof_bytes = Vec::from_hex(s)
+            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("Invalid hex"))?;
+
+        TipProof::consensus_decode(&mut proof_bytes.as_slice())
+    }
+}
+
+impl Decodable for TipProof {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        // Block hash (32 bytes)
+        let proved_at_hash = BlockHash::consensus_decode(reader)?;
+
+        // Targets (varint count + varint-encoded)
+        let num_targets = read_bounded_len(reader, MAX_INPUTS_PER_BLOCK)?;
+        let mut targets = Vec::with_capacity(num_targets);
+        for _ in 0..num_targets {
+            let target = VarInt::consensus_decode(reader)?;
+            targets.push(target.0);
+        }
+
+        // Proof sibling hashes (varint count + 32-byte hashes)
+        let num_hashes = read_bounded_len(reader, MAX_PROOF_HASHES)?;
+        let mut proof_hashes = Vec::with_capacity(num_hashes);
+        for _ in 0..num_hashes {
+            let hash = sha256::Hash::consensus_decode(reader)?;
+            proof_hashes.push(BitcoinNodeHash::Some(hash.to_byte_array()));
+        }
+
+        // Hashes proven (u32 LE count + 32-byte hashes)
+        let num_proven = u32::consensus_decode(reader)? as usize;
+        if num_proven > MAX_INPUTS_PER_BLOCK {
+            return Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "Too many proven hashes",
+            ));
+        }
+        let mut hashes_proven = Vec::with_capacity(num_proven);
+        for _ in 0..num_proven {
+            let hash = sha256::Hash::consensus_decode(reader)?;
+            hashes_proven.push(BitcoinNodeHash::Some(hash.to_byte_array()));
+        }
+
+        Ok(TipProof {
+            proved_at_hash,
+            proof: Proof {
+                targets,
+                hashes: proof_hashes,
+            },
+            hashes_proven,
+        })
+    }
+}
+
+impl Encodable for TipProof {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+
+        // Block hash (32 bytes)
+        len += self.proved_at_hash.consensus_encode(writer)?;
+
+        // Targets (varint count + varint-encoded)
+        len += VarInt(self.proof.targets.len() as u64).consensus_encode(writer)?;
+        for target in &self.proof.targets {
+            len += VarInt(*target).consensus_encode(writer)?;
+        }
+
+        // Proof sibling hashes (varint count + 32-byte hashes)
+        len += VarInt(self.proof.hashes.len() as u64).consensus_encode(writer)?;
+        for hash in &self.proof.hashes {
+            len += sha256::Hash::from_byte_array(**hash).consensus_encode(writer)?;
+        }
+
+        // Hashes proven (u32 LE count + 32-byte hashes)
+        len += (self.hashes_proven.len() as u32).consensus_encode(writer)?;
+        for hash in &self.hashes_proven {
+            len += sha256::Hash::from_byte_array(**hash).consensus_encode(writer)?;
+        }
+
+        Ok(len)
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// A Bitmap used to request proof elements in Utreexo proofs.
@@ -428,5 +560,92 @@ mod utreexo_proof_tests {
         if acc.verify(&r_proof, &to_acc_hashes(del_hashes)).unwrap() {
             panic!("Proof must be invalid")
         }
+    }
+}
+
+#[cfg(test)]
+mod tip_proof_tests {
+    use bitcoin::consensus::encode::deserialize_hex;
+
+    use super::*;
+
+    const TIP_PROOF_HEX: &str = "06db48a6f377f85e46c4e0b915af21c05122c72fff2a8193e19bc68a8b18116d0100030b6c7f2192b1460acf65143badad31b1f000e4940d966bdc8d41463c3049255164028cae25759e119457b059aaa6a38e5812cfd72e9fd07a6393771b4881a2fa80500750ac49f80b161c7431cc3f345a3872147b7adb432f032956eafa9fb76801000000e1e92857db1c66b3cf610e445eb006d68373d82b33398bdadd2f70cf4088dac2";
+
+    const TIP_PROOF_BLOCK_HASH_HEX: &str =
+        "06db48a6f377f85e46c4e0b915af21c05122c72fff2a8193e19bc68a8b18116d";
+
+    #[test]
+    fn test_tip_proof_decode() {
+        // Verify that each field has been parsed in the correct position.
+        let proof: TipProof = deserialize_hex(TIP_PROOF_HEX).unwrap();
+
+        assert_eq!(
+            proof.proved_at_hash.to_string(),
+            "6d11188b8ac69be193812aff2fc72251c021af15b9e0c4465ef877f3a648db06"
+        );
+
+        // Single UTXO proven at accumulator position 0
+        assert_eq!(proof.proof.targets, vec![0]);
+
+        // 3 sibling hashes needed to reconstruct the path to the root
+        assert_eq!(proof.proof.hashes.len(), 3);
+
+        // 1 leaf hash being proven for inclusion
+        assert_eq!(proof.hashes_proven.len(), 1);
+    }
+
+    #[test]
+    fn test_tip_proof_trailing_bytes() {
+        // Valid proof with an extra `ff` byte appended. deserialize_hex must reject
+        // trailing data to prevent accepting malformed or padded proofs.
+        let hex = format!("{}ff", TIP_PROOF_HEX);
+        let result: Result<TipProof, _> = deserialize_hex(&hex);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tip_proof_truncated() {
+        // Only the 32-byte block hash with no targets or hashes.
+        // The parser must fail gracefully instead of panicking on missing data.
+        let result: Result<TipProof, _> = deserialize_hex(TIP_PROOF_BLOCK_HASH_HEX);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tip_proof_oversized_targets() {
+        // 32-byte block hash followed by a varint claiming 24,387 targets
+        // (one over MAX_INPUTS_PER_BLOCK = 24,386). read_bounded_len must reject it.
+        let hex = format!("{}fd435f", TIP_PROOF_BLOCK_HASH_HEX);
+        let result: Result<TipProof, _> = deserialize_hex(&hex);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tip_proof_oversized_proven() {
+        // 32-byte block hash + varint(0) targets + varint(0) proof hashes
+        // + u32 LE claiming 24,387 proven hashes (one over MAX_INPUTS_PER_BLOCK).
+        // The manual bound check on num_proven must reject it.
+        let hex = format!("{}0000435f0000", TIP_PROOF_BLOCK_HASH_HEX);
+        let result: Result<TipProof, _> = deserialize_hex(&hex);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tip_proof_zero_counts() {
+        // Minimal valid structure: 32-byte hash + 0 targets + 0 hashes + 0 proven.
+        // The parser must accept this without panicking.
+        let hex = format!("{}000000000000", TIP_PROOF_BLOCK_HASH_HEX);
+        let proof: TipProof = deserialize_hex(&hex).unwrap();
+        assert!(proof.proof.targets.is_empty());
+        assert!(proof.proof.hashes.is_empty());
+        assert!(proof.hashes_proven.is_empty());
+    }
+
+    #[test]
+    fn test_tip_proof_empty_input() {
+        // Completely empty input — not even a block hash.
+        let result: Result<TipProof, _> = deserialize_hex("");
+        assert!(result.is_err());
     }
 }
