@@ -657,6 +657,7 @@ impl NativeBitAssetsWallet {
                 "native BitAsset transfer currently supports fee_sats=0".to_string(),
             ));
         }
+        reject_zero_amount("transfer amount", amount)?;
         let asset = AssetId::BitAsset(BitAssetId(Hash::from_hex(asset_id_hex)?));
         let (total, selected) = self.select_wallet_utxos(&asset, amount)?;
 
@@ -691,6 +692,7 @@ impl NativeBitAssetsWallet {
 
     pub fn reserve(&mut self, name: &str, fee_sats: u64) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        validate_bitasset_name(name)?;
         let reservation_address = Address::from_base58(&self.get_new_address()?)?;
         let index = self.index_for_address(&reservation_address.as_base58())?;
         let signing_key = self.signing_key(index)?;
@@ -724,6 +726,7 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        validate_bitasset_name(name)?;
         let name_hash = Hash(*blake3::hash(name.as_bytes()).as_bytes());
         let bitasset_id = BitAssetId(name_hash);
         let mut selected = None;
@@ -794,8 +797,12 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        reject_zero_amount("amount0", amount0)?;
+        reject_zero_amount("amount1", amount1)?;
+        reject_zero_amount("lp_token_mint", lp_token_mint)?;
         let asset0 = parse_asset_id(asset0)?;
         let asset1 = parse_asset_id(asset1)?;
+        reject_same_asset_pair(&asset0, &asset1)?;
         let (input0, mut selected) = self.select_wallet_utxos(&asset0, amount0)?;
         let (input1, selected1) = self.select_wallet_utxos(&asset1, amount1)?;
         selected.extend(selected1);
@@ -827,8 +834,11 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        reject_zero_amount("amount_spend", amount_spend)?;
+        reject_zero_amount("amount_receive", amount_receive)?;
         let asset_spend = parse_asset_id(asset_spend)?;
         let asset_receive = parse_asset_id(asset_receive)?;
+        reject_same_asset_pair(&asset_spend, &asset_receive)?;
         let (input, selected) = self.select_wallet_utxos(&asset_spend, amount_spend)?;
         let mut outputs = Vec::new();
         self.push_change(&mut outputs, asset_spend, input - amount_spend)?;
@@ -858,8 +868,12 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        reject_zero_amount("amount0", amount0)?;
+        reject_zero_amount("amount1", amount1)?;
+        reject_zero_amount("lp_token_burn", lp_token_burn)?;
         let asset0 = parse_asset_id(asset0)?;
         let asset1 = parse_asset_id(asset1)?;
+        reject_same_asset_pair(&asset0, &asset1)?;
         let (input, selected) =
             self.select_lp_utxos(&asset_key(&asset0), &asset_key(&asset1), lp_token_burn)?;
         let mut outputs = Vec::new();
@@ -897,6 +911,10 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        reject_zero_amount("base_amount", params.base_amount)?;
+        reject_zero_amount("duration", u64::from(params.duration))?;
+        reject_zero_amount("initial_price", params.initial_price)?;
+        reject_same_asset_pair(&params.base_asset, &params.quote_asset)?;
         let (input, selected) = self.select_wallet_utxos(&params.base_asset, params.base_amount)?;
         let mut outputs = Vec::new();
         self.push_change(&mut outputs, params.base_asset, input - params.base_amount)?;
@@ -922,9 +940,12 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        reject_zero_amount("bid_size", bid_size)?;
+        reject_zero_amount("receive_quantity", receive_quantity)?;
         let auction_id = DutchAuctionId(Txid(Hash::from_hex(auction_id)?));
         let base_asset = parse_asset_id(base_asset)?;
         let quote_asset = parse_asset_id(quote_asset)?;
+        reject_same_asset_pair(&base_asset, &quote_asset)?;
         let (input, selected) = self.select_wallet_utxos(&quote_asset, bid_size)?;
         let mut outputs = Vec::new();
         self.push_change(&mut outputs, quote_asset, input - bid_size)?;
@@ -955,8 +976,14 @@ impl NativeBitAssetsWallet {
         fee_sats: u64,
     ) -> Result<Value, Error> {
         reject_nonzero_fee(fee_sats)?;
+        if amount_base == 0 && amount_quote == 0 {
+            return Err(Error::Rpc(
+                "dutch auction collect must receive at least one nonzero amount".to_string(),
+            ));
+        }
         let base_asset = parse_asset_id(base_asset)?;
         let quote_asset = parse_asset_id(quote_asset)?;
+        reject_same_asset_pair(&base_asset, &quote_asset)?;
         let selected = self.select_auction_receipt(auction_id)?;
         let mut outputs = Vec::new();
         if amount_base != 0 {
@@ -1918,6 +1945,35 @@ fn reject_nonzero_fee(fee_sats: u64) -> Result<(), Error> {
     }
 }
 
+fn reject_zero_amount(field_name: &str, amount: u64) -> Result<(), Error> {
+    if amount == 0 {
+        Err(Error::Rpc(format!(
+            "{field_name} must be greater than zero"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_bitasset_name(name: &str) -> Result<(), Error> {
+    if name.is_empty() || name.trim() != name {
+        return Err(Error::Rpc(
+            "BitAsset name must not be empty or contain leading/trailing whitespace".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_same_asset_pair(asset0: &AssetId, asset1: &AssetId) -> Result<(), Error> {
+    if asset0 == asset1 {
+        Err(Error::Rpc(
+            "BitAssets constructor requires two distinct assets".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn selected_to_outpoints(selected: &[WalletUtxo]) -> Result<Vec<OutPoint>, Error> {
     selected
         .iter()
@@ -2716,6 +2772,16 @@ mod tests {
         }
     }
 
+    fn assert_rpc_rejected(result: Result<Value, Error>, expected: &str) {
+        match result {
+            Err(Error::Rpc(message)) => assert!(
+                message.contains(expected),
+                "expected {message:?} to contain {expected:?}"
+            ),
+            other => panic!("expected RPC rejection containing {expected:?}, got {other:?}"),
+        }
+    }
+
     #[test]
     fn native_constructors_reject_nonzero_fees_before_network_or_selection() {
         let asset_a = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -2761,6 +2827,66 @@ mod tests {
         assert_zero_fee_rejected(wallet.dutch_auction_bid(auction_id, asset_a, asset_b, 1, 1, 1));
         assert_zero_fee_rejected(
             wallet.dutch_auction_collect(auction_id, asset_a, asset_b, 1, 1, 1),
+        );
+    }
+
+    #[test]
+    fn native_constructors_reject_zero_or_ambiguous_inputs_before_signing() {
+        let asset_a = "1111111111111111111111111111111111111111111111111111111111111111";
+        let asset_b = "2222222222222222222222222222222222222222222222222222222222222222";
+        let auction_id = "4444444444444444444444444444444444444444444444444444444444444444";
+        let bitasset_data = || BitAssetData {
+            commitment: None,
+            socket_addr_v4: None,
+            socket_addr_v6: None,
+            encryption_pubkey: None,
+            signing_pubkey: None,
+        };
+
+        let mut wallet = native_test_wallet();
+        assert_rpc_rejected(
+            wallet.transfer("46wMdKN8vRVCHCKw77eqsRkpc6yT", asset_a, 0, 0, None),
+            "transfer amount must be greater than zero",
+        );
+        assert_rpc_rejected(wallet.reserve("", 0), "BitAsset name must not be empty");
+        assert_rpc_rejected(
+            wallet.register(" name", 1, bitasset_data(), 0),
+            "BitAsset name must not be empty",
+        );
+        assert_rpc_rejected(
+            wallet.amm_mint(asset_a, asset_b, 0, 1, 1, 0),
+            "amount0 must be greater than zero",
+        );
+        assert_rpc_rejected(
+            wallet.amm_swap(asset_a, asset_a, 1, 1, 0),
+            "requires two distinct assets",
+        );
+        assert_rpc_rejected(
+            wallet.amm_burn(asset_a, asset_b, 1, 1, 0, 0),
+            "lp_token_burn must be greater than zero",
+        );
+        assert_rpc_rejected(
+            wallet.dutch_auction_create(
+                DutchAuctionParams {
+                    start_block: 1,
+                    duration: 0,
+                    base_asset: parse_asset_id(asset_a).unwrap(),
+                    base_amount: 1,
+                    quote_asset: parse_asset_id(asset_b).unwrap(),
+                    initial_price: 1,
+                    final_price: 1,
+                },
+                0,
+            ),
+            "duration must be greater than zero",
+        );
+        assert_rpc_rejected(
+            wallet.dutch_auction_bid(auction_id, asset_a, asset_b, 0, 1, 0),
+            "bid_size must be greater than zero",
+        );
+        assert_rpc_rejected(
+            wallet.dutch_auction_collect(auction_id, asset_a, asset_b, 0, 0, 0),
+            "collect must receive at least one nonzero amount",
         );
     }
 
