@@ -171,7 +171,7 @@ impl EmbeddedBitAssetsWallet {
 }
 
 fn default_persist_seed() -> bool {
-    true
+    false
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,6 +326,16 @@ mod tests {
         assert_eq!(info["address_count"], 1);
         let utxos: Value = serde_json::from_str(&wallet.list_utxos_json().unwrap()).unwrap();
         assert!(utxos["confirmed"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mobile_config_defaults_to_not_persisting_seed() {
+        let config: EmbeddedWalletConfig = serde_json::from_str(
+            r#"{"path":"/tmp/floresta-bitassets-wallet.json","rpc_url":"http://127.0.0.1:6004","seed_hex":"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","create":true}"#,
+        )
+        .unwrap();
+
+        assert!(!config.persist_seed);
     }
 
     #[test]
