@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::net::{SocketAddrV4, SocketAddrV6};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1180,7 +1183,17 @@ impl NativeBitAssetsWallet {
             stored.seed_hex.clear();
         }
         let bytes = serde_json::to_vec_pretty(&stored)?;
-        fs::write(&self.path, bytes)?;
+        let temp_path = self.path.with_extension("tmp");
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        {
+            let mut file = options.open(&temp_path)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+        }
+        fs::rename(temp_path, &self.path)?;
         Ok(())
     }
 
@@ -1870,6 +1883,26 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn persisted_wallet_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
+        wallet.get_new_address().unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
     #[test]
     fn native_wallet_smoke_persists_proof_backed_utxos() {
         let dir = tempfile::tempdir().unwrap();
@@ -1954,7 +1987,10 @@ mod tests {
         assert_eq!(reloaded.stored.last_tip_height, Some(7));
 
         let persisted_utxo = &reloaded.stored.confirmed_utxos[0];
-        assert_eq!(persisted_utxo.utreexo_leaf_hash.as_deref(), Some(leaf_hash.as_str()));
+        assert_eq!(
+            persisted_utxo.utreexo_leaf_hash.as_deref(),
+            Some(leaf_hash.as_str())
+        );
         assert_eq!(persisted_utxo.proof_refs.len(), 1);
         assert_eq!(persisted_utxo.proof_refs[0].sidechain_block_height, Some(7));
         assert_eq!(
@@ -1962,7 +1998,9 @@ mod tests {
             vec!["bmm-inclusion-1".to_string()]
         );
         assert_eq!(
-            persisted_utxo.proof_refs[0].best_main_verification.as_deref(),
+            persisted_utxo.proof_refs[0]
+                .best_main_verification
+                .as_deref(),
             Some("verified")
         );
 
@@ -1970,7 +2008,10 @@ mod tests {
         let confirmed = listed["confirmed"].as_array().unwrap();
         assert_eq!(confirmed[0]["utreexo_leaf_hash"], leaf_hash);
         assert_eq!(confirmed[0]["proof_refs"][0]["sidechain_block_height"], 7);
-        assert_eq!(confirmed[0]["proof_refs"][0]["bmm_inclusions"][0], "bmm-inclusion-1");
+        assert_eq!(
+            confirmed[0]["proof_refs"][0]["bmm_inclusions"][0],
+            "bmm-inclusion-1"
+        );
         assert_eq!(
             confirmed[0]["proof_refs"][0]["best_main_verification"],
             "verified"
