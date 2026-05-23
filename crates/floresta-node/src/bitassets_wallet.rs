@@ -1009,7 +1009,7 @@ impl NativeBitAssetsWallet {
     }
 
     fn sign_and_broadcast(
-        &self,
+        &mut self,
         transaction: Transaction,
         selected: &[WalletUtxo],
     ) -> Result<Value, Error> {
@@ -1034,11 +1034,13 @@ impl NativeBitAssetsWallet {
             authorizations,
         };
         let authorized_hex = hex::encode(borsh::to_vec(&authorized)?);
-        bitassets_rpc_call_with_params(
+        let result = bitassets_rpc_call_with_params(
             &self.rpc_url,
             "submit_authorized_transaction",
             vec![json!(authorized_hex)],
-        )
+        )?;
+        self.mark_selected_spent(selected)?;
+        Ok(result)
     }
 
     fn select_wallet_utxos(
@@ -1049,12 +1051,9 @@ impl NativeBitAssetsWallet {
         let key = asset_key(asset);
         let mut selected = Vec::new();
         let mut total = 0u64;
-        for utxo in self
-            .stored
-            .confirmed_utxos
-            .iter()
-            .filter(|utxo| utxo.asset_id == key)
-        {
+        for utxo in self.stored.confirmed_utxos.iter().filter(|utxo| {
+            utxo.asset_id == key && !self.stored.spent_outpoints.contains(&utxo.outpoint)
+        }) {
             selected.push(utxo.clone());
             total = total
                 .checked_add(utxo.amount)
@@ -1085,6 +1084,7 @@ impl NativeBitAssetsWallet {
             utxo.content_kind == "amm_lp_token"
                 && utxo.lp_asset0.as_deref() == Some(asset0)
                 && utxo.lp_asset1.as_deref() == Some(asset1)
+                && !self.stored.spent_outpoints.contains(&utxo.outpoint)
         }) {
             selected.push(utxo.clone());
             total = total
@@ -1111,6 +1111,7 @@ impl NativeBitAssetsWallet {
             .find(|utxo| {
                 utxo.content_kind == "dutch_auction_receipt"
                     && utxo.auction_id.as_deref() == Some(auction_id)
+                    && !self.stored.spent_outpoints.contains(&utxo.outpoint)
             })
             .cloned()
             .ok_or_else(|| Error::NoWalletUtxo(format!("auction receipt {auction_id}")))
@@ -1130,6 +1131,28 @@ impl NativeBitAssetsWallet {
             });
         }
         Ok(())
+    }
+
+    fn mark_selected_spent(&mut self, selected: &[WalletUtxo]) -> Result<(), Error> {
+        if selected.is_empty() {
+            return Ok(());
+        }
+        let selected_outpoints = selected
+            .iter()
+            .map(|utxo| utxo.outpoint.clone())
+            .collect::<BTreeSet<_>>();
+        self.stored
+            .confirmed_utxos
+            .retain(|utxo| !selected_outpoints.contains(&utxo.outpoint));
+        let mut spent = self
+            .stored
+            .spent_outpoints
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        spent.extend(selected_outpoints);
+        self.stored.spent_outpoints = spent.into_iter().collect();
+        self.save()
     }
 
     fn apply_update(&mut self, update: &Value) -> Result<(), Error> {
@@ -2241,6 +2264,63 @@ mod tests {
             true,
         )
         .unwrap()
+    }
+
+    fn test_bitasset_utxo(byte: u8, vout: u32, amount: u64) -> WalletUtxo {
+        WalletUtxo {
+            outpoint: WalletOutPoint {
+                txid: format!("{byte:02x}").repeat(32),
+                vout,
+            },
+            address: "46wMdKN8vRVCHCKw77eqsRkpc6yT".to_string(),
+            asset_id: "11".repeat(32),
+            amount,
+            confirmed: true,
+            proof_refs: Vec::new(),
+            utreexo_leaf_hash: Some("22".repeat(32)),
+            content_kind: "bitasset".to_string(),
+            reservation_txid: None,
+            reservation_commitment: None,
+            lp_asset0: None,
+            lp_asset1: None,
+            auction_id: None,
+        }
+    }
+
+    #[test]
+    fn wallet_selection_skips_locally_spent_outpoints() {
+        let mut wallet = native_test_wallet();
+        let spent = test_bitasset_utxo(0xaa, 0, 10);
+        let spendable = test_bitasset_utxo(0xbb, 0, 10);
+        wallet.stored.spent_outpoints.push(spent.outpoint.clone());
+        wallet.stored.confirmed_utxos = vec![spent, spendable.clone()];
+
+        let (total, selected) = wallet
+            .select_wallet_utxos(&parse_asset_id(&"11".repeat(32)).unwrap(), 10)
+            .unwrap();
+
+        assert_eq!(total, 10);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].outpoint, spendable.outpoint);
+    }
+
+    #[test]
+    fn mark_selected_spent_removes_inputs_before_next_selection() {
+        let mut wallet = native_test_wallet();
+        let selected = test_bitasset_utxo(0xaa, 0, 10);
+        let remaining = test_bitasset_utxo(0xbb, 0, 10);
+        wallet.stored.confirmed_utxos = vec![selected.clone(), remaining.clone()];
+
+        wallet
+            .mark_selected_spent(std::slice::from_ref(&selected))
+            .unwrap();
+
+        assert_eq!(wallet.stored.confirmed_utxos.len(), 1);
+        assert_eq!(
+            wallet.stored.confirmed_utxos[0].outpoint,
+            remaining.outpoint
+        );
+        assert_eq!(wallet.stored.spent_outpoints, vec![selected.outpoint]);
     }
 
     fn assert_zero_fee_rejected(result: Result<Value, Error>) {
