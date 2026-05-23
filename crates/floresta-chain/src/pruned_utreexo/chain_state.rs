@@ -938,9 +938,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             None => Ok(true),
         }
     }
-    pub fn acc(&self) -> Stump {
-        read_lock!(self).acc.to_owned()
-    }
     /// Returns the next required work for the next block, usually it's just the last block's target
     /// but if we are in a retarget period, it's calculated from the last 2016 blocks.
     fn get_next_required_work(
@@ -1039,8 +1036,16 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         self.get_branch_work(header)
     }
 
-    fn acc(&self) -> Stump {
-        read_lock!(self).acc.to_owned()
+    fn get_tip_acc(&self) -> Stump {
+        read_lock!(self).acc.clone()
+    }
+
+    fn get_acc(&self, block: BlockHash) -> Result<Option<Stump>, Self::Error> {
+        let height = self
+            .get_block_height(&block)?
+            .ok_or(BlockchainError::BlockNotPresent)?;
+
+        self.get_roots_for_block(height)
     }
 
     fn size_on_disk(&self) -> Result<u64, Self::Error> {
@@ -1245,10 +1250,6 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         self.reorg(new_tip)
     }
 
-    fn get_acc(&self) -> Stump {
-        self.acc()
-    }
-
     fn mark_block_as_valid(&self, block: BlockHash) -> Result<(), BlockchainError> {
         let header = self.get_disk_block_header(&block)?;
         let height = header.try_height()?;
@@ -1371,7 +1372,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .then(|| inputs.clone());
 
         self.validate_block_no_acc(block, height, inputs)?;
-        let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
+        let acc = Consensus::update_acc(&self.get_tip_acc(), block, height, proof, del_hashes)?;
 
         self.update_view(height, &block.header, acc)?;
 
@@ -1772,7 +1773,7 @@ mod test {
                 == bhash!("45c74beefa2a110715377e023d4260168b4cafbb0891f3b0869aea30867acc87")
             {
                 // This is the block we will reorg to
-                fork_acc = chain.acc();
+                fork_acc = chain.get_tip_acc()
             }
         }
 
@@ -1795,7 +1796,7 @@ mod test {
 
         assert_eq!(chain.get_best_block().unwrap(), expected);
         assert_eq!(
-            chain.acc(),
+            chain.get_tip_acc(),
             fork_acc,
             "The accumulator should not change when accepting headers only",
         );
@@ -1995,5 +1996,104 @@ mod test {
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(fork_work, work);
         assert_eq!(work, expected_work);
+    }
+
+    #[test]
+    fn test_get_tip_acc() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+
+        // Initially the tip accumulator should be empty (genesis has no UTXOs processed)
+        assert_eq!(chain.get_tip_acc(), Stump::new());
+
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        let mut prev_acc = chain.get_tip_acc();
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+
+            let current_acc = chain.get_tip_acc();
+            // The tip accumulator should update after each block connection
+            assert_ne!(
+                current_acc,
+                prev_acc,
+                "Tip accumulator should change after connecting block {}",
+                block.block_hash()
+            );
+            prev_acc = current_acc;
+        }
+    }
+
+    #[test]
+    fn test_get_acc() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        // Connect all blocks
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+        }
+
+        // Each connected block should have a stored accumulator
+        for block in &short_chain {
+            let acc = chain
+                .get_acc(block.block_hash())
+                .expect("get_acc should not error for a connected block");
+            assert!(
+                acc.is_some(),
+                "Connected block {} should have a stored accumulator",
+                block.block_hash()
+            );
+        }
+
+        // The accumulator for the last connected block should match the current tip accumulator
+        let last_block = short_chain.last().unwrap();
+        let last_acc = chain.get_acc(last_block.block_hash()).unwrap().unwrap();
+        assert_eq!(
+            last_acc,
+            chain.get_tip_acc(),
+            "The last connected block's accumulator should equal the tip accumulator"
+        );
+
+        // Genesis has no saved accumulator (ChainState::new doesn't call save_roots_for_block)
+        let genesis_hash = genesis_block(Network::Regtest).block_hash();
+        let genesis_acc = chain
+            .get_acc(genesis_hash)
+            .expect("get_acc should not error for genesis");
+        assert!(
+            genesis_acc.is_none(),
+            "Genesis should have no stored accumulator"
+        );
+    }
+
+    #[test]
+    fn test_get_acc_unknown_block() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+
+        // A completely unknown block hash should return an error
+        let unknown_hash =
+            bhash!("0000000000000000000000000000000000000000000000000000000000000001");
+        let result = chain.get_acc(unknown_hash);
+        assert!(
+            matches!(result, Err(BlockchainError::BlockNotPresent)),
+            "get_acc should return BlockNotPresent for an unknown block hash, got: {result:?}"
+        );
     }
 }
