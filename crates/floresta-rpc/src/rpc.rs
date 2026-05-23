@@ -158,6 +158,13 @@ pub trait FlorestaRPC {
     fn ping(&self) -> Result<()>;
     /// Returns address manager statistics broken down by network.
     fn get_addrman_info(&self) -> Result<GetAddrManInfo>;
+    /// Verifies a Utreexo inclusion proof for the chain tip
+    fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: String,
+        verbosity: Option<u32>,
+        blockhash: Option<String>,
+    ) -> Result<Value>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -387,5 +394,27 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
         self.call("getaddrmaninfo", &[])
+    }
+
+    fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: String,
+        verbosity: Option<u32>,
+        blockhash: Option<String>,
+    ) -> Result<Value> {
+        let mut params = vec![Value::String(proof)];
+
+        if let Some(v) = verbosity {
+            params.push(Value::Number(Number::from(v)));
+        }
+
+        if let Some(ref hash) = blockhash {
+            if verbosity.is_none() {
+                params.push(Value::Null);
+            }
+            params.push(Value::String(hash.clone()));
+        }
+
+        self.call("verifyutxochaintipinclusionproof", &params)
     }
 }
