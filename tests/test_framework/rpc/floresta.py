@@ -40,3 +40,16 @@ class FlorestaRPC(BaseRPC):
         Load a script descriptor into the wallet.
         """
         return self.perform_request("loaddescriptor", params=[descriptor])
+
+    def verifyutxochaintipinclusionproof(
+        self, proof: str, verbosity: int = None, blockhash: str = None
+    ) -> bool:
+        """
+        Verify Utreexo accumulator proof.
+        """
+        params = [proof]
+        if verbosity is not None or blockhash is not None:
+            params.append(verbosity)
+        if blockhash is not None:
+            params.append(blockhash)
+        return self.perform_request("verifyutxochaintipinclusionproof", params)

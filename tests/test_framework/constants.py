@@ -29,12 +29,21 @@ WALLET_DESCRIPTOR_EXTERNAL = f"wpkh({WALLET_XPUB}/0/*)#7h6kdtnk"
 WALLET_XPUB_BIP_84 = "vpub5ZrpbMUWLCJ6MbpU1RzocWBddAQnk2XYry9JSXrtzxSqoicei28CzqUhiN2HJ8z2VjY6rsUNf4qxjym43ydhAFQJ7BDDcC2bK6et6x9hc4D"
 WALLET_ADDRESS = "bcrt1q427ze5mrzqupzyfmqsx9gxh7xav538yk2j4cft"
 
+# Legacy (P2PKH) descriptors derived from the same xpriv/xpub above.
+# Used in tests that need to spend coinbases without segwit activation.
+WALLET_DESCRIPTOR_PRIV_EXTERNAL_PKH = f"pkh({WALLET_XPRIV}/0/*)#e7wql9sy"
+WALLET_DESCRIPTOR_EXTERNAL_PKH = f"pkh({WALLET_XPUB}/0/*)#kdd2p3pr"
+WALLET_ADDRESS_PKH = "mw5ibJNmFmX9bEjZwr8Lo3YZT15XY16vpB"
+
 # JSON-RPC spec error code constants
 JSONRPC_ERRCODE_PARSE = -32700
 JSONRPC_ERRCODE_INVALID_REQUEST = -32600
 JSONRPC_ERRCODE_METHOD_NOT_FOUND = -32601
 JSONRPC_ERRCODE_INVALID_PARAMS = -32602
 JSONRPC_ERRCODE_INTERNAL = -32603
+
+# Floresta-specific server error codes (-32099..=-32000)
+JSONRPC_ERRCODE_BLOCK_NOT_FOUND = -32098
 
 # JSON-RPC error message constants
 JSONRPC_ERRMSG_MISSING_PARAMS = "Missing parameter"
