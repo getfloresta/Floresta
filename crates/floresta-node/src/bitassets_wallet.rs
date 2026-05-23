@@ -1178,13 +1178,26 @@ impl NativeBitAssetsWallet {
             .into_iter()
             .chain(parse_outpoints(update.get("mempool_spent_outpoints"))?)
             .collect::<BTreeSet<_>>();
+        let wallet_addresses = self
+            .stored
+            .addresses
+            .iter()
+            .map(|address| address.address.clone())
+            .collect::<BTreeSet<_>>();
         let confirmed_created = parse_utxos(
             update.get("created_utxos"),
             true,
             &proof_refs,
             Some(&utreexo_view),
+            &wallet_addresses,
         )?;
-        let mempool_created = parse_utxos(update.get("mempool_created_utxos"), false, &[], None)?;
+        let mempool_created = parse_utxos(
+            update.get("mempool_created_utxos"),
+            false,
+            &[],
+            None,
+            &wallet_addresses,
+        )?;
 
         self.stored
             .confirmed_utxos
@@ -1623,13 +1636,16 @@ fn parse_utxos(
     confirmed: bool,
     proof_refs: &[WalletProofRef],
     utreexo_view: Option<&UtreexoView>,
+    wallet_addresses: &BTreeSet<String>,
 ) -> Result<Vec<WalletUtxo>, Error> {
     let Some(array) = optional_array(value, "utxos")? else {
         return Ok(Vec::new());
     };
     array
         .iter()
-        .filter_map(|value| parse_utxo(value, confirmed, proof_refs, utreexo_view).transpose())
+        .filter_map(|value| {
+            parse_utxo(value, confirmed, proof_refs, utreexo_view, wallet_addresses).transpose()
+        })
         .collect()
 }
 
@@ -1638,6 +1654,7 @@ fn parse_utxo(
     confirmed: bool,
     proof_refs: &[WalletProofRef],
     utreexo_view: Option<&UtreexoView>,
+    wallet_addresses: &BTreeSet<String>,
 ) -> Result<Option<WalletUtxo>, Error> {
     let outpoint = parse_outpoint(
         value
@@ -1652,6 +1669,12 @@ fn parse_utxo(
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Rpc("UTXO missing address".to_string()))?
         .to_string();
+    Address::from_base58(&address)?;
+    if !wallet_addresses.contains(&address) {
+        return Err(Error::Rpc(format!(
+            "wallet update included non-wallet address {address}"
+        )));
+    }
     let content = output
         .get("content")
         .ok_or_else(|| Error::Rpc("UTXO missing content".to_string()))?;
@@ -2004,6 +2027,7 @@ mod tests {
             true,
         )
         .unwrap();
+        let wallet_address = wallet.get_new_address().unwrap();
 
         let outpoint = WalletOutPoint {
             txid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
@@ -2020,7 +2044,7 @@ mod tests {
         };
         let leaf_hash = lite_wallet_leaf_hash(
             &outpoint,
-            "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+            &wallet_address,
             "bitasset:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:42",
             "",
             &proof_ref,
@@ -2037,7 +2061,7 @@ mod tests {
                     "vout": 0
                 }},
                 "output": {
-                    "address": "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+                    "address": wallet_address,
                     "content": {"BitAsset": [
                         "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                         42
@@ -2484,6 +2508,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn apply_update_rejects_non_wallet_utxo_addresses() {
+        let mut wallet = native_test_wallet();
+        let wallet_address = wallet.get_new_address().unwrap();
+        assert_ne!(wallet_address, "XdVwC9EcS3AYYXVgLFswjwxXGrJ");
+
+        let update = json!({
+            "tip_height": 10,
+            "tip_hash": "aa".repeat(32),
+            "utreexo_leaf_count": 0,
+            "utreexo_roots": [],
+            "mempool_created_utxos": [{
+                "outpoint": {"Regular": {
+                    "txid": "bb".repeat(32),
+                    "vout": 0
+                }},
+                "output": {
+                    "address": "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+                    "content": {"BitAsset": [
+                        "cc".repeat(32),
+                        42
+                    ]},
+                    "memo": ""
+                }
+            }],
+        });
+
+        match wallet.apply_update(&update) {
+            Err(Error::Rpc(message)) => {
+                assert!(message.contains("wallet update included non-wallet address"));
+            }
+            other => panic!("expected non-wallet address rejection, got {other:?}"),
+        }
+        assert!(wallet.stored.mempool_utxos.is_empty());
+    }
+
     fn assert_zero_fee_rejected(result: Result<Value, Error>) {
         match result {
             Err(Error::Rpc(message)) => assert!(message.contains("fee_sats=0")),
@@ -2542,6 +2602,7 @@ mod tests {
     #[test]
     fn invalid_utreexo_proof_rejects_non_bitasset_wallet_content() {
         let mut wallet = native_test_wallet();
+        let wallet_address = wallet.get_new_address().unwrap();
         let outpoint = WalletOutPoint {
             txid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             vout: 0,
@@ -2558,7 +2619,7 @@ mod tests {
         let commitment = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
         let leaf_hash = lite_wallet_leaf_hash(
             &outpoint,
-            "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+            &wallet_address,
             &format!("reservation:{}:{commitment}", outpoint.txid),
             "",
             &proof_ref,
@@ -2575,7 +2636,7 @@ mod tests {
                     "vout": outpoint.vout
                 }},
                 "output": {
-                    "address": "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+                    "address": wallet_address,
                     "content": {"BitAssetReservation": [
                         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         commitment
