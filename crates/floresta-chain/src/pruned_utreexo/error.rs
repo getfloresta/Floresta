@@ -50,6 +50,9 @@ pub enum BlockchainError {
     /// The Utreexo proof for this block is invalid.
     InvalidUtreexoProof,
 
+    /// A block without known utreexo acc was requested
+    UnknownUtreexoAcc,
+
     /// Error whilst interacting with the [accumulator](rustreexo::stump::Stump).
     AccumulatorError(StumpError),
 
@@ -83,6 +86,9 @@ impl Display for BlockchainError {
                 write!(f, "The block contains invalid transaction(s): {e}")
             }
             Self::InvalidUtreexoProof => write!(f, "The Utreexo proof for this block is invalid"),
+            Self::UnknownUtreexoAcc => {
+                write!(f, "A block without known utreexo acc was requested")
+            }
             Self::AccumulatorError(e) => {
                 write!(f, "Error whilst interacting with the accumulator: {e:?}")
             }
