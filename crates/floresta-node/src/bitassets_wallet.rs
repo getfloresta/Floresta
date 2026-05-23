@@ -475,13 +475,7 @@ impl NativeBitAssetsWallet {
             } else {
                 stored.seed_hex.clear();
             }
-            for address in &mut stored.addresses {
-                if address.script_hash.is_none() {
-                    address.script_hash =
-                        Some(Address::from_base58(&address.address)?.script_hash());
-                }
-            }
-            let wallet = Self {
+            let mut wallet = Self {
                 path,
                 rpc_url,
                 stored,
@@ -490,6 +484,7 @@ impl NativeBitAssetsWallet {
                 quic_status: QuicStatus::default(),
                 subscription_generation: 0,
             };
+            wallet.validate_loaded_wallet()?;
             wallet.save()?;
             return Ok(wallet);
         }
@@ -1263,6 +1258,10 @@ impl NativeBitAssetsWallet {
         ))
     }
 
+    fn derived_address(&self, index: u32) -> Result<Address, Error> {
+        Ok(VerifyingKey(self.signing_key(index)?.verifying_key()).address())
+    }
+
     fn index_for_address(&self, address: &str) -> Result<u32, Error> {
         self.stored
             .addresses
@@ -1270,6 +1269,66 @@ impl NativeBitAssetsWallet {
             .find(|entry| entry.address == address)
             .map(|entry| entry.index)
             .ok_or_else(|| Error::NoSigningAddress(address.to_string()))
+    }
+
+    fn validate_loaded_wallet(&mut self) -> Result<(), Error> {
+        if self.stored.version != 1 {
+            return Err(Error::Rpc(format!(
+                "unsupported native wallet version {}",
+                self.stored.version
+            )));
+        }
+
+        let mut seen_indices = BTreeSet::new();
+        let mut seen_addresses = BTreeSet::new();
+        let mut next_index = 0u32;
+        for position in 0..self.stored.addresses.len() {
+            let index = self.stored.addresses[position].index;
+            if !seen_indices.insert(index) {
+                return Err(Error::Rpc(format!(
+                    "duplicate wallet address index {index}"
+                )));
+            }
+            next_index = next_index.max(
+                index
+                    .checked_add(1)
+                    .ok_or_else(|| Error::Rpc("wallet address index overflow".to_string()))?,
+            );
+
+            let address = self.stored.addresses[position].address.clone();
+            let parsed_address = Address::from_base58(&address)?;
+            if !seen_addresses.insert(address.clone()) {
+                return Err(Error::Rpc(format!("duplicate wallet address {address}")));
+            }
+            let derived_address = self.derived_address(index)?;
+            if parsed_address != derived_address {
+                return Err(Error::Rpc(format!(
+                    "wallet address {address} does not match derived index {index}"
+                )));
+            }
+            self.stored.addresses[position].script_hash = Some(parsed_address.script_hash());
+        }
+        self.stored.next_index = self.stored.next_index.max(next_index);
+
+        let wallet_addresses = self
+            .stored
+            .addresses
+            .iter()
+            .map(|address| address.address.clone())
+            .collect::<BTreeSet<_>>();
+        for utxo in &mut self.stored.confirmed_utxos {
+            validate_loaded_utxo(utxo, true, &wallet_addresses)?;
+        }
+        for utxo in &mut self.stored.mempool_utxos {
+            validate_loaded_utxo(utxo, false, &wallet_addresses)?;
+        }
+        for outpoint in &self.stored.spent_outpoints {
+            validate_loaded_outpoint(outpoint)?;
+        }
+        if let Some(tip_hash) = &self.stored.last_tip_hash {
+            validate_hash_hex("wallet last_tip_hash", tip_hash)?;
+        }
+        Ok(())
     }
 }
 
@@ -1312,6 +1371,42 @@ fn parse_outpoints(value: Option<&Value>) -> Result<Vec<WalletOutPoint>, Error> 
         return Ok(Vec::new());
     };
     array.iter().map(parse_outpoint).collect()
+}
+
+fn validate_loaded_outpoint(outpoint: &WalletOutPoint) -> Result<(), Error> {
+    validate_hash_hex("wallet outpoint txid", &outpoint.txid)?;
+    Ok(())
+}
+
+fn validate_loaded_proof_ref(proof_ref: &WalletProofRef) -> Result<(), Error> {
+    validate_hash_hex("wallet proof ref txid", &proof_ref.txid)?;
+    if let Some(block_hash) = &proof_ref.block_hash {
+        validate_hash_hex("wallet proof ref block_hash", block_hash)?;
+    }
+    Ok(())
+}
+
+fn validate_loaded_utxo(
+    utxo: &mut WalletUtxo,
+    confirmed: bool,
+    wallet_addresses: &BTreeSet<String>,
+) -> Result<(), Error> {
+    validate_loaded_outpoint(&utxo.outpoint)?;
+    Address::from_base58(&utxo.address)?;
+    if !wallet_addresses.contains(&utxo.address) {
+        return Err(Error::Rpc(format!(
+            "persisted wallet UTXO uses non-wallet address {}",
+            utxo.address
+        )));
+    }
+    utxo.confirmed = confirmed;
+    for proof_ref in &utxo.proof_refs {
+        validate_loaded_proof_ref(proof_ref)?;
+    }
+    if let Some(leaf_hash) = &utxo.utreexo_leaf_hash {
+        validate_hash_hex("wallet UTXO leaf hash", leaf_hash)?;
+    }
+    Ok(())
 }
 
 fn parse_outpoint(value: &Value) -> Result<WalletOutPoint, Error> {
@@ -1994,6 +2089,76 @@ mod tests {
             reloaded.get_new_address().unwrap(),
             "3GfJ72KNjMfLBpQTw2pBxq9XPSg1"
         );
+    }
+
+    #[test]
+    fn open_rejects_tampered_address_index_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
+        wallet.get_new_address().unwrap();
+
+        let mut persisted: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        persisted["addresses"][0]["address"] = json!("XdVwC9EcS3AYYXVgLFswjwxXGrJ");
+        fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+
+        match NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            false,
+        ) {
+            Err(Error::Rpc(message)) => assert!(message.contains("does not match derived index")),
+            other => panic!("expected tampered address rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_rejects_persisted_non_wallet_utxos() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
+        let wallet_address = wallet.get_new_address().unwrap();
+        assert_ne!(wallet_address, "XdVwC9EcS3AYYXVgLFswjwxXGrJ");
+
+        let mut persisted: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        persisted["confirmed_utxos"] = json!([{
+            "outpoint": {
+                "txid": "bb".repeat(32),
+                "vout": 0
+            },
+            "address": "XdVwC9EcS3AYYXVgLFswjwxXGrJ",
+            "asset_id": "cc".repeat(32),
+            "amount": 42,
+            "confirmed": true,
+            "proof_refs": [],
+            "content_kind": "bitasset"
+        }]);
+        fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+
+        match NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            false,
+        ) {
+            Err(Error::Rpc(message)) => {
+                assert!(message.contains("persisted wallet UTXO uses non-wallet address"));
+            }
+            other => panic!("expected persisted non-wallet UTXO rejection, got {other:?}"),
+        }
     }
 
     #[cfg(unix)]
