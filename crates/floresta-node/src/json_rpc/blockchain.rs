@@ -243,15 +243,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
         let latest_block_time = latest_header.time;
-        let leaf_count = self.chain.acc().leaves as u32;
-        let root_count = self.chain.acc().roots.len() as u32;
-        let root_hashes = self
-            .chain
-            .acc()
-            .roots
-            .into_iter()
-            .map(|r| r.to_string())
-            .collect();
+        let acc = self.chain.get_acc(None).map_err(|_| JsonRpcError::Chain)?;
+        let leaf_count = acc.leaves as u32;
+        let root_count = acc.roots.len() as u32;
+        let root_hashes = acc.roots.into_iter().map(|r| r.to_string()).collect();
 
         let validated_blocks = self.chain.get_validation_index().unwrap();
 

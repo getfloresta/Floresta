@@ -450,7 +450,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn acc(&self) -> Stump {
+        fn get_acc(&self, _block: Option<BlockHash>) -> Result<Stump, Self::Error> {
             unimplemented!()
         }
     }

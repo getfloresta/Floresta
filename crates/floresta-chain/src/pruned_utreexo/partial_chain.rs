@@ -273,10 +273,6 @@ impl UpdatableChainstate for PartialChainState {
         self.inner().current_acc.roots.clone()
     }
 
-    fn get_acc(&self) -> Stump {
-        self.inner().current_acc.clone()
-    }
-
     //these are no-ops, you can call them, but they won't do anything
 
     fn flush(&self) -> Result<(), BlockchainError> {
@@ -333,8 +329,8 @@ impl BlockchainInterface for PartialChainState {
         self.inner().chain_params().params
     }
 
-    fn acc(&self) -> Stump {
-        self.inner().current_acc.clone()
+    fn get_acc(&self, _block: Option<BlockHash>) -> Result<Stump, Self::Error> {
+        Ok(self.inner().current_acc.clone())
     }
 
     fn get_height(&self) -> Result<u32, Self::Error> {
