@@ -1164,8 +1164,8 @@ impl NativeBitAssetsWallet {
             .map(ToOwned::to_owned);
         let next_tip_height = update
             .get("tip_height")
-            .and_then(Value::as_u64)
-            .and_then(|height| u32::try_from(height).ok());
+            .map(|height| parse_u32_field(height, "tip_height"))
+            .transpose()?;
         validate_monotonic_tip(
             self.stored.last_tip_height,
             self.stored.last_tip_hash.as_deref(),
@@ -1178,21 +1178,23 @@ impl NativeBitAssetsWallet {
             .into_iter()
             .chain(parse_outpoints(update.get("mempool_spent_outpoints"))?)
             .collect::<BTreeSet<_>>();
+        let confirmed_created = parse_utxos(
+            update.get("created_utxos"),
+            true,
+            &proof_refs,
+            Some(&utreexo_view),
+        )?;
+        let mempool_created = parse_utxos(update.get("mempool_created_utxos"), false, &[], None)?;
+
         self.stored
             .confirmed_utxos
             .retain(|utxo| !spent.contains(&utxo.outpoint));
         self.stored.spent_outpoints = spent.iter().cloned().collect();
 
-        for utxo in parse_utxos(
-            update.get("created_utxos"),
-            true,
-            &proof_refs,
-            Some(&utreexo_view),
-        )? {
+        for utxo in confirmed_created {
             upsert_utxo(&mut self.stored.confirmed_utxos, utxo);
         }
-        self.stored.mempool_utxos =
-            parse_utxos(update.get("mempool_created_utxos"), false, &[], None)?;
+        self.stored.mempool_utxos = mempool_created;
         self.stored.last_tip_hash = next_tip_hash;
         self.stored.last_tip_height = next_tip_height;
         Ok(())
@@ -1293,7 +1295,7 @@ fn validate_monotonic_tip(
 }
 
 fn parse_outpoints(value: Option<&Value>) -> Result<Vec<WalletOutPoint>, Error> {
-    let Some(array) = value.and_then(Value::as_array) else {
+    let Some(array) = optional_array(value, "outpoints")? else {
         return Ok(Vec::new());
     };
     array.iter().map(parse_outpoint).collect()
@@ -1313,10 +1315,34 @@ fn parse_outpoint(value: &Value) -> Result<WalletOutPoint, Error> {
         .and_then(Value::as_u64)
         .ok_or_else(|| Error::Rpc("regular outpoint missing vout".to_string()))?;
     Ok(WalletOutPoint {
-        txid,
+        txid: validate_hash_hex("regular outpoint txid", &txid)?,
         vout: u32::try_from(vout)
             .map_err(|_| Error::Rpc("regular outpoint vout overflow".to_string()))?,
     })
+}
+
+fn optional_array<'a>(
+    value: Option<&'a Value>,
+    field_name: &str,
+) -> Result<Option<&'a Vec<Value>>, Error> {
+    match value {
+        None => Ok(None),
+        Some(Value::Array(array)) => Ok(Some(array)),
+        Some(_) => Err(Error::Rpc(format!("{field_name} must be an array"))),
+    }
+}
+
+fn parse_u32_field(value: &Value, field_name: &str) -> Result<u32, Error> {
+    let value = value
+        .as_u64()
+        .ok_or_else(|| Error::Rpc(format!("{field_name} must be a u32")))?;
+    u32::try_from(value).map_err(|_| Error::Rpc(format!("{field_name} overflow")))
+}
+
+fn validate_hash_hex(field_name: &str, value: &str) -> Result<String, Error> {
+    Hash::from_hex(value)
+        .map_err(|err| Error::Rpc(format!("{field_name} must be 32-byte hex: {err}")))?;
+    Ok(value.to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -1363,9 +1389,7 @@ fn parse_utreexo_view(update: &Value) -> Result<UtreexoView, Error> {
                 .and_then(parse_node_hash)
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let proofs = update
-        .get("utreexo_proofs")
-        .and_then(Value::as_array)
+    let proofs = optional_array(update.get("utreexo_proofs"), "utreexo_proofs")?
         .map(|proofs| {
             proofs
                 .iter()
@@ -1600,7 +1624,7 @@ fn parse_utxos(
     proof_refs: &[WalletProofRef],
     utreexo_view: Option<&UtreexoView>,
 ) -> Result<Vec<WalletUtxo>, Error> {
-    let Some(array) = value.and_then(Value::as_array) else {
+    let Some(array) = optional_array(value, "utxos")? else {
         return Ok(Vec::new());
     };
     array
@@ -1706,7 +1730,7 @@ fn validate_confirmed_proof_refs(
 }
 
 fn parse_proof_refs(value: Option<&Value>) -> Result<Vec<WalletProofRef>, Error> {
-    let Some(array) = value.and_then(Value::as_array) else {
+    let Some(array) = optional_array(value, "proof_refs")? else {
         return Ok(Vec::new());
     };
     array
@@ -1717,27 +1741,34 @@ fn parse_proof_refs(value: Option<&Value>) -> Result<Vec<WalletProofRef>, Error>
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::Rpc("proof ref missing txid".to_string()))?
                 .to_string();
-            let bmm_inclusions = proof
-                .get("bmm_inclusions")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
+            let bmm_inclusions =
+                optional_array(proof.get("bmm_inclusions"), "proof ref bmm_inclusions")?
+                    .map(|items| {
+                        items
+                            .iter()
+                            .map(|item| {
+                                item.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                                    Error::Rpc(
+                                        "proof ref bmm_inclusions items must be strings"
+                                            .to_string(),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, Error>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
             Ok(WalletProofRef {
-                txid,
+                txid: validate_hash_hex("proof ref txid", &txid)?,
                 block_hash: proof
                     .get("block_hash")
                     .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
+                    .map(|hash| validate_hash_hex("proof ref block_hash", hash))
+                    .transpose()?,
                 sidechain_block_height: proof
                     .get("sidechain_block_height")
-                    .and_then(Value::as_u64)
-                    .and_then(|height| u32::try_from(height).ok()),
+                    .map(|height| parse_u32_field(height, "proof ref sidechain_block_height"))
+                    .transpose()?,
                 bmm_inclusions,
                 best_main_verification: proof
                     .get("best_main_verification")
@@ -2396,6 +2427,60 @@ mod tests {
         match wallet.apply_update(&update) {
             Err(Error::StaleUpdate(message)) => assert!(message.contains("tip hash changed")),
             other => panic!("expected stale update rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_update_rejects_malformed_payload_before_mutating_wallet() {
+        let mut wallet = native_test_wallet();
+        let utxo = test_bitasset_utxo(0xaa, 0, 10);
+        wallet.stored.confirmed_utxos = vec![utxo.clone()];
+
+        let update = json!({
+            "tip_height": 10,
+            "tip_hash": "aa".repeat(32),
+            "utreexo_leaf_count": 0,
+            "utreexo_roots": [],
+            "spent_outpoints": [{
+                "Regular": {
+                    "txid": utxo.outpoint.txid,
+                    "vout": utxo.outpoint.vout
+                }
+            }],
+            "created_utxos": {"unexpected": "object"},
+        });
+
+        match wallet.apply_update(&update) {
+            Err(Error::Rpc(message)) => assert!(message.contains("utxos must be an array")),
+            other => panic!("expected malformed update rejection, got {other:?}"),
+        }
+        assert_eq!(wallet.stored.confirmed_utxos.len(), 1);
+        assert!(wallet.stored.spent_outpoints.is_empty());
+        assert_eq!(wallet.stored.last_tip_height, None);
+    }
+
+    #[test]
+    fn apply_update_rejects_malformed_proof_metadata() {
+        let mut wallet = native_test_wallet();
+        let update = json!({
+            "tip_height": 10,
+            "tip_hash": "aa".repeat(32),
+            "proof_refs": [{
+                "txid": "bb".repeat(32),
+                "block_hash": "cc".repeat(32),
+                "sidechain_block_height": 7,
+                "bmm_inclusions": ["valid", 7],
+                "best_main_verification": "verified"
+            }],
+            "utreexo_leaf_count": 0,
+            "utreexo_roots": [],
+        });
+
+        match wallet.apply_update(&update) {
+            Err(Error::Rpc(message)) => {
+                assert!(message.contains("proof ref bmm_inclusions items must be strings"));
+            }
+            other => panic!("expected malformed proof metadata rejection, got {other:?}"),
         }
     }
 
