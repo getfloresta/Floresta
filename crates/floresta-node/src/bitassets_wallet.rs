@@ -44,6 +44,8 @@ pub enum Error {
     Rpc(String),
     #[error("native wallet seed must be exactly 64 bytes, got {0}")]
     SeedLength(usize),
+    #[error("stale native BitAssets wallet update: {0}")]
+    StaleUpdate(String),
     #[error("invalid native wallet BitAssets Utreexo proof for {0}")]
     UtreexoProof(String),
 }
@@ -1156,6 +1158,20 @@ impl NativeBitAssetsWallet {
     }
 
     fn apply_update(&mut self, update: &Value) -> Result<(), Error> {
+        let next_tip_hash = update
+            .get("tip_hash")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let next_tip_height = update
+            .get("tip_height")
+            .and_then(Value::as_u64)
+            .and_then(|height| u32::try_from(height).ok());
+        validate_monotonic_tip(
+            self.stored.last_tip_height,
+            self.stored.last_tip_hash.as_deref(),
+            next_tip_height,
+            next_tip_hash.as_deref(),
+        )?;
         let proof_refs = parse_proof_refs(update.get("proof_refs"))?;
         let utreexo_view = parse_utreexo_view(update)?;
         let spent = parse_outpoints(update.get("spent_outpoints"))?
@@ -1177,14 +1193,8 @@ impl NativeBitAssetsWallet {
         }
         self.stored.mempool_utxos =
             parse_utxos(update.get("mempool_created_utxos"), false, &[], None)?;
-        self.stored.last_tip_hash = update
-            .get("tip_hash")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        self.stored.last_tip_height = update
-            .get("tip_height")
-            .and_then(Value::as_u64)
-            .and_then(|height| u32::try_from(height).ok());
+        self.stored.last_tip_hash = next_tip_hash;
+        self.stored.last_tip_height = next_tip_height;
         Ok(())
     }
 
@@ -1254,6 +1264,32 @@ fn decode_seed(seed_hex: &str) -> Result<[u8; 64], Error> {
     bytes
         .try_into()
         .map_err(|_: Vec<u8>| Error::SeedLength(len))
+}
+
+fn validate_monotonic_tip(
+    current_height: Option<u32>,
+    current_hash: Option<&str>,
+    next_height: Option<u32>,
+    next_hash: Option<&str>,
+) -> Result<(), Error> {
+    let (Some(current_height), Some(next_height)) = (current_height, next_height) else {
+        return Ok(());
+    };
+    if next_height < current_height {
+        return Err(Error::StaleUpdate(format!(
+            "tip height regressed from {current_height} to {next_height}"
+        )));
+    }
+    if next_height == current_height {
+        if let (Some(current_hash), Some(next_hash)) = (current_hash, next_hash) {
+            if current_hash != next_hash {
+                return Err(Error::StaleUpdate(format!(
+                    "tip hash changed at height {current_height}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_outpoints(value: Option<&Value>) -> Result<Vec<WalletOutPoint>, Error> {
@@ -2321,6 +2357,46 @@ mod tests {
             remaining.outpoint
         );
         assert_eq!(wallet.stored.spent_outpoints, vec![selected.outpoint]);
+    }
+
+    #[test]
+    fn apply_update_rejects_regressing_tip_before_mutating_wallet() {
+        let mut wallet = native_test_wallet();
+        let utxo = test_bitasset_utxo(0xaa, 0, 10);
+        wallet.stored.confirmed_utxos = vec![utxo.clone()];
+        wallet.stored.last_tip_height = Some(9);
+        wallet.stored.last_tip_hash = Some("99".repeat(32));
+
+        let update = json!({
+            "tip_height": 8,
+            "tip_hash": "88".repeat(32),
+            "spent_outpoints": [{"Regular": {"txid": utxo.outpoint.txid, "vout": utxo.outpoint.vout}}],
+        });
+
+        match wallet.apply_update(&update) {
+            Err(Error::StaleUpdate(message)) => assert!(message.contains("regressed")),
+            other => panic!("expected stale update rejection, got {other:?}"),
+        }
+        assert_eq!(wallet.stored.confirmed_utxos.len(), 1);
+        assert!(wallet.stored.spent_outpoints.is_empty());
+        assert_eq!(wallet.stored.last_tip_height, Some(9));
+    }
+
+    #[test]
+    fn apply_update_rejects_conflicting_tip_hash_at_same_height() {
+        let mut wallet = native_test_wallet();
+        wallet.stored.last_tip_height = Some(9);
+        wallet.stored.last_tip_hash = Some("99".repeat(32));
+
+        let update = json!({
+            "tip_height": 9,
+            "tip_hash": "88".repeat(32),
+        });
+
+        match wallet.apply_update(&update) {
+            Err(Error::StaleUpdate(message)) => assert!(message.contains("tip hash changed")),
+            other => panic!("expected stale update rejection, got {other:?}"),
+        }
     }
 
     fn assert_zero_fee_rejected(result: Result<Value, Error>) {
