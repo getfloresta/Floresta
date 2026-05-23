@@ -55,7 +55,7 @@ const MAX_TREE_DEPTH: usize = 64;
 /// elements that each proof requires, in a tree with `MAX_TREE_DEPTH` depth.
 pub const MAX_PROOF_HASHES: usize = MAX_INPUTS_PER_BLOCK * MAX_TREE_DEPTH;
 
-/// Maximum serialized size of a [`TipProof`] in bytes.
+/// Maximum serialized size of a `TipProof` in bytes.
 ///
 /// Accounts for every field in the serialized format:
 /// block hash (32) + targets (varint count + varints) + proof hashes
@@ -565,6 +565,8 @@ mod utreexo_proof_tests {
 
 #[cfg(test)]
 mod tip_proof_tests {
+    use bitcoin::consensus::DecodeError;
+    use bitcoin::consensus::encode::FromHexError;
     use bitcoin::consensus::encode::deserialize_hex;
 
     use super::*;
@@ -600,7 +602,10 @@ mod tip_proof_tests {
         // trailing data to prevent accepting malformed or padded proofs.
         let hex = format!("{}ff", TIP_PROOF_HEX);
         let result: Result<TipProof, _> = deserialize_hex(&hex);
-        assert!(result.is_err());
+        assert!(
+            matches!(result, Err(FromHexError::Decode(DecodeError::TooManyBytes))),
+            "expected TooManyBytes error for trailing bytes, got: {result:?}"
+        );
     }
 
     #[test]
@@ -608,8 +613,15 @@ mod tip_proof_tests {
         // Only the 32-byte block hash with no targets or hashes.
         // The parser must fail gracefully instead of panicking on missing data.
         let result: Result<TipProof, _> = deserialize_hex(TIP_PROOF_BLOCK_HASH_HEX);
-
-        assert!(result.is_err());
+        assert!(
+            matches!(
+                result,
+                Err(FromHexError::Decode(DecodeError::Consensus(
+                    bitcoin::consensus::encode::Error::Io(_)
+                )))
+            ),
+            "expected Io error for truncated input, got: {result:?}"
+        );
     }
 
     #[test]
@@ -618,17 +630,33 @@ mod tip_proof_tests {
         // (one over MAX_INPUTS_PER_BLOCK = 24,386). read_bounded_len must reject it.
         let hex = format!("{}fd435f", TIP_PROOF_BLOCK_HASH_HEX);
         let result: Result<TipProof, _> = deserialize_hex(&hex);
-        assert!(result.is_err());
+        assert!(
+            matches!(
+                result,
+                Err(FromHexError::Decode(DecodeError::Consensus(
+                    bitcoin::consensus::encode::Error::OversizedVectorAllocation { .. }
+                )))
+            ),
+            "expected OversizedVectorAllocation error for oversized targets, got: {result:?}"
+        );
     }
 
     #[test]
     fn test_tip_proof_oversized_proven() {
         // 32-byte block hash + varint(0) targets + varint(0) proof hashes
         // + u32 LE claiming 24,387 proven hashes (one over MAX_INPUTS_PER_BLOCK).
-        // The manual bound check on num_proven must reject it.
+        // The bound check on num_proven must reject it.
         let hex = format!("{}0000435f0000", TIP_PROOF_BLOCK_HASH_HEX);
         let result: Result<TipProof, _> = deserialize_hex(&hex);
-        assert!(result.is_err());
+        assert!(
+            matches!(
+                result,
+                Err(FromHexError::Decode(DecodeError::Consensus(
+                    bitcoin::consensus::encode::Error::ParseFailed(_)
+                )))
+            ),
+            "expected ParseFailed error for oversized proven, got: {result:?}"
+        );
     }
 
     #[test]
@@ -646,6 +674,14 @@ mod tip_proof_tests {
     fn test_tip_proof_empty_input() {
         // Completely empty input — not even a block hash.
         let result: Result<TipProof, _> = deserialize_hex("");
-        assert!(result.is_err());
+        assert!(
+            matches!(
+                result,
+                Err(FromHexError::Decode(DecodeError::Consensus(
+                    bitcoin::consensus::encode::Error::Io(_)
+                )))
+            ),
+            "expected Io error for empty input, got: {result:?}"
+        );
     }
 }
