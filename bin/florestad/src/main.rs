@@ -95,6 +95,8 @@ fn main() {
         #[cfg(feature = "bitassets")]
         enable_bitassets_native_wallet: params.enable_bitassets_native_wallet,
         #[cfg(feature = "bitassets")]
+        allow_remote_bitassets_native_wallet_rpc: params.allow_remote_bitassets_native_wallet_rpc,
+        #[cfg(feature = "bitassets")]
         bitassets_wallet_create: params.bitassets_wallet_create,
         #[cfg(feature = "bitassets")]
         bitassets_wallet_seed: params.bitassets_wallet_seed,

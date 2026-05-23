@@ -152,6 +152,11 @@ pub struct Cli {
 
     #[cfg(feature = "bitassets")]
     #[arg(long, default_value_t = false)]
+    /// Allow native BitAssets wallet signing RPC methods on non-loopback JSON-RPC binds.
+    pub allow_remote_bitassets_native_wallet_rpc: bool,
+
+    #[cfg(feature = "bitassets")]
+    #[arg(long, default_value_t = false)]
     /// Create the native BitAssets wallet if it does not already exist.
     pub bitassets_wallet_create: bool,
 

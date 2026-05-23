@@ -292,6 +292,10 @@ pub struct Config {
     pub enable_bitassets_native_wallet: bool,
 
     #[cfg(feature = "bitassets")]
+    /// Allow native BitAssets wallet signing RPC methods on non-loopback JSON-RPC binds.
+    pub allow_remote_bitassets_native_wallet_rpc: bool,
+
+    #[cfg(feature = "bitassets")]
     /// Whether to create the native BitAssets wallet if missing.
     pub bitassets_wallet_create: bool,
 
@@ -378,6 +382,8 @@ impl Config {
             bitassets_rpc_refresh_seconds: None,
             #[cfg(feature = "bitassets")]
             enable_bitassets_native_wallet: false,
+            #[cfg(feature = "bitassets")]
+            allow_remote_bitassets_native_wallet_rpc: false,
             #[cfg(feature = "bitassets")]
             bitassets_wallet_create: false,
             #[cfg(feature = "bitassets")]
@@ -649,6 +655,23 @@ impl Florestad {
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
         {
+            let json_rpc_address = self
+                .config
+                .json_rpc_address
+                .as_ref()
+                .map(|x| Self::resolve_hostname(x, 8332))
+                .transpose()?;
+            #[cfg(feature = "bitassets")]
+            if self.config.enable_bitassets_native_wallet
+                && !native_wallet_json_rpc_exposure_allowed(
+                    json_rpc_address.as_ref(),
+                    self.config.allow_remote_bitassets_native_wallet_rpc,
+                )
+            {
+                return Err(FlorestadError::CouldNotSetupBitAssetsWallet(
+                    "--enable-bitassets-native-wallet exposes signing RPC methods; bind JSON-RPC to loopback or pass --allow-remote-bitassets-native-wallet-rpc".to_string(),
+                ));
+            }
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
                 blockchain_state.clone(),
                 wallet.clone(),
@@ -656,11 +679,7 @@ impl Florestad {
                 self.stop_signal.clone(),
                 self.config.network,
                 cfilters.clone(),
-                self.config
-                    .json_rpc_address
-                    .as_ref()
-                    .map(|x| Self::resolve_hostname(x, 8332))
-                    .transpose()?,
+                json_rpc_address,
                 datadir
                     .join("debug.log")
                     .to_str()
@@ -1770,6 +1789,17 @@ impl From<Config> for Florestad {
     }
 }
 
+#[cfg(all(feature = "bitassets", feature = "json-rpc"))]
+fn native_wallet_json_rpc_exposure_allowed(
+    bind_address: Option<&SocketAddr>,
+    allow_remote: bool,
+) -> bool {
+    allow_remote
+        || bind_address
+            .map(|address| address.ip().is_loopback())
+            .unwrap_or(true)
+}
+
 #[cfg(all(test, feature = "bitassets"))]
 mod tests {
     use super::*;
@@ -1791,6 +1821,29 @@ mod tests {
     fn sample_txid(byte: u8) -> Txid {
         let hex = format!("{byte:02x}").repeat(32);
         hex.parse().expect("valid txid")
+    }
+
+    #[cfg(feature = "json-rpc")]
+    #[test]
+    fn native_wallet_json_rpc_requires_loopback_unless_explicitly_allowed() {
+        let loopback = "127.0.0.1:8332".parse().unwrap();
+        let wildcard = "0.0.0.0:8332".parse().unwrap();
+        let remote = "192.168.1.10:8332".parse().unwrap();
+
+        assert!(native_wallet_json_rpc_exposure_allowed(None, false));
+        assert!(native_wallet_json_rpc_exposure_allowed(
+            Some(&loopback),
+            false
+        ));
+        assert!(!native_wallet_json_rpc_exposure_allowed(
+            Some(&wildcard),
+            false
+        ));
+        assert!(!native_wallet_json_rpc_exposure_allowed(
+            Some(&remote),
+            false
+        ));
+        assert!(native_wallet_json_rpc_exposure_allowed(Some(&remote), true));
     }
 
     #[test]
