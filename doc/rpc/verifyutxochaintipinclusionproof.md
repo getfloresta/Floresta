@@ -66,7 +66,7 @@ floresta-cli verifyutxochaintipinclusionproof "7be8d37f...c9" 1
 - `JsonRpcError::Decode` - Malformed proof: too large, too short, truncated data, invalid varints, or trailing bytes.
 - `JsonRpcError::InvalidProof` - Well-formed proof but invalid: stale (wrong block height) or cryptographic verification failed.
 - `JsonRpcError::InvalidVerbosityLevel` - Verbosity value is not 0 or 1.
-- `JsonRpcErrer::UnkownUtreexoAcc` - A block without known utreexo acc was requested.
+- `JsonRpcError::UnknownUtreexoAcc` - A block without known utreexo acc was requested.
 
 ## Notes
 
