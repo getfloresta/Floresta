@@ -38,7 +38,7 @@ pub enum Error {
     NoWalletUtxo(String),
     #[error("BitAssets native wallet has no address for input {0}")]
     NoSigningAddress(String),
-    #[error("JSON error")]
+    #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("BitAssets RPC error: {0}")]
     Rpc(String),

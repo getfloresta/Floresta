@@ -23,14 +23,7 @@ pub struct EmbeddedBitAssetsWallet {
 
 impl EmbeddedBitAssetsWallet {
     pub fn open(config: EmbeddedWalletConfig) -> Result<Self, Error> {
-        Ok(Self {
-            wallet: NativeBitAssetsWallet::open(
-                config.path,
-                config.rpc_url,
-                config.seed_hex.as_deref(),
-                config.create,
-            )?,
-        })
+        Self::open_with_seed_storage(config)
     }
 
     pub fn open_with_seed_storage(config: EmbeddedWalletConfig) -> Result<Self, Error> {
@@ -175,6 +168,7 @@ fn default_persist_seed() -> bool {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TransferParams {
     #[serde(alias = "destinationAddress")]
     destination_address: String,
@@ -188,6 +182,7 @@ struct TransferParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReserveParams {
     name: String,
     #[serde(default, alias = "feeSats")]
@@ -195,6 +190,7 @@ struct ReserveParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RegisterParams {
     name: String,
     #[serde(alias = "initialSupply")]
@@ -206,6 +202,7 @@ struct RegisterParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AmmMintParams {
     asset0: String,
     asset1: String,
@@ -218,6 +215,7 @@ struct AmmMintParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AmmSwapParams {
     #[serde(alias = "assetSpend")]
     asset_spend: String,
@@ -232,6 +230,7 @@ struct AmmSwapParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AmmBurnParams {
     asset0: String,
     asset1: String,
@@ -244,6 +243,7 @@ struct AmmBurnParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DutchAuctionCreateParams {
     #[serde(default, alias = "startBlock")]
     start_block: u32,
@@ -263,6 +263,7 @@ struct DutchAuctionCreateParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DutchAuctionBidParams {
     #[serde(alias = "auctionId")]
     auction_id: String,
@@ -279,6 +280,7 @@ struct DutchAuctionBidParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DutchAuctionCollectParams {
     #[serde(alias = "auctionId")]
     auction_id: String,
@@ -336,6 +338,47 @@ mod tests {
         .unwrap();
 
         assert!(!config.persist_seed);
+    }
+
+    #[test]
+    fn mobile_open_honors_persist_seed_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = EmbeddedBitAssetsWallet::open(EmbeddedWalletConfig {
+            path: path.clone(),
+            rpc_url: "http://127.0.0.1:6004".to_string(),
+            seed_hex: Some(ZERO_SEED.to_string()),
+            create: true,
+            persist_seed: false,
+        })
+        .unwrap();
+        wallet.get_new_address().unwrap();
+
+        let persisted = std::fs::read_to_string(&path).unwrap();
+        assert!(persisted.contains("\"seed_hex\": \"\""));
+        assert!(!persisted.contains(ZERO_SEED));
+    }
+
+    #[test]
+    fn mobile_action_params_reject_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wallet = EmbeddedBitAssetsWallet::open(EmbeddedWalletConfig {
+            path: dir.path().join("wallet.json"),
+            rpc_url: "http://127.0.0.1:6004".to_string(),
+            seed_hex: Some(ZERO_SEED.to_string()),
+            create: true,
+            persist_seed: false,
+        })
+        .unwrap();
+
+        let err = wallet
+            .reserve_json(r#"{"name":"asset-a","unexpectedDebugField":true}"#)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "unexpected error: {err}"
+        );
+        assert!(err.to_string().contains("unexpectedDebugField"));
     }
 
     #[test]
