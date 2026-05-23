@@ -147,7 +147,7 @@ pub trait BlockchainInterface {
     /// Returns this chain's params
     fn get_params(&self) -> bitcoin::params::Params;
 
-    /// Returns the acc for the current tip. For arbitray accumulator retrieval, see `get_acc`.
+    /// Returns the acc for the current tip. For arbitrary accumulator retrieval, see `get_acc`.
     fn get_tip_acc(&self) -> Stump;
 
     /// Returns the acc for the given block. If you only needs the tip accumulator, see `get_tip_acc`.
