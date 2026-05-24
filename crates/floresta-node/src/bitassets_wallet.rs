@@ -731,12 +731,11 @@ impl NativeBitAssetsWallet {
         let bitasset_id = BitAssetId(name_hash);
         let mut selected = None;
         let mut revealed_nonce = None;
-        for utxo in self
-            .stored
-            .confirmed_utxos
-            .iter()
-            .filter(|utxo| utxo.content_kind == "reservation")
-        {
+        for utxo in self.stored.confirmed_utxos.iter().filter(|utxo| {
+            utxo.content_kind == "reservation"
+                && !self.stored.spent_outpoints.contains(&utxo.outpoint)
+        }) {
+            self.ensure_spendable_confirmed_utxo(utxo)?;
             let Some(commitment) = utxo.reservation_commitment.as_deref() else {
                 continue;
             };
@@ -1078,6 +1077,7 @@ impl NativeBitAssetsWallet {
         for utxo in self.stored.confirmed_utxos.iter().filter(|utxo| {
             utxo.asset_id == key && !self.stored.spent_outpoints.contains(&utxo.outpoint)
         }) {
+            self.ensure_spendable_confirmed_utxo(utxo)?;
             selected.push(utxo.clone());
             total = total
                 .checked_add(utxo.amount)
@@ -1110,6 +1110,7 @@ impl NativeBitAssetsWallet {
                 && utxo.lp_asset1.as_deref() == Some(asset1)
                 && !self.stored.spent_outpoints.contains(&utxo.outpoint)
         }) {
+            self.ensure_spendable_confirmed_utxo(utxo)?;
             selected.push(utxo.clone());
             total = total
                 .checked_add(utxo.amount)
@@ -1129,7 +1130,8 @@ impl NativeBitAssetsWallet {
     }
 
     fn select_auction_receipt(&self, auction_id: &str) -> Result<WalletUtxo, Error> {
-        self.stored
+        let utxo = self
+            .stored
             .confirmed_utxos
             .iter()
             .find(|utxo| {
@@ -1137,8 +1139,22 @@ impl NativeBitAssetsWallet {
                     && utxo.auction_id.as_deref() == Some(auction_id)
                     && !self.stored.spent_outpoints.contains(&utxo.outpoint)
             })
-            .cloned()
-            .ok_or_else(|| Error::NoWalletUtxo(format!("auction receipt {auction_id}")))
+            .ok_or_else(|| Error::NoWalletUtxo(format!("auction receipt {auction_id}")))?;
+        self.ensure_spendable_confirmed_utxo(utxo)?;
+        Ok(utxo.clone())
+    }
+
+    fn ensure_spendable_confirmed_utxo(&self, utxo: &WalletUtxo) -> Result<(), Error> {
+        if !utxo.confirmed {
+            return Err(Error::UtreexoProof(format_outpoint(&utxo.outpoint)));
+        }
+        validate_confirmed_proof_refs(&utxo.outpoint, &utxo.proof_refs)?;
+        let leaf_hash = utxo
+            .utreexo_leaf_hash
+            .as_deref()
+            .ok_or_else(|| Error::UtreexoProof(format_outpoint(&utxo.outpoint)))?;
+        validate_hash_hex("wallet UTXO leaf hash", leaf_hash)?;
+        Ok(())
     }
 
     fn push_change(
@@ -2676,16 +2692,23 @@ mod tests {
     }
 
     fn test_bitasset_utxo(byte: u8, vout: u32, amount: u64) -> WalletUtxo {
+        let txid = format!("{byte:02x}").repeat(32);
         WalletUtxo {
             outpoint: WalletOutPoint {
-                txid: format!("{byte:02x}").repeat(32),
+                txid: txid.clone(),
                 vout,
             },
             address: "46wMdKN8vRVCHCKw77eqsRkpc6yT".to_string(),
             asset_id: "11".repeat(32),
             amount,
             confirmed: true,
-            proof_refs: Vec::new(),
+            proof_refs: vec![WalletProofRef {
+                txid,
+                block_hash: Some("33".repeat(32)),
+                sidechain_block_height: Some(7),
+                bmm_inclusions: vec!["bmm-inclusion-1".to_string()],
+                best_main_verification: Some("verified".to_string()),
+            }],
             utreexo_leaf_hash: Some("22".repeat(32)),
             content_kind: "bitasset".to_string(),
             reservation_txid: None,
@@ -2711,6 +2734,22 @@ mod tests {
         assert_eq!(total, 10);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].outpoint, spendable.outpoint);
+    }
+
+    #[test]
+    fn wallet_selection_rejects_unproven_confirmed_utxos() {
+        let mut wallet = native_test_wallet();
+        let mut unproven = test_bitasset_utxo(0xaa, 0, 10);
+        unproven.proof_refs.clear();
+        unproven.utreexo_leaf_hash = None;
+        wallet.stored.confirmed_utxos = vec![unproven.clone()];
+
+        match wallet.select_wallet_utxos(&parse_asset_id(&"11".repeat(32)).unwrap(), 10) {
+            Err(Error::UtreexoProof(outpoint)) => {
+                assert!(outpoint.contains(&unproven.outpoint.txid))
+            }
+            other => panic!("expected unproven UTXO rejection, got {other:?}"),
+        }
     }
 
     #[test]
