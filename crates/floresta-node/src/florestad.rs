@@ -1823,6 +1823,79 @@ mod tests {
         hex.parse().expect("valid txid")
     }
 
+    #[cfg(feature = "bitassets")]
+    fn test_native_bitassets_wallet() -> Arc<tokio::sync::Mutex<NativeBitAssetsWallet>> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("florestad-native-bitassets-wallet-{nanos}"));
+        fs::create_dir_all(&dir).expect("create wallet temp dir");
+        let wallet_path = dir.join(BITASSETS_WALLET_FILE);
+        fs::write(&wallet_path, "").ok();
+        fs::remove_file(&wallet_path).ok();
+        Arc::new(tokio::sync::Mutex::new(
+            NativeBitAssetsWallet::open_with_seed_storage(
+                wallet_path,
+                "http://127.0.0.1:6004".to_string(),
+                Some(concat!(
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                )),
+                true,
+                false,
+            )
+            .expect("open native BitAssets wallet"),
+        ))
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[test]
+    fn native_bitassets_quic_url_defaults_to_rpc_port_plus_100() {
+        assert_eq!(
+            Florestad::default_bitassets_quic_url("http://127.0.0.1:6004"),
+            Some("127.0.0.1:6104".to_string())
+        );
+        assert_eq!(
+            Florestad::default_bitassets_quic_url("https://bitassets.local:18443/rpc"),
+            Some("bitassets.local:18543".to_string())
+        );
+        assert_eq!(Florestad::default_bitassets_quic_url("unix:/tmp/rpc"), None);
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[tokio::test]
+    async fn native_bitassets_quic_message_surfaces_server_errors() {
+        let err = Florestad::apply_native_bitassets_quic_message(
+            test_native_bitassets_wallet(),
+            br#"{"type":"error","message":"resync from snapshot"}"#,
+        )
+        .await
+        .expect_err("server error message must be surfaced");
+
+        assert_eq!(err, "resync from snapshot");
+    }
+
+    #[cfg(feature = "bitassets")]
+    #[tokio::test]
+    async fn native_bitassets_quic_message_rejects_unknown_or_incomplete_messages() {
+        let err = Florestad::apply_native_bitassets_quic_message(
+            test_native_bitassets_wallet(),
+            br#"{"type":"wat"}"#,
+        )
+        .await
+        .expect_err("unknown message types must be rejected");
+        assert!(err.contains("unknown QUIC message type"));
+
+        let err = Florestad::apply_native_bitassets_quic_message(
+            test_native_bitassets_wallet(),
+            br#"{"type":"confirmed"}"#,
+        )
+        .await
+        .expect_err("confirmed messages must include update payloads");
+        assert!(err.contains("confirmed message missing update"));
+    }
+
     #[cfg(feature = "json-rpc")]
     #[test]
     fn native_wallet_json_rpc_requires_loopback_unless_explicitly_allowed() {
