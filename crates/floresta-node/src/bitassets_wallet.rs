@@ -1430,7 +1430,16 @@ fn validate_loaded_utxo(
     for proof_ref in &utxo.proof_refs {
         validate_loaded_proof_ref(proof_ref)?;
     }
-    if let Some(leaf_hash) = &utxo.utreexo_leaf_hash {
+    if confirmed {
+        validate_confirmed_proof_refs(&utxo.outpoint, &utxo.proof_refs)?;
+        let leaf_hash = utxo.utreexo_leaf_hash.as_deref().ok_or_else(|| {
+            Error::UtreexoProof(format!(
+                "{} missing persisted leaf hash",
+                format_outpoint(&utxo.outpoint)
+            ))
+        })?;
+        validate_hash_hex("wallet UTXO leaf hash", leaf_hash)?;
+    } else if let Some(leaf_hash) = &utxo.utreexo_leaf_hash {
         validate_hash_hex("wallet UTXO leaf hash", leaf_hash)?;
     }
     Ok(())
@@ -2214,6 +2223,94 @@ mod tests {
                 assert!(message.contains("persisted wallet UTXO uses non-wallet address"));
             }
             other => panic!("expected persisted non-wallet UTXO rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_rejects_persisted_confirmed_utxo_without_proofs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
+        let wallet_address = wallet.get_new_address().unwrap();
+
+        let mut persisted: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        persisted["confirmed_utxos"] = json!([{
+            "outpoint": {
+                "txid": "bb".repeat(32),
+                "vout": 0
+            },
+            "address": wallet_address,
+            "asset_id": "cc".repeat(32),
+            "amount": 42,
+            "confirmed": true,
+            "proof_refs": [],
+            "content_kind": "bitasset"
+        }]);
+        fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+
+        match NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            false,
+        ) {
+            Err(Error::UtreexoProof(outpoint)) => {
+                assert!(outpoint.contains(&"bb".repeat(32)));
+            }
+            other => panic!("expected unproven persisted UTXO rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_rejects_persisted_confirmed_utxo_without_leaf_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wallet.json");
+        let mut wallet = NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            true,
+        )
+        .unwrap();
+        let wallet_address = wallet.get_new_address().unwrap();
+
+        let mut persisted: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        persisted["confirmed_utxos"] = json!([{
+            "outpoint": {
+                "txid": "bb".repeat(32),
+                "vout": 0
+            },
+            "address": wallet_address,
+            "asset_id": "cc".repeat(32),
+            "amount": 42,
+            "confirmed": true,
+            "proof_refs": [{
+                "txid": "bb".repeat(32),
+                "block_hash": "aa".repeat(32),
+                "sidechain_block_height": 7,
+                "bmm_inclusions": ["bmm-inclusion-1"],
+                "best_main_verification": "verified"
+            }],
+            "content_kind": "bitasset"
+        }]);
+        fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+
+        match NativeBitAssetsWallet::open(
+            &path,
+            "http://127.0.0.1:6004".to_string(),
+            Some(ZERO_SEED),
+            false,
+        ) {
+            Err(Error::UtreexoProof(message)) => {
+                assert!(message.contains("missing persisted leaf hash"));
+            }
+            other => panic!("expected missing persisted leaf hash rejection, got {other:?}"),
         }
     }
 
