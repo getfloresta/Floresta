@@ -64,6 +64,43 @@ Android targets require the Android Rust targets plus an NDK linker environment 
 
 The local smoke harness lives in `local-dev`, which is not a git repository here, so it should be referenced from PR notes rather than committed in this branch:
 
+Full local signet proof-backed Electrum/cache smoke:
+
+```bash
+cd /Volumes/T705/code/drivechain-wallet-dev/local-dev
+DOCKER_BUILDKIT=0 \
+BITASSETS_PLATFORM=linux/arm64 \
+BITASSETS_BUILD_PLATFORM=linux/arm64 \
+RESET_STACK=1 \
+RESET_VOLUMES=1 \
+REBUILD_BITASSETS=0 \
+BITASSETS_IMAGE=local/plain-bitassets:codex-proof \
+./scripts/pr-ready-bitassets-smoke.sh
+```
+
+Latest passing proof-backed Electrum/cache result:
+
+```json
+{
+  "mainchain_height": 113,
+  "bitassets_sidechain_height": 5,
+  "sidechain_activation_height": 108,
+  "asset_id": "1f7d29cb94f4678610ce298f1d91f07ed1b36201de54e9e43ac67a2d546e287e",
+  "reserve_tx": "fc15abb51d0c503a7f47cedc8b8e84be367f5230426bc4b283abd5b132799afd",
+  "register_tx": "7f8ff6a7e5e5d0ecd2ad37dfcde0deb58205138d06a3b2cf84fc2e765a4b4d17",
+  "transfer_tx": "6cba6f2825f7253ca82b49c3ab7747c701497abcb00131fb9feccfa1daf3883a",
+  "floresta_wallet_transfer_tx": "b65d4d890f7693ebd947efe49292a8f5ece0f66753afb75f4c4db189b8b980cb",
+  "checks": [
+    {"mode": "rpc-refresh", "balance": 1000, "utxos": 2, "history": 2},
+    {"mode": "rpc-refresh-wallet-transfer", "balance": 1000, "utxos": 3, "history": 3},
+    {"mode": "persisted-cache", "balance": 1000, "utxos": 3, "history": 3}
+  ],
+  "persisted_cache": "/tmp/floresta-bitassets-signet-smoke/signet/bitassets-index.json"
+}
+```
+
+The restart half of the smoke logged `Loaded 3 persisted plain-bitassets sidechain UTXO(s)` from the persisted cache file before the `persisted-cache` Electrum assertion passed.
+
 ```bash
 cd /Users/lukekensik/drivechain-wallet-dev/local-dev
 PREPARE_STACK=0 \
