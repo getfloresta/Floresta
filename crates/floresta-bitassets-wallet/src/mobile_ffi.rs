@@ -1,4 +1,5 @@
 use std::ffi::{c_char, CStr, CString};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
 use crate::mobile::{EmbeddedBitAssetsWallet, EmbeddedWalletConfig};
@@ -182,16 +183,33 @@ fn with_wallet_json(
 }
 
 fn ffi_result(f: impl FnOnce() -> Result<String, Box<dyn std::error::Error>>) -> FfiResult {
-    match f() {
-        Ok(value) => FfiResult {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(Ok(value)) => FfiResult {
             ok: true,
             value: string_to_ptr(value),
         },
-        Err(error) => FfiResult {
+        Ok(Err(error)) => FfiResult {
             ok: false,
             value: string_to_ptr(error.to_string()),
         },
+        Err(panic) => FfiResult {
+            ok: false,
+            value: string_to_ptr(format!(
+                "BitAssets wallet native panic: {}",
+                panic_message(panic)
+            )),
+        },
     }
+}
+
+fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = panic.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic".to_string()
 }
 
 fn wallet_from_handle(
@@ -216,6 +234,28 @@ fn string_to_ptr(value: String) -> *mut c_char {
     match CString::new(value) {
         Ok(value) => value.into_raw(),
         Err(_) => ptr::null_mut(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CStr;
+
+    use super::{ffi_result, floresta_bitassets_string_free};
+
+    #[test]
+    fn ffi_result_converts_panic_to_error_result() {
+        let result = ffi_result(|| -> Result<String, Box<dyn std::error::Error>> {
+            panic!("sync panic");
+        });
+
+        assert!(!result.ok);
+        let value = unsafe { CStr::from_ptr(result.value) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(value.contains("native panic"));
+        assert!(value.contains("sync panic"));
+        floresta_bitassets_string_free(result.value);
     }
 }
 

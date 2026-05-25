@@ -1424,10 +1424,10 @@ impl Florestad {
         wallet: Arc<tokio::sync::Mutex<NativeBitAssetsWallet>>,
         quic_url: &str,
     ) -> Result<(), String> {
-        let endpoint = Self::native_bitassets_quic_endpoint()?;
         let remote: SocketAddr = quic_url
             .parse()
             .map_err(|err| format!("invalid QUIC address {quic_url}: {err}"))?;
+        let endpoint = Self::native_bitassets_quic_endpoint(remote)?;
         let connection = endpoint
             .connect(remote, "localhost")
             .map_err(|err| format!("QUIC connect setup failed: {err}"))?
@@ -1487,6 +1487,9 @@ impl Florestad {
                 if line.is_empty() {
                     continue;
                 }
+                if wallet.lock().await.subscription_generation() != subscription_generation {
+                    return Err("wallet script hashes changed; resubscribing".to_string());
+                }
                 Self::apply_native_bitassets_quic_message(wallet.clone(), line).await?;
             }
         }
@@ -1525,10 +1528,14 @@ impl Florestad {
     }
 
     #[cfg(feature = "bitassets")]
-    fn native_bitassets_quic_endpoint() -> Result<quinn::Endpoint, String> {
-        let bind_addr: SocketAddr = "[::]:0"
-            .parse()
-            .map_err(|err| format!("invalid QUIC bind address: {err}"))?;
+    fn native_bitassets_quic_endpoint(remote: SocketAddr) -> Result<quinn::Endpoint, String> {
+        let bind_addr: SocketAddr = if remote.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        }
+        .parse()
+        .map_err(|err| format!("invalid QUIC bind address: {err}"))?;
         let mut endpoint = quinn::Endpoint::client(bind_addr)
             .map_err(|err| format!("could not create QUIC endpoint: {err}"))?;
         endpoint.set_default_client_config(Self::native_bitassets_quic_client_config()?);
