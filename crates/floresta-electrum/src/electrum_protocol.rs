@@ -291,7 +291,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                 json_rpc_res!(request, {
                     "count": count,
-                    "hex": String::from_iter(headers),
+                    "headers": headers.collect::<Vec<_>>(),
                     "max": MAX_COUNT,
                 })
             }
