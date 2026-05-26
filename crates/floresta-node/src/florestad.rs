@@ -1016,39 +1016,33 @@ impl Florestad {
 
         let mut records = Vec::new();
         for utxo in utxos {
-            let Some(bitasset) = utxo
-                .pointer("/output/content/BitAsset")
-                .and_then(Value::as_array)
-            else {
+            let content = utxo
+                .pointer("/output/content")
+                .ok_or_else(|| "UTXO missing content".to_string())?;
+
+            let (asset_id, outpoint, amount, bitcoin_value) = if let Some(bitasset) =
+                content.get("BitAsset").and_then(Value::as_array)
+            {
+                let asset_id = bitasset
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "BitAsset content missing asset id".to_string())?
+                    .parse()
+                    .map_err(|err| format!("invalid BitAsset asset id: {err}"))?;
+                let amount = bitasset
+                    .get(1)
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "BitAsset content missing amount".to_string())?;
+                (asset_id, Self::bitassets_regular_outpoint(utxo)?, amount, 0)
+            } else if let Some(bitcoin_value) = content.get("BitcoinSats").and_then(Value::as_u64)
+            {
+                let outpoint = Self::bitassets_deposit_outpoint(utxo)?;
+                (outpoint.txid, outpoint, 0, bitcoin_value)
+            } else {
                 continue;
             };
 
-            let asset_id = bitasset
-                .first()
-                .and_then(Value::as_str)
-                .ok_or_else(|| "BitAsset content missing asset id".to_string())?
-                .parse()
-                .map_err(|err| format!("invalid BitAsset asset id: {err}"))?;
-            let amount = bitasset
-                .get(1)
-                .and_then(Value::as_u64)
-                .ok_or_else(|| "BitAsset content missing amount".to_string())?;
-
-            let regular = utxo
-                .pointer("/outpoint/Regular")
-                .ok_or_else(|| "BitAsset UTXO did not have a regular outpoint".to_string())?;
-            let txid: bitcoin::Txid = regular
-                .get("txid")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "regular outpoint missing txid".to_string())?
-                .parse()
-                .map_err(|err| format!("invalid regular outpoint txid: {err}"))?;
-            let vout = regular
-                .get("vout")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| "regular outpoint missing vout".to_string())?;
-            let vout = u32::try_from(vout)
-                .map_err(|err| format!("regular outpoint vout overflow: {err}"))?;
+            let txid = outpoint.txid;
             let (block_hash, proof_status, proof_refs) =
                 match Self::bitassets_tx_proof_metadata(rpc_url, &txid.to_string()) {
                     Ok(metadata) => metadata,
@@ -1067,8 +1061,9 @@ impl Florestad {
 
             records.push(TrustedSidechainAssetUtxo {
                 asset_id,
-                outpoint: bitcoin::OutPoint { txid, vout },
+                outpoint,
                 amount,
+                bitcoin_value,
                 height,
                 block_hash,
                 event_kind: AssetHistoryEventKind::SidechainUnspent,
@@ -1079,6 +1074,44 @@ impl Florestad {
 
         let indexed = index.replace_with_trusted_sidechain_utxos(records);
         Ok((indexed, tip))
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_regular_outpoint(utxo: &Value) -> Result<bitcoin::OutPoint, String> {
+        let regular = utxo
+            .pointer("/outpoint/Regular")
+            .ok_or_else(|| "BitAsset UTXO did not have a regular outpoint".to_string())?;
+        let txid = regular
+            .get("txid")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "regular outpoint missing txid".to_string())?
+            .parse()
+            .map_err(|err| format!("invalid regular outpoint txid: {err}"))?;
+        let vout = regular
+            .get("vout")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "regular outpoint missing vout".to_string())?;
+        let vout =
+            u32::try_from(vout).map_err(|err| format!("regular outpoint vout overflow: {err}"))?;
+        Ok(bitcoin::OutPoint { txid, vout })
+    }
+
+    #[cfg(feature = "bitassets")]
+    fn bitassets_deposit_outpoint(utxo: &Value) -> Result<bitcoin::OutPoint, String> {
+        let deposit = utxo
+            .pointer("/outpoint/Deposit")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "BitcoinSats UTXO did not have a deposit outpoint".to_string())?;
+        let (txid, vout) = deposit
+            .split_once(':')
+            .ok_or_else(|| "deposit outpoint missing separator".to_string())?;
+        let txid = txid
+            .parse()
+            .map_err(|err| format!("invalid deposit outpoint txid: {err}"))?;
+        let vout = vout
+            .parse()
+            .map_err(|err| format!("invalid deposit outpoint vout: {err}"))?;
+        Ok(bitcoin::OutPoint { txid, vout })
     }
 
     #[cfg(feature = "bitassets")]
@@ -1122,6 +1155,7 @@ impl Florestad {
                     vout: utxo.vout,
                 },
                 amount: utxo.asset_amount,
+                bitcoin_value: utxo.bitcoin_value,
                 height: utxo.height,
                 block_hash: utxo
                     .block_hash
@@ -1962,6 +1996,27 @@ mod tests {
     }
 
     #[test]
+    fn bitassets_deposit_outpoint_parses_bitcoin_sats_utxos() {
+        let txid = sample_txid(0xaa);
+        let utxo = json!({
+            "outpoint": {
+                "Deposit": format!("{txid}:0")
+            },
+            "output": {
+                "address": "4MvvLBpeWuXZbqKgdqVJXhYPuUgE",
+                "content": {
+                    "BitcoinSats": 100000
+                },
+                "memo": ""
+            }
+        });
+
+        let outpoint = Florestad::bitassets_deposit_outpoint(&utxo).unwrap();
+        assert_eq!(outpoint.txid, txid);
+        assert_eq!(outpoint.vout, 0);
+    }
+
+    #[test]
     fn persisted_bitassets_index_roundtrips_compact_proof_refs() {
         let path = unique_cache_path("proof-refs");
         let asset_id = sample_txid(0x55);
@@ -1974,6 +2029,7 @@ mod tests {
             asset_id,
             outpoint: bitcoin::OutPoint { txid, vout: 1 },
             amount: 900,
+            bitcoin_value: 0,
             height: 77,
             block_hash: Some(block_hash),
             event_kind: AssetHistoryEventKind::SidechainUnspent,
