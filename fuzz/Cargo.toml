@@ -18,6 +18,7 @@ tempfile = { workspace = true }
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
 floresta-wire = { workspace = true }
+rustreexo = { workspace = true }
 
 [[bin]]
 name = "local_address_str"
@@ -71,6 +72,27 @@ bench = false
 [[bin]]
 name = "disk_block_header_roundtrip"
 path = "fuzz_targets/disk_block_header_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tip_proof_des"
+path = "fuzz_targets/tip_proof_des.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tip_proof_from_str"
+path = "fuzz_targets/tip_proof_from_str.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tip_proof_roundtrip"
+path = "fuzz_targets/tip_proof_roundtrip.rs"
 test = false
 doc = false
 bench = false
