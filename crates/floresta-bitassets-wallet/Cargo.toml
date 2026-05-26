@@ -16,11 +16,14 @@ borsh = { version = "1.6", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["serde"] }
 hex = { workspace = true }
 jni = "0.21"
+quinn = "0.11.6"
 rand = { workspace = true }
 rustreexo = { workspace = true }
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "2.0"
+tokio = { workspace = true, features = ["io-util"] }
 ureq = { version = "3.1", features = ["json", "rustls-no-provider"], default-features = false }
 
 [dev-dependencies]

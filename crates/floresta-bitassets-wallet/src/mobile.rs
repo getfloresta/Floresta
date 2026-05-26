@@ -1,7 +1,13 @@
-use std::path::PathBuf;
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use tokio::io::AsyncReadExt as _;
 
 use crate::{parse_asset_id, BitAssetData, DutchAuctionParams, Error, NativeBitAssetsWallet};
 
@@ -9,6 +15,8 @@ use crate::{parse_asset_id, BitAssetData, DutchAuctionParams, Error, NativeBitAs
 pub struct EmbeddedWalletConfig {
     pub path: PathBuf,
     pub rpc_url: String,
+    #[serde(default, alias = "quicUrl", alias = "bitassetsLiteWalletQuicUrl")]
+    pub bitassets_lite_wallet_quic_url: Option<String>,
     #[serde(default)]
     pub seed_hex: Option<String>,
     #[serde(default)]
@@ -19,6 +27,7 @@ pub struct EmbeddedWalletConfig {
 
 pub struct EmbeddedBitAssetsWallet {
     wallet: NativeBitAssetsWallet,
+    bitassets_lite_wallet_quic_url: Option<String>,
 }
 
 impl EmbeddedBitAssetsWallet {
@@ -27,14 +36,20 @@ impl EmbeddedBitAssetsWallet {
     }
 
     pub fn open_with_seed_storage(config: EmbeddedWalletConfig) -> Result<Self, Error> {
+        let mut wallet = NativeBitAssetsWallet::open_with_seed_storage(
+            config.path,
+            config.rpc_url,
+            config.seed_hex.as_deref(),
+            config.create,
+            config.persist_seed,
+        )?;
+        let bitassets_lite_wallet_quic_url = config
+            .bitassets_lite_wallet_quic_url
+            .filter(|url| !url.trim().is_empty());
+        wallet.set_quic_enabled(bitassets_lite_wallet_quic_url.is_some());
         Ok(Self {
-            wallet: NativeBitAssetsWallet::open_with_seed_storage(
-                config.path,
-                config.rpc_url,
-                config.seed_hex.as_deref(),
-                config.create,
-                config.persist_seed,
-            )?,
+            wallet,
+            bitassets_lite_wallet_quic_url,
         })
     }
 
@@ -47,6 +62,15 @@ impl EmbeddedBitAssetsWallet {
     }
 
     pub fn sync_json(&mut self) -> Result<String, Error> {
+        if let Some(quic_url) = self.bitassets_lite_wallet_quic_url.clone() {
+            match self.sync_quic_once(&quic_url) {
+                Ok(info) => return to_json_string(info),
+                Err(err) => {
+                    self.wallet.set_quic_error(err.to_string());
+                    return Err(err);
+                }
+            }
+        }
         to_json_string(self.wallet.sync()?)
     }
 
@@ -161,6 +185,178 @@ impl EmbeddedBitAssetsWallet {
             params.fee_sats.unwrap_or(0),
         )?)
     }
+
+    fn sync_quic_once(&mut self, quic_url: &str) -> Result<Value, Error> {
+        let remote = bitassets_quic_remote(quic_url)?;
+        let script_hashes = self.wallet.script_hashes()?;
+        if script_hashes.is_empty() {
+            return self
+                .wallet_info_json()
+                .and_then(|json| serde_json::from_str(&json).map_err(Error::from));
+        }
+        let from_block_hash = self.wallet.last_tip_hash();
+        let request = json!({
+            "type": "subscribe",
+            "script_hashes": script_hashes,
+            "from_block_hash": from_block_hash,
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| Error::Rpc(format!("could not start QUIC runtime: {err}")))?;
+        let update = runtime.block_on(async {
+            let endpoint = bitassets_quic_endpoint(remote)?;
+            let connection = endpoint
+                .connect(remote, "localhost")
+                .map_err(|err| Error::Rpc(format!("QUIC connect setup failed: {err}")))?
+                .await
+                .map_err(|err| Error::Rpc(format!("QUIC connect failed: {err}")))?;
+            let (mut send, mut recv) = connection
+                .open_bi()
+                .await
+                .map_err(|err| Error::Rpc(format!("QUIC stream open failed: {err}")))?;
+            let mut request = serde_json::to_vec(&request)?;
+            request.push(b'\n');
+            send.write_all(&request)
+                .await
+                .map_err(|err| Error::Rpc(format!("QUIC subscribe write failed: {err}")))?;
+            send.finish()
+                .map_err(|err| Error::Rpc(format!("QUIC subscribe finish failed: {err}")))?;
+
+            let mut buffer = Vec::<u8>::new();
+            loop {
+                let chunk =
+                    tokio::time::timeout(Duration::from_secs(15), recv.read_buf(&mut buffer))
+                        .await
+                        .map_err(|_| Error::Rpc("QUIC lite-wallet sync timed out".to_string()))?
+                        .map_err(|err| Error::Rpc(format!("QUIC read failed: {err}")))?;
+                if chunk == 0 && buffer.is_empty() {
+                    return Err(Error::Rpc("QUIC lite-wallet stream closed".to_string()));
+                }
+                while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+                    let line = buffer.drain(..=newline).collect::<Vec<_>>();
+                    let line = &line[..line.len().saturating_sub(1)];
+                    if line.is_empty() {
+                        continue;
+                    }
+                    return bitassets_quic_update_from_message(line);
+                }
+                if chunk == 0 {
+                    if !buffer.is_empty() {
+                        return bitassets_quic_update_from_message(&buffer);
+                    }
+                    return Err(Error::Rpc(
+                        "QUIC lite-wallet stream ended without update".to_string(),
+                    ));
+                }
+            }
+        })?;
+        self.wallet.apply_quic_update(&update)
+    }
+}
+
+fn bitassets_quic_remote(quic_url: &str) -> Result<SocketAddr, Error> {
+    quic_url
+        .to_socket_addrs()
+        .map_err(|err| Error::Rpc(format!("invalid BitAssets QUIC peer {quic_url}: {err}")))?
+        .next()
+        .ok_or_else(|| Error::Rpc(format!("BitAssets QUIC peer {quic_url} did not resolve")))
+}
+
+fn bitassets_quic_update_from_message(line: &[u8]) -> Result<Value, Error> {
+    let message: Value = serde_json::from_slice(line)?;
+    let message_type = message
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Rpc("QUIC message missing type".to_string()))?;
+    if message_type == "error" {
+        let message = message
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("plain-bitassets lite-wallet error");
+        return Err(Error::Rpc(message.to_string()));
+    }
+    match message_type {
+        "snapshot" | "confirmed" | "mempool" => message
+            .get("update")
+            .cloned()
+            .ok_or_else(|| Error::Rpc(format!("{message_type} message missing update"))),
+        other => Err(Error::Rpc(format!("unknown QUIC message type {other}"))),
+    }
+}
+
+fn bitassets_quic_endpoint(remote: SocketAddr) -> Result<quinn::Endpoint, Error> {
+    let bind_addr: SocketAddr = if remote.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    }
+    .parse()
+    .map_err(|err| Error::Rpc(format!("invalid QUIC bind address: {err}")))?;
+    let mut endpoint = quinn::Endpoint::client(bind_addr)
+        .map_err(|err| Error::Rpc(format!("could not create QUIC endpoint: {err}")))?;
+    endpoint.set_default_client_config(bitassets_quic_client_config()?);
+    Ok(endpoint)
+}
+
+fn bitassets_quic_client_config() -> Result<quinn::ClientConfig, Error> {
+    #[derive(Debug)]
+    struct SkipServerVerification;
+
+    impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls::pki_types::CertificateDer,
+            _intermediates: &[rustls::pki_types::CertificateDer],
+            _server_name: &rustls::pki_types::ServerName,
+            _ocsp_response: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(
+                message,
+                cert,
+                dss,
+                &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            )
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(
+                message,
+                cert,
+                dss,
+                &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            )
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms
+                .supported_schemes()
+        }
+    }
+
+    let crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+        .with_no_client_auth();
+    let client_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+        .map_err(|err| Error::Rpc(format!("could not create QUIC rustls client config: {err}")))?;
+    Ok(quinn::ClientConfig::new(Arc::new(client_config)))
 }
 
 fn default_persist_seed() -> bool {
@@ -315,6 +511,7 @@ mod tests {
         let mut wallet = EmbeddedBitAssetsWallet::open(EmbeddedWalletConfig {
             path: dir.path().join("wallet.json"),
             rpc_url: "http://127.0.0.1:6004".to_string(),
+            bitassets_lite_wallet_quic_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: true,
@@ -338,6 +535,20 @@ mod tests {
         .unwrap();
 
         assert!(!config.persist_seed);
+        assert_eq!(config.bitassets_lite_wallet_quic_url, None);
+    }
+
+    #[test]
+    fn mobile_config_accepts_quic_url_aliases() {
+        let config: EmbeddedWalletConfig = serde_json::from_str(
+            r#"{"path":"/tmp/floresta-bitassets-wallet.json","rpc_url":"http://127.0.0.1:6004","bitassetsLiteWalletQuicUrl":"192.168.1.236:6104","seed_hex":"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","create":true}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.bitassets_lite_wallet_quic_url.as_deref(),
+            Some("192.168.1.236:6104")
+        );
     }
 
     #[test]
@@ -347,6 +558,7 @@ mod tests {
         let mut wallet = EmbeddedBitAssetsWallet::open(EmbeddedWalletConfig {
             path: path.clone(),
             rpc_url: "http://127.0.0.1:6004".to_string(),
+            bitassets_lite_wallet_quic_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: false,
@@ -365,6 +577,7 @@ mod tests {
         let mut wallet = EmbeddedBitAssetsWallet::open(EmbeddedWalletConfig {
             path: dir.path().join("wallet.json"),
             rpc_url: "http://127.0.0.1:6004".to_string(),
+            bitassets_lite_wallet_quic_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: false,
@@ -387,6 +600,7 @@ mod tests {
         let mut wallet = EmbeddedBitAssetsWallet::open(EmbeddedWalletConfig {
             path: dir.path().join("wallet.json"),
             rpc_url: "http://127.0.0.1:6004".to_string(),
+            bitassets_lite_wallet_quic_url: None,
             seed_hex: Some(ZERO_SEED.to_string()),
             create: true,
             persist_seed: true,

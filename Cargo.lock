@@ -1234,12 +1234,15 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "jni",
+ "quinn",
  "rand 0.8.5",
+ "rustls",
  "rustreexo",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "ureq",
 ]
 
