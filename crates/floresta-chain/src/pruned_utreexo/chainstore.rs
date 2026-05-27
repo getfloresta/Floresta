@@ -25,6 +25,7 @@ use crate::prelude::*;
 /// This trait requires an associated error type that implements [DatabaseError]; a marker trait
 /// satisfied by any `T: Display + Error`. This is useful to abstract the database implementation
 /// from the blockchain.
+
 /// Block validation status, inspired by Bitcoin Core's `BlockStatus` bitflags.
 ///
 /// Bitcoin Core uses progressive validity levels (`BLOCK_VALID_TREE` ->

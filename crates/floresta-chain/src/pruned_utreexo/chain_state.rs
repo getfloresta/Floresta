@@ -976,8 +976,10 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(())
     }
 
-    /// Test helper: overwrite the chain tip. Sets both `best_block` and
-    /// `validation_index` to `best_block`, assuming the block has been
+    /// Updates the chain tip state to point at `best_block` at the given `height`.
+    ///
+    /// This sets both `best_block` and `validation_index` to the same hash,
+    /// so it should only be used when the caller knows the target block is
     /// fully validated. If `acc` is provided, the in-memory accumulator is
     /// also replaced.
     #[cfg(test)]
@@ -1451,8 +1453,8 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         }
 
         // Walk forward from the target, restoring remaining DescendsFromInvalid
-        // descendants as HeadersOnly. Stop at ValidationFailed, Invalidated,
-        // or non-invalid blocks.
+        // descendants as HeadersOnly. Stop at ValidationFailed, Invalidated, or
+        // non-invalid blocks.
         let mut last_reconsidered_height = target_height;
         for h in (target_height + 1).. {
             let hash = match read_lock!(self).chainstore.get_block_hash(h)? {
@@ -1730,6 +1732,7 @@ mod test {
     use super::ChainParams;
     use super::ChainState;
     use super::DiskBlockHeader;
+    use super::InvalidReason;
     use super::UpdatableChainstate;
     use crate::AssumeValidArg;
     use crate::BlockchainError;
@@ -2106,7 +2109,7 @@ mod test {
         chain.update_tip(headers[1].prev_blockhash, 1, None);
         assert_eq!(
             read_lock!(chain).best_block.best_block,
-            headers[1].prev_blockhash
+            headers[1].prev_blockhash,
         );
     }
 
@@ -2174,5 +2177,247 @@ mod test {
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(fork_work, work);
         assert_eq!(work, expected_work);
+    }
+
+    /// After connecting FullyValid blocks, invalidating one must roll back the
+    /// validation_index so that `get_validation_index()` still returns a valid
+    /// height. Before the fix, `invalidate_block` left `validation_index`
+    /// pointing at a now-InvalidChain block, causing `get_validation_index()`
+    /// to fail with `BadValidationIndex`.
+    #[test]
+    fn test_invalidate_block_updates_validation_index() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        // Connect the first 10 blocks (they become FullyValid)
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+        }
+
+        let expected_height = 10;
+        assert_eq!(chain.get_height().unwrap(), expected_height);
+
+        // validation_index should be the same as height.
+        let val_before = chain.get_validation_index().unwrap();
+        assert_eq!(val_before, expected_height);
+
+        // Invalidate block at height 5
+        let hash_at_5 = chain.get_block_hash(5).unwrap();
+        chain.invalidate_block(hash_at_5).unwrap();
+
+        assert_eq!(chain.get_height().unwrap(), 4);
+
+        // This is the critical check: validation_index must point to a valid block.
+        let validation_index_after = chain.get_validation_index().unwrap();
+        assert_eq!(validation_index_after, 4);
+
+        // The tip must be FullyValid.
+        let val_hash = read_lock!(chain).best_block.validation_index;
+        let val_header = chain.get_disk_block_header(&val_hash).unwrap();
+        assert!(
+            matches!(val_header, DiskBlockHeader::FullyValid(..)),
+            "expected FullyValid, got: {val_header:?}"
+        );
+
+        // Blocks 0..=4 should be FullyValid.
+        for i in 0..=4 {
+            let hash = chain.get_block_hash(i).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+            assert!(
+                matches!(header, DiskBlockHeader::FullyValid(..)),
+                "expected FullyValid at height {i}, got: {header:?}"
+            );
+        }
+
+        // Blocks 5..=10 should be InvalidChain.
+        for i in 5..=10 {
+            let hash = chain.get_block_hash(i).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+            assert!(
+                matches!(header, DiskBlockHeader::InvalidChain(..)),
+                "expected InvalidChain at height {i}, got: {header:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reconsider_block() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        // Connect the first 10 blocks (they become FullyValid)
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+        }
+
+        assert_eq!(chain.get_height().unwrap(), 10);
+
+        // Invalidate block at height 5
+        let hash_at_5 = chain.get_block_hash(5).unwrap();
+        chain.invalidate_block(hash_at_5).unwrap();
+
+        assert_eq!(chain.get_height().unwrap(), 4);
+        assert_eq!(chain.get_validation_index().unwrap(), 4);
+
+        // Reconsider block at height 5
+        chain.reconsider_block(hash_at_5).unwrap();
+
+        // The reconsidered chain has more work than the current tip (height 4),
+        // so activate_best_chain should trigger a reorg back to height 10.
+        assert_eq!(chain.get_height().unwrap(), 10);
+
+        // Block 5 should be FullyValid because its accumulator roots were
+        // persisted during the original connect_block.
+        let hash_at_5_after = chain.get_block_hash(5).unwrap();
+        let header_at_5_after = chain.get_disk_block_header(&hash_at_5_after).unwrap();
+        assert!(
+            matches!(header_at_5_after, DiskBlockHeader::FullyValid(..)),
+            "expected FullyValid at height 5, got: {header_at_5_after:?}"
+        );
+
+        // Blocks 6..=10 should be HeadersOnly (pending re-validation)
+        for i in 6..=10 {
+            let hash = chain.get_block_hash(i).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+            assert!(
+                matches!(header, DiskBlockHeader::HeadersOnly(..)),
+                "expected HeadersOnly at height {i}, got: {header:?}"
+            );
+        }
+
+        // Blocks 0..=4 should still be FullyValid
+        for i in 0..=4 {
+            let hash = chain.get_block_hash(i).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+            assert!(
+                matches!(header, DiskBlockHeader::FullyValid(..)),
+                "expected FullyValid at height {i}, got: {header:?}"
+            );
+        }
+
+        // validation_index should be at block 5 (the reconsidered block has
+        // its accumulator roots, so it is restored as FullyValid)
+        let val_idx = chain.get_validation_index().unwrap();
+        assert_eq!(val_idx, 5);
+    }
+
+    #[test]
+    fn test_reconsider_block_validation_failed() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+        }
+
+        // Manually mark block 5 as ValidationFailed (simulating a consensus failure)
+        let hash_at_5 = chain.get_block_hash(5).unwrap();
+        let header_at_5 = chain.get_block_header(&hash_at_5).unwrap();
+        chain
+            .update_header(&DiskBlockHeader::InvalidChain(
+                header_at_5,
+                5,
+                InvalidReason::ValidationFailed,
+            ))
+            .unwrap();
+
+        // Attempting to reconsider a ValidationFailed block should error
+        let result = chain.reconsider_block(hash_at_5);
+        assert!(
+            matches!(
+                result,
+                Err(BlockchainError::CannotReconsiderConsensusInvalid)
+            ),
+            "expected CannotReconsiderConsensusInvalid, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_reconsider_block_on_descendant() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        // Connect the first 10 blocks (they become FullyValid)
+        let short_chain: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+        }
+
+        assert_eq!(chain.get_height().unwrap(), 10);
+
+        // Invalidate block at height 5 (marks 5 as Invalidated, 6..=10 as DescendsFromInvalid)
+        let hash_at_5 = chain.get_block_hash(5).unwrap();
+        chain.invalidate_block(hash_at_5).unwrap();
+
+        assert_eq!(chain.get_height().unwrap(), 4);
+
+        // Reconsider block at height 8 (a descendant, not the invalidated block).
+        // This should walk back to the Invalidated ancestor at height 5 and
+        // restore blocks 5..=8 as FullyValid (roots exist), leaving 9..=10 as
+        // HeadersOnly.
+        let hash_at_8 = chain.get_block_hash(8).unwrap();
+        chain.reconsider_block(hash_at_8).unwrap();
+
+        assert_eq!(chain.get_height().unwrap(), 10);
+
+        // Blocks 0..=8 should be FullyValid (roots were persisted for all of them)
+        for i in 0..=8 {
+            let hash = chain.get_block_hash(i).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+            assert!(
+                matches!(header, DiskBlockHeader::FullyValid(..)),
+                "expected FullyValid at height {i}, got: {header:?}"
+            );
+        }
+
+        // Blocks 9..=10 should be HeadersOnly (descendants beyond the target)
+        for i in 9..=10 {
+            let hash = chain.get_block_hash(i).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+            assert!(
+                matches!(header, DiskBlockHeader::HeadersOnly(..)),
+                "expected HeadersOnly at height {i}, got: {header:?}"
+            );
+        }
+
+        // validation_index should be at block 8 (last FullyValid in the
+        // restored range)
+        let val_idx = chain.get_validation_index().unwrap();
+        assert_eq!(val_idx, 8);
     }
 }
