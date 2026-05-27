@@ -976,10 +976,19 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(())
     }
 
-    fn update_tip(&self, best_block: BlockHash, height: u32) {
+    /// Test helper: overwrite the chain tip. Sets both `best_block` and
+    /// `validation_index` to `best_block`, assuming the block has been
+    /// fully validated. If `acc` is provided, the in-memory accumulator is
+    /// also replaced.
+    #[cfg(test)]
+    fn update_tip(&self, best_block: BlockHash, height: u32, acc: Option<Stump>) {
         let mut inner = write_lock!(self);
+        inner.best_block.validation_index = best_block;
         inner.best_block.best_block = best_block;
         inner.best_block.depth = height;
+        if let Some(acc) = acc {
+            inner.acc = acc;
+        }
     }
 
     fn verify_script(&self, height: u32) -> Result<bool, PersistedState::Error> {
@@ -1335,19 +1344,49 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
     }
 
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError> {
-        let height = self.get_disk_block_header(&block)?.try_height()?;
+        let height_to_invalidate = self.get_disk_block_header(&block)?.try_height()?;
         let current_height = self.get_height()?;
+
+        // The genesis block cannot be invalidated.
+        if height_to_invalidate == 0 {
+            return Err(BlockchainError::InvalidOperation);
+        }
+
+        let new_tip_header = self.get_ancestor(&self.get_block_header(&block)?)?;
+        let new_tip = new_tip_header.block_hash();
+        let new_height = height_to_invalidate - 1;
+
+        // Find the last fully-validated block at or below the new tip.
+        // The new tip may still be HeadersOnly (during IBD), so we walk back if needed.
+        let last_valid = match new_tip_header {
+            DiskBlockHeader::FullyValid(_, _) | DiskBlockHeader::AssumedValid(_, _) => new_tip,
+            _ => self.get_last_valid_block(&new_tip_header)?,
+        };
+
+        // Load the accumulator for the new tip height so that subsequent block
+        // validation works against the correct UTXO set.
+        let new_acc = self.get_roots_for_block(new_height)?;
+        let requires_acc = matches!(
+            new_tip_header,
+            DiskBlockHeader::FullyValid(_, _) | DiskBlockHeader::AssumedValid(_, _)
+        );
+        if requires_acc && new_acc.is_none() {
+            return Err(BlockchainError::UnknownUtreexoAcc);
+        }
+
+        // Update the chain state atomically before marking blocks as invalid.
+        self.change_active_chain(&new_tip_header, last_valid, new_height, new_acc);
 
         // Mark the target block as Invalidated
         let target_header = self.get_block_header(&block)?;
         self.update_header(&DiskBlockHeader::InvalidChain(
             target_header,
-            height,
+            height_to_invalidate,
             InvalidReason::Invalidated,
         ))?;
 
         // Mark all descendants as DescendsFromInvalid
-        for h in (height + 1)..=current_height {
+        for h in (height_to_invalidate + 1)..=current_height {
             let hash = self.get_block_hash(h)?;
             let header = self.get_block_header(&hash)?;
             self.update_header(&DiskBlockHeader::InvalidChain(
@@ -1357,12 +1396,9 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             ))?;
         }
 
-        // Roll back to the parent block.
-        self.update_tip(
-            self.get_ancestor(&self.get_block_header(&block)?)?
-                .block_hash(),
-            height - 1,
-        );
+        // Persist the new tip state to disk so it survives a crash.
+        self.flush()?;
+
         Ok(())
     }
 
@@ -2067,7 +2103,7 @@ mod test {
         assert_eq!(chain.get_height().unwrap() as usize, random_height - 1);
 
         // update_tip
-        chain.update_tip(headers[1].prev_blockhash, 1);
+        chain.update_tip(headers[1].prev_blockhash, 1, None);
         assert_eq!(
             read_lock!(chain).best_block.best_block,
             headers[1].prev_blockhash
