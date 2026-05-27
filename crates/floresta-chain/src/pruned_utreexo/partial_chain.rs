@@ -313,6 +313,10 @@ impl UpdatableChainstate for PartialChainState {
         )
     }
 
+    fn reconsider_block(&self, _block: BlockHash) -> Result<(), BlockchainError> {
+        unimplemented!("partial chain does not support reconsider_block")
+    }
+
     fn handle_transaction(&self) -> Result<(), BlockchainError> {
         unimplemented!("we don't do transactions")
     }

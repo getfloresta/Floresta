@@ -70,6 +70,9 @@ pub enum BlockchainError {
 
     /// A [`ChainState`](crate::ChainState) operation overflowed.
     OperationOverflow(ChainWorkOverflow),
+
+    /// Cannot reconsider a block that failed consensus validation.
+    CannotReconsiderConsensusInvalid,
 }
 
 impl_error_from!(BlockchainError, ChainWorkOverflow, OperationOverflow);
@@ -97,6 +100,10 @@ impl Display for BlockchainError {
             Self::InvalidTip(e) => write!(f, "The ChainState's tip is invalid: {e}"),
             Self::BadValidationIndex => write!(f, "The ChainState's validation index is invalid"),
             Self::OperationOverflow(_) => write!(f, "A ChainState operation overflowed"),
+            Self::CannotReconsiderConsensusInvalid => write!(
+                f,
+                "Cannot reconsider a block that failed consensus validation"
+            ),
         }
     }
 }

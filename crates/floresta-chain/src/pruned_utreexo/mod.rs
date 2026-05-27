@@ -162,6 +162,10 @@ pub trait UpdatableChainstate {
     fn toggle_ibd(&self, is_ibd: bool);
     /// Tells this blockchain to consider this block invalid, and not build on top of it
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError>;
+    /// Removes the invalid mark from a block that was previously invalidated
+    /// via `invalidate_block`. If the reconsidered chain has more work than
+    /// the current best chain, triggers a reorg.
+    fn reconsider_block(&self, block: BlockHash) -> Result<(), BlockchainError>;
     /// Marks one block as being fully validated, this overrides a block that was explicitly
     /// marked as invalid.
     fn mark_block_as_valid(&self, block: BlockHash) -> Result<(), BlockchainError>;
@@ -233,6 +237,10 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
 
     fn invalidate_block(&self, block: BlockHash) -> Result<(), BlockchainError> {
         T::invalidate_block(self, block)
+    }
+
+    fn reconsider_block(&self, block: BlockHash) -> Result<(), BlockchainError> {
+        T::reconsider_block(self, block)
     }
 
     fn get_partial_chain(
