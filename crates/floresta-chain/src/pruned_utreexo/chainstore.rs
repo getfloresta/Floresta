@@ -7,6 +7,21 @@
 //! It also defines two important types for our storage format:
 //! - [DiskBlockHeader]: A block header linked to its validation-state metadata
 //! - [BestChain]: Tracks the current best chain, last valid block, and fork tips
+//!
+//! # Error types
+//!
+//! This module also centralises the error types used by chainstore implementations:
+//! - [ChainstoreError]: The public-facing error enum for [ChainStore] operations
+//! - [InternalError]: Internal, non-recoverable error variants wrapped inside
+//!   [ChainstoreError::Internal]
+
+extern crate std;
+
+use core::error;
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
+use std::io;
 
 use bitcoin::BlockHash;
 use bitcoin::block::Header as BlockHeader;
@@ -17,6 +32,215 @@ use bitcoin::consensus::encode;
 use crate::BlockchainError;
 use crate::DatabaseError;
 use crate::prelude::*;
+
+/// the maximum theoretical size of the Utreexo accumulator
+///
+/// In the worst case that all leaves are filled:
+/// * The accumulator can have up to 64 roots
+/// * Each root is 32 bytes
+/// * The number of leaves is expressed as a [`u64`]
+///
+/// 64 (MAX_ROOTS) * 32 bytes (ROOT_SIZE) + 8 bytes (LEAF_COUNT) = 2056 bytes
+///
+/// Re-exported here so callers do not need to import from `flat_chain_store`
+pub const MAX_ACCUMULATOR_SIZE: usize = 2056;
+
+#[derive(Debug)]
+/// errors that can happen whilst interacting with a [`ChainStore`] implementation
+///
+/// variants that carry domain meaning ([`HeaderNotFound`], [`OversizedAccumulator`],
+/// [`CorruptedDatabase`], [`InvalidValidationIndex`]) allow callers to react
+/// programmatically. Everything else is wrapped inside [`Internal`]
+///
+/// [`HeaderNotFound`]: ChainstoreError::HeaderNotFound
+/// [`OversizedAccumulator`]: ChainstoreError::OversizedAccumulator
+/// [`CorruptedDatabase`]: ChainstoreError::CorruptedDatabase
+/// [`InvalidValidationIndex`]: ChainstoreError::InvalidValidationIndex
+/// [`Internal`]: ChainstoreError::Internal
+pub enum ChainstoreError {
+    /// the requested block header was not found in the store
+    HeaderNotFound,
+
+    /// the accumulator data exceeds the maximum allowed size of
+    /// [`MAX_ACCUMULATOR_SIZE`] bytes
+    OversizedAccumulator,
+
+    /// the database integrity check failed; data is corrupted
+    ///
+    /// can be remedied by a full reindex
+    CorruptedDatabase,
+
+    /// the validation index references a block without a known height
+    ///
+    /// usually indicates the block is orphaned or on an invalid chain
+    /// can be remedied by a full reindex
+    InvalidValidationIndex,
+
+    /// an internal, non-recoverable error
+    ///
+    /// wraps implementation details such as I/O failures, lock poisoning,
+    /// capacity exhaustion, schema mismatches, and other non-actionable
+    /// conditions
+    Internal(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl Display for ChainstoreError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HeaderNotFound => {
+                write!(f, "the requested block header was not found")
+            }
+            Self::OversizedAccumulator => write!(
+                f,
+                "accumulator exceeds the maximum size of {} bytes",
+                MAX_ACCUMULATOR_SIZE
+            ),
+            Self::CorruptedDatabase => write!(
+                f,
+                "database integrity check failed; can be remedied by a full reindex"
+            ),
+            Self::InvalidValidationIndex => {
+                write!(
+                    f,
+                    "validation index has no known height; can be remedied by a full reindex"
+                )
+            }
+            Self::Internal(e) => write!(f, "internal error: {e}"),
+        }
+    }
+}
+
+impl error::Error for ChainstoreError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::Internal(e) => Some(e.as_ref()),
+            Self::HeaderNotFound
+            | Self::OversizedAccumulator
+            | Self::CorruptedDatabase
+            | Self::InvalidValidationIndex => None,
+        }
+    }
+}
+
+/// allows [`ChainstoreError`] to be used as the associated `Error` type of [`ChainStore`]
+impl DatabaseError for ChainstoreError {}
+
+/// converts a standard I/O error into a [`ChainstoreError::Internal`]
+impl From<io::Error> for ChainstoreError {
+    fn from(e: io::Error) -> Self {
+        ChainstoreError::Internal(Box::new(InternalError::Io(e)))
+    }
+}
+
+#[derive(Debug)]
+/// internal error variants that are always wrapped inside [`ChainstoreError::Internal`]
+///
+/// these are implementation details of a specific [`ChainStore`] backend and are
+/// not intended to be matched on by generic callers. Use [`core::error::Error::source`]
+/// (or `Box<dyn Error>::downcast_ref`) if you need to inspect the underlying cause
+pub enum InternalError {
+    /// a standard I/O error occurred
+    Io(io::Error),
+
+    /// the open-addressing block index has no remaining free buckets
+    FullIndex,
+
+    /// an index value exceeded the 31-bit tagged-index limit
+    OversizedIndex(u32),
+
+    /// an index exceeded the capacity of the backing file
+    CapacityExceeded { index: usize, max_size: usize },
+
+    /// the stored schema version is newer than this build supports
+    UnsupportedSchema(u32),
+
+    /// a mutex protecting the LRU cache was poisoned
+    PoisonedLock,
+
+    /// the magic number in the metadata file does not match the expected value
+    BadMagic(u32),
+
+    /// the pointer derived from the metadata memory-map was null
+    InvalidMetadataPointer,
+
+    /// the metadata records more alternative chain tips than the fixed-size array allows
+    TooManyAlternativeTips(usize),
+}
+
+impl Display for InternalError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::FullIndex => write!(f, "block index is full"),
+            Self::OversizedIndex(idx) => write!(f, "index value {idx} exceeds 31-bit limit"),
+            Self::CapacityExceeded { index, max_size } => {
+                write!(f, "index {index} exceeds file capacity {max_size}")
+            }
+            Self::UnsupportedSchema(version) => write!(f, "unsupported schema version: {version}"),
+            Self::PoisonedLock => write!(f, "cache lock poisoned"),
+            Self::BadMagic(magic) => write!(f, "bad database magic: {magic:#010x}"),
+            Self::InvalidMetadataPointer => write!(f, "metadata pointer is null"),
+            Self::TooManyAlternativeTips(len) => {
+                write!(f, "too many alternative tips: {len} (max 64)")
+            }
+        }
+    }
+}
+
+impl error::Error for InternalError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::FullIndex
+            | Self::OversizedIndex(_)
+            | Self::CapacityExceeded { .. }
+            | Self::UnsupportedSchema(_)
+            | Self::PoisonedLock
+            | Self::BadMagic(_)
+            | Self::InvalidMetadataPointer
+            | Self::TooManyAlternativeTips(_) => None,
+        }
+    }
+}
+
+/// convenience constructors that wrap an [`InternalError`] variant inside
+/// [`ChainstoreError::Internal`].  These are `pub(crate)` so that
+/// `flat_chain_store` (and any future backends) can build errors without
+/// importing [`ChainstoreError`] explicitly at every call site
+#[cfg(feature = "flat-chainstore")]
+impl InternalError {
+    pub(crate) fn oversized_index(index: u32) -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::OversizedIndex(index)))
+    }
+
+    pub(crate) fn capacity_exceeded(index: usize, max_size: usize) -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::CapacityExceeded { index, max_size }))
+    }
+
+    pub(crate) fn unsupported_schema(version: u32) -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::UnsupportedSchema(version)))
+    }
+
+    pub(crate) fn bad_magic(magic: u32) -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::BadMagic(magic)))
+    }
+
+    pub(crate) fn invalid_metadata_pointer() -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::InvalidMetadataPointer))
+    }
+
+    pub(crate) fn too_many_alternative_tips(len: usize) -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::TooManyAlternativeTips(len)))
+    }
+
+    pub(crate) fn full_index() -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::FullIndex))
+    }
+
+    pub(crate) fn poisoned_lock() -> ChainstoreError {
+        ChainstoreError::Internal(Box::new(Self::PoisonedLock))
+    }
+}
 
 /// A trait defining methods for interacting with our chain database. These methods will be used by
 /// the [ChainState](super::chain_state::ChainState) to save and retrieve data about the blockchain,
