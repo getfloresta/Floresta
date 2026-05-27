@@ -25,6 +25,56 @@ use crate::prelude::*;
 /// This trait requires an associated error type that implements [DatabaseError]; a marker trait
 /// satisfied by any `T: Display + Error`. This is useful to abstract the database implementation
 /// from the blockchain.
+/// Block validation status, inspired by Bitcoin Core's `BlockStatus` bitflags.
+///
+/// Bitcoin Core uses progressive validity levels (`BLOCK_VALID_TREE` ->
+/// `BLOCK_VALID_TRANSACTIONS` -> `BLOCK_VALID_CHAIN` -> `BLOCK_VALID_SCRIPTS`), data flags
+/// (`HAVE_DATA`, `HAVE_UNDO`), and failure flags (`BLOCK_FAILED_VALID`, `BLOCK_FAILED_CHILD`).
+///
+/// Floresta adapts this for its pruned utreexo architecture: there are no `HAVE_DATA`/`HAVE_UNDO`
+/// flags (we don't store full blocks or undo data), but `FullyValid` implies utreexo proof
+/// verification.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BlockStatus {
+    /// Header received but parent unknown. No height info.
+    Orphan,
+
+    /// Header validated and connected to the chain. Height known, block not yet validated.
+    /// Equivalent to Bitcoin Core's `BLOCK_VALID_TREE`.
+    HeadersOnly,
+
+    /// Block on a fork branch (header valid, not on best chain).
+    /// Equivalent to `BLOCK_VALID_TREE` on a non-best-chain branch.
+    InFork,
+
+    /// Block on best chain, assumed valid (skipped script verification).
+    /// Equivalent to `BLOCK_VALID_SCRIPTS` with assume-valid optimization.
+    AssumedValid,
+
+    /// Block fully validated: scripts verified + utreexo proof verified.
+    /// Equivalent to Bitcoin Core's `BLOCK_VALID_SCRIPTS`.
+    FullyValid,
+
+    /// Block or ancestor failed validation.
+    Invalid(InvalidReason),
+}
+
+/// Reason why a block is on an invalid chain. Mirrors Bitcoin Core's failure flags.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InvalidReason {
+    /// The block itself failed consensus validation (scripts, PoW, merkle root, etc.).
+    /// Equivalent to Bitcoin Core's `BLOCK_FAILED_VALID`.
+    ValidationFailed,
+
+    /// The block was manually marked invalid.
+    /// Sub-case of `BLOCK_FAILED_VALID` in Bitcoin Core.
+    Invalidated,
+
+    /// The block descends from an invalid or invalidated ancestor.
+    /// Equivalent to Bitcoin Core's `BLOCK_FAILED_CHILD`.
+    DescendsFromInvalid,
+}
+
 pub trait ChainStore {
     type Error: DatabaseError;
 
@@ -93,8 +143,8 @@ pub enum DiskBlockHeader {
     /// Represents a block header in a fork.
     InFork(BlockHeader, u32),
 
-    /// Represents an invalid chain block header.
-    InvalidChain(BlockHeader),
+    /// Represents a block header on an invalid chain, with the reason for invalidation.
+    InvalidChain(BlockHeader, u32, InvalidReason),
 }
 
 impl DiskBlockHeader {
@@ -103,23 +153,34 @@ impl DiskBlockHeader {
         self.deref().block_hash()
     }
 
-    /// Gets the block height or returns `None` if the block is orphaned or on an invalid chain.
+    /// Gets the block height or returns `None` if the block is orphaned.
     pub fn height(&self) -> Option<u32> {
         match self {
             DiskBlockHeader::InFork(_, height) => Some(*height),
             DiskBlockHeader::FullyValid(_, height) => Some(*height),
             DiskBlockHeader::HeadersOnly(_, height) => Some(*height),
             DiskBlockHeader::AssumedValid(_, height) => Some(*height),
-            // These two cases don't store the block height
+            DiskBlockHeader::InvalidChain(_, height, _) => Some(*height),
             DiskBlockHeader::Orphan(_) => None,
-            DiskBlockHeader::InvalidChain(_) => None,
         }
     }
 
     /// Gets the block height or returns `BlockchainError::OrphanOrInvalidBlock` if the block is
-    /// orphaned or on an invalid chain (the height is not stored).
+    /// orphaned (the height is not stored).
     pub fn try_height(&self) -> Result<u32, BlockchainError> {
         self.height().ok_or(BlockchainError::OrphanOrInvalidBlock)
+    }
+
+    /// Returns the [BlockStatus] for this header.
+    pub fn status(&self) -> BlockStatus {
+        match self {
+            Self::Orphan(_) => BlockStatus::Orphan,
+            Self::HeadersOnly(_, _) => BlockStatus::HeadersOnly,
+            Self::InFork(_, _) => BlockStatus::InFork,
+            Self::AssumedValid(_, _) => BlockStatus::AssumedValid,
+            Self::FullyValid(_, _) => BlockStatus::FullyValid,
+            Self::InvalidChain(_, _, reason) => BlockStatus::Invalid(*reason),
+        }
     }
 }
 
@@ -132,7 +193,7 @@ impl Deref for DiskBlockHeader {
             DiskBlockHeader::Orphan(header) => header,
             DiskBlockHeader::HeadersOnly(header, _) => header,
             DiskBlockHeader::InFork(header, _) => header,
-            DiskBlockHeader::InvalidChain(header) => header,
+            DiskBlockHeader::InvalidChain(header, _, _) => header,
             DiskBlockHeader::AssumedValid(header, _) => header,
         }
     }
@@ -161,7 +222,21 @@ impl Decodable for DiskBlockHeader {
 
                 Ok(Self::InFork(header, height))
             }
-            0x04 => Ok(Self::InvalidChain(header)),
+            0x04 => {
+                let height = u32::consensus_decode(reader)?;
+                let reason_byte = u8::consensus_decode(reader)?;
+                let reason = match reason_byte {
+                    0 => InvalidReason::ValidationFailed,
+                    1 => InvalidReason::Invalidated,
+                    2 => InvalidReason::DescendsFromInvalid,
+                    _ => {
+                        return Err(encode::Error::ParseFailed(
+                            "DiskBlockHeader: invalid InvalidReason tag",
+                        ));
+                    }
+                };
+                Ok(Self::InvalidChain(header, height, reason))
+            }
             0x05 => {
                 let height = u32::consensus_decode(reader)?;
                 Ok(Self::AssumedValid(header, height))
@@ -201,9 +276,17 @@ impl Encodable for DiskBlockHeader {
                 height.consensus_encode(writer)?;
                 len += 4;
             }
-            DiskBlockHeader::InvalidChain(header) => {
+            DiskBlockHeader::InvalidChain(header, height, reason) => {
                 0x04_u8.consensus_encode(writer)?;
                 header.consensus_encode(writer)?;
+                height.consensus_encode(writer)?;
+                let reason_byte: u8 = match reason {
+                    InvalidReason::ValidationFailed => 0,
+                    InvalidReason::Invalidated => 1,
+                    InvalidReason::DescendsFromInvalid => 2,
+                };
+                reason_byte.consensus_encode(writer)?;
+                len += 5; // 4 bytes height + 1 byte reason
             }
             DiskBlockHeader::AssumedValid(header, height) => {
                 0x05_u8.consensus_encode(writer)?;
@@ -342,13 +425,10 @@ mod tests {
             Err(BlockchainError::OrphanOrInvalidBlock)
         ));
 
-        // invalid chain → no height
-        let inv = DiskBlockHeader::InvalidChain(header);
-        assert_eq!(inv.height(), None);
-        assert!(matches!(
-            inv.try_height(),
-            Err(BlockchainError::OrphanOrInvalidBlock)
-        ));
+        // invalid chain → now stores height
+        let inv = DiskBlockHeader::InvalidChain(header, h, InvalidReason::Invalidated);
+        assert_eq!(inv.height(), Some(h));
+        assert_eq!(inv.try_height().unwrap(), h);
     }
 
     #[test]
@@ -370,7 +450,9 @@ mod tests {
             DiskBlockHeader::HeadersOnly(header, h),
             DiskBlockHeader::InFork(header, h),
             DiskBlockHeader::Orphan(header),
-            DiskBlockHeader::InvalidChain(header),
+            DiskBlockHeader::InvalidChain(header, h, InvalidReason::ValidationFailed),
+            DiskBlockHeader::InvalidChain(header, h, InvalidReason::Invalidated),
+            DiskBlockHeader::InvalidChain(header, h, InvalidReason::DescendsFromInvalid),
         ];
 
         for original in all_variants {
