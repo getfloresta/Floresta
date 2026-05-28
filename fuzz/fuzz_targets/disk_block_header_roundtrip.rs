@@ -15,6 +15,7 @@ use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use floresta_chain::DiskBlockHeader;
+use floresta_chain::InvalidReason;
 use libfuzzer_sys::fuzz_target;
 
 fn gen_header(u: &mut Unstructured<'_>) -> arbitrary::Result<BlockHeader> {
@@ -42,6 +43,7 @@ struct Inputs {
     header: BlockHeader,
     height: u32,
     tag: u8,
+    reason_tag: u8,
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -52,7 +54,14 @@ fuzz_target!(|data: &[u8]| {
             2 => DiskBlockHeader::HeadersOnly(inp.header, inp.height),
             3 => DiskBlockHeader::InFork(inp.header, inp.height),
             4 => DiskBlockHeader::Orphan(inp.header),
-            _ => DiskBlockHeader::InvalidChain(inp.header),
+            _ => {
+                let reason = match inp.reason_tag % 3 {
+                    0 => InvalidReason::ValidationFailed,
+                    1 => InvalidReason::Invalidated,
+                    _ => InvalidReason::DescendsFromInvalid,
+                };
+                DiskBlockHeader::InvalidChain(inp.header, inp.height, reason)
+            }
         };
 
         // Encode

@@ -12,6 +12,7 @@ use bitcoin::block::Version;
 use bitcoin::hashes::Hash;
 use floresta_chain::ChainStore;
 use floresta_chain::DiskBlockHeader;
+use floresta_chain::InvalidReason;
 use floresta_chain::pruned_utreexo::flat_chain_store::FlatChainStore;
 use floresta_chain::pruned_utreexo::flat_chain_store::FlatChainStoreConfig;
 use libfuzzer_sys::arbitrary::Arbitrary;
@@ -36,14 +37,36 @@ struct FuzzInput {
 /// (flush, integrity check).
 #[derive(Debug, Clone, Copy)]
 enum Operation {
-    SaveHeaderFullyValid { header_idx: u8, height: u32 },
-    SaveHeaderHeadersOnly { header_idx: u8, height: u32 },
-    SaveHeaderAssumedValid { header_idx: u8, height: u32 },
-    SaveHeaderInFork { header_idx: u8, height: u32 },
-    SaveHeaderOrphan { header_idx: u8 },
-    SaveHeaderInvalidChain { header_idx: u8 },
-    GetHeaderByHash { header_idx: u8 },
-    GetBlockHash { height: u32 },
+    SaveHeaderFullyValid {
+        header_idx: u8,
+        height: u32,
+    },
+    SaveHeaderHeadersOnly {
+        header_idx: u8,
+        height: u32,
+    },
+    SaveHeaderAssumedValid {
+        header_idx: u8,
+        height: u32,
+    },
+    SaveHeaderInFork {
+        header_idx: u8,
+        height: u32,
+    },
+    SaveHeaderOrphan {
+        header_idx: u8,
+    },
+    SaveHeaderInvalidChain {
+        header_idx: u8,
+        height: u32,
+        reason_tag: u8,
+    },
+    GetHeaderByHash {
+        header_idx: u8,
+    },
+    GetBlockHash {
+        height: u32,
+    },
     Flush,
     CheckIntegrity,
 }
@@ -98,7 +121,11 @@ impl<'a> Arbitrary<'a> for FuzzInput {
                     height: u32::arbitrary(u)?,
                 },
                 4 => Operation::SaveHeaderOrphan { header_idx },
-                5 => Operation::SaveHeaderInvalidChain { header_idx },
+                5 => Operation::SaveHeaderInvalidChain {
+                    header_idx,
+                    height: u32::arbitrary(u)?,
+                    reason_tag: u8::arbitrary(u)?,
+                },
                 6 => Operation::GetHeaderByHash { header_idx },
                 7 => Operation::GetBlockHash {
                     height: u32::arbitrary(u)?,
@@ -214,9 +241,18 @@ fuzz_target!(|input: FuzzInput| {
                     hash_to_entry.insert(header.block_hash(), OracleEntry { header });
                 }
             }
-            Operation::SaveHeaderInvalidChain { header_idx } => {
+            Operation::SaveHeaderInvalidChain {
+                header_idx,
+                height,
+                reason_tag,
+            } => {
                 let header = input.headers[header_idx as usize % input.headers.len()];
-                let variant = DiskBlockHeader::InvalidChain(header);
+                let reason = match reason_tag % 3 {
+                    0 => InvalidReason::ValidationFailed,
+                    1 => InvalidReason::Invalidated,
+                    _ => InvalidReason::DescendsFromInvalid,
+                };
+                let variant = DiskBlockHeader::InvalidChain(header, height, reason);
 
                 if store.save_header(&variant).is_ok() {
                     hash_to_entry.insert(header.block_hash(), OracleEntry { header });
