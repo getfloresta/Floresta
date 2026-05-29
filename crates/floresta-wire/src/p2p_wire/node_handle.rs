@@ -30,6 +30,7 @@ use super::UtreexoNodeConfig;
 use super::node::NodeNotification;
 use crate::address_man::ConnectionStats;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+use crate::node_interface::AddedNodeInfo;
 use crate::node_interface::ChainMethods;
 use crate::node_interface::MempoolMethods;
 use crate::node_interface::NetworkMethods;
@@ -93,6 +94,9 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Request for data regarding added nodes possibly filter by a provided one
+    GetAddedNodeInfo(Option<BitcoinSocketAddr>),
 }
 
 #[derive(Debug)]
@@ -139,6 +143,9 @@ pub enum NodeResponse {
 
     /// Address manager statistics.
     GetAddrManInfo(ConnectionStats),
+
+    /// Request for data regarding added nodes possibly filter by a provided one
+    GetAddedNodeInfo(Vec<AddedNodeInfo>),
 }
 
 #[derive(Debug)]
@@ -269,6 +276,17 @@ impl NetworkMethods for NodeHandle {
         let val = self.send_request(UserRequest::Ping).await?;
 
         extract_variant!(Ping, val)
+    }
+
+    async fn get_added_node_info(
+        &self,
+        node: Option<BitcoinSocketAddr>,
+    ) -> Result<Vec<AddedNodeInfo>, Self::Error> {
+        let val = self
+            .send_request(UserRequest::GetAddedNodeInfo(node))
+            .await?;
+
+        extract_variant!(GetAddedNodeInfo, val)
     }
 
     async fn get_addrman_info(&self) -> Result<ConnectionStats, Self::Error> {
