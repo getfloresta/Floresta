@@ -393,6 +393,14 @@ class BaseRPC(ABC):
         """
         return self.perform_request("ping")
 
+    def get_added_node_info(self, node: Optional[str] = None) -> list:
+        """
+        Get information about manually added nodes.
+        node: optional filter — return only this added node's info
+        """
+        params = [node] if node is not None else []
+        return self.perform_request("getaddednodeinfo", params)
+
     def disconnectnode(self, node_address: str, node_id: Optional[int] = None):
         """
         Disconnect from a peer by `node_address` or `node_id`
