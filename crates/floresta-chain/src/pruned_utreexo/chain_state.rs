@@ -941,9 +941,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             None => Ok(true),
         }
     }
-    pub fn acc(&self) -> Stump {
-        read_lock!(self).acc.to_owned()
-    }
     /// Returns the next required work for the next block, usually it's just the last block's target
     /// but if we are in a retarget period, it's calculated from the last 2016 blocks.
     fn get_next_required_work(
@@ -1042,8 +1039,18 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         self.get_branch_work(header)
     }
 
-    fn acc(&self) -> Stump {
-        read_lock!(self).acc.to_owned()
+    fn get_acc(&self, block: Option<BlockHash>) -> Result<Stump, Self::Error> {
+        match block {
+            Some(hash) => {
+                let height = self
+                    .get_block_height(&hash)?
+                    .ok_or(BlockchainError::BlockNotPresent)?;
+
+                self.get_roots_for_block(height)?
+                    .ok_or(BlockchainError::UnknownUtreexoAcc)
+            }
+            None => Ok(read_lock!(self).acc.to_owned()),
+        }
     }
 
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
@@ -1239,10 +1246,6 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         self.reorg(new_tip)
     }
 
-    fn get_acc(&self) -> Stump {
-        self.acc()
-    }
-
     fn mark_block_as_valid(&self, block: BlockHash) -> Result<(), BlockchainError> {
         let header = self.get_disk_block_header(&block)?;
         let height = header.try_height()?;
@@ -1365,7 +1368,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .then(|| inputs.clone());
 
         self.validate_block_no_acc(block, height, inputs)?;
-        let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
+        let acc = Consensus::update_acc(&self.get_acc(None)?, block, height, proof, del_hashes)?;
 
         self.update_view(height, &block.header, acc)?;
 
@@ -1766,7 +1769,9 @@ mod test {
                 == bhash!("45c74beefa2a110715377e023d4260168b4cafbb0891f3b0869aea30867acc87")
             {
                 // This is the block we will reorg to
-                fork_acc = chain.acc();
+                fork_acc = chain
+                    .get_acc(None)
+                    .expect("tip acc should always be present");
             }
         }
 
@@ -1789,7 +1794,7 @@ mod test {
 
         assert_eq!(chain.get_best_block().unwrap(), expected);
         assert_eq!(
-            chain.acc(),
+            chain.get_acc(None).unwrap(),
             fork_acc,
             "The accumulator should not change when accepting headers only",
         );

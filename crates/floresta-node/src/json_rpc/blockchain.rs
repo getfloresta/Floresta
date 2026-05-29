@@ -25,6 +25,7 @@ use corepc_types::v30::GetDeploymentInfo;
 use floresta_chain::buried_deployments_for;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
+use floresta_wire::block_proof::TipProof;
 use miniscript::descriptor::checksum;
 use serde_json::Value;
 use serde_json::json;
@@ -38,6 +39,8 @@ use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
+use crate::json_rpc::res::VerifyUtxoChainTipInclusionProofRes;
+use crate::json_rpc::res::VerifyUtxoChainTipInclusionProofVerbose;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
@@ -243,15 +246,12 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
         let latest_block_time = latest_header.time;
-        let leaf_count = self.chain.acc().leaves as u32;
-        let root_count = self.chain.acc().roots.len() as u32;
-        let root_hashes = self
-            .chain
-            .acc()
-            .roots
-            .into_iter()
-            .map(|r| r.to_string())
-            .collect();
+
+        let acc = self.chain.get_acc(None).map_err(|_| JsonRpcError::Chain)?;
+        let leaf_count = acc.leaves as u32;
+        let root_count = acc.roots.len() as u32;
+
+        let root_hashes = acc.roots.into_iter().map(|r| r.to_string()).collect();
 
         let validated_blocks = self.chain.get_validation_index().unwrap();
 
@@ -768,5 +768,50 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    pub(super) fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: TipProof,
+        verbosity: u8,
+        blockhash: Option<BlockHash>,
+    ) -> Result<VerifyUtxoChainTipInclusionProofRes, JsonRpcError> {
+        // The hash we got querying for the given blockhash
+        let internal_hash = blockhash.unwrap_or(self.get_best_block_hash()?);
+
+        if proof.proved_at_hash != internal_hash {
+            return Err(JsonRpcError::InvalidProof(format!(
+                "Possibly stale proof. Got {internal_hash} internally but proof was generated at block {}",
+                proof.proved_at_hash
+            )));
+        };
+
+        let stump = self
+            .chain
+            .get_acc(blockhash)
+            .map_err(|_| JsonRpcError::Chain)?;
+
+        let is_valid = stump
+            .verify(&proof.proof, &proof.hashes_proven)
+            .map_err(|e| JsonRpcError::InvalidProof(format!("Proof verification failed: {e:?}")))?;
+
+        match verbosity {
+            0 => Ok(VerifyUtxoChainTipInclusionProofRes::Zero(is_valid)),
+            1 => Ok(VerifyUtxoChainTipInclusionProofRes::One(
+                VerifyUtxoChainTipInclusionProofVerbose {
+                    valid: is_valid,
+                    proved_at_hash: proof.proved_at_hash.to_string(),
+                    targets: proof.proof.targets,
+                    num_proof_hashes: proof.proof.hashes.len(),
+                    proof_hashes: proof.proof.hashes.iter().map(ToString::to_string).collect(),
+                    hashes_proven: proof
+                        .hashes_proven
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                },
+            )),
+            _ => Err(JsonRpcError::InvalidVerbosityLevel),
+        }
     }
 }

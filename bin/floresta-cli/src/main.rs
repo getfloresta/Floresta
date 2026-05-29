@@ -137,6 +137,13 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         Methods::GetDeploymentInfo { blockhash } => {
             serde_json::to_string_pretty(&client.get_deployment_info(blockhash)?)?
         }
+        Methods::VerifyUtxoChainTipInclusionProof {
+            proof,
+            verbosity,
+            blockhash,
+        } => serde_json::to_string_pretty(
+            &client.verify_utxo_chain_tip_inclusion_proof(proof, verbosity, blockhash)?,
+        )?,
     })
 }
 
@@ -447,4 +454,19 @@ pub enum Methods {
         disable_help_subcommand = true
     )]
     GetNetworkInfo,
+
+    #[doc = include_str!("../../../doc/rpc/verifyutxochaintipinclusionproof.md")]
+    #[command(
+        name = "verifyutxochaintipinclusionproof",
+        about = "Verifies a Utreexo accumulator proof for the chain tip",
+        long_about = Some(include_str!("../../../doc/rpc/verifyutxochaintipinclusionproof.md")),
+        disable_help_subcommand = true
+    )]
+    VerifyUtxoChainTipInclusionProof {
+        proof: String,
+        #[arg(default_value = "0")]
+        verbosity: Option<u32>,
+        /// Optional block hash to check the proof against (defaults to current chain tip)
+        blockhash: Option<String>,
+    },
 }

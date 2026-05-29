@@ -159,6 +159,41 @@ pub struct RpcError {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetTxOutProof(pub Vec<u8>);
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+/// Return type for `verifyutxochaintipinclusionproof`, supports both its verbose version and non-verbose.
+///
+/// The non-verbose version tells whether a proof is valid given the internal utreexo accumulator.
+pub enum VerifyUtxoChainTipInclusionProofRes {
+    /// No verbosity, tells whether a proof is valid.
+    Zero(bool),
+
+    /// Verbosity one, with more detailed information about the proof
+    One(VerifyUtxoChainTipInclusionProofVerbose),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// Return type for `verifyutxochaintipinclusionproof`
+pub struct VerifyUtxoChainTipInclusionProofVerbose {
+    /// Whether this proof is valid
+    pub valid: bool,
+
+    /// The block hash that this proof was proved.
+    pub proved_at_hash: String,
+
+    /// The targets that this proof is proving.
+    pub targets: Vec<u64>,
+
+    /// Hashes count.
+    pub num_proof_hashes: usize,
+
+    /// Proof hashes.
+    pub proof_hashes: Vec<String>,
+
+    /// Which of the hashes were proven.
+    pub hashes_proven: Vec<String>,
+}
+
 #[derive(Debug)]
 pub enum JsonRpcError {
     /// There was a rescan request but we do not have any addresses in the watch-only wallet.
@@ -244,6 +279,9 @@ pub enum JsonRpcError {
 
     /// A numeric conversion overflows, e.g., u64 to u32
     ConversionOverflow(String),
+
+    /// This error is returned when a proof is well-formed but invalid (stale or verification failed)
+    InvalidProof(String),
 }
 
 impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
@@ -302,6 +340,7 @@ impl Display for JsonRpcError {
                 write!(f, "Could not send transaction to mempool due to {e}")
             }
             JsonRpcError::ConversionOverflow(e) => write!(f, "Numeric conversion overflow: {e}"),
+            JsonRpcError::InvalidProof(e) => write!(f, "Invalid proof: {e}"),
         }
     }
 }

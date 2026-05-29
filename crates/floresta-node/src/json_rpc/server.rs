@@ -4,6 +4,7 @@ use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,6 +36,7 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
+use floresta_wire::block_proof::TipProof;
 use floresta_wire::node_interface::NodeInterface;
 use serde_json::Value;
 use serde_json::json;
@@ -435,6 +437,22 @@ async fn handle_json_rpc_request(
             .list_descriptors()
             .map(|v| serde_json::to_value(v).unwrap()),
 
+        "verifyutxochaintipinclusionproof" => {
+            let proof_str = get_string(&params, 0, "proof")?;
+
+            let proof = TipProof::from_str(&proof_str)
+                .map_err(|e| JsonRpcError::InvalidProof(e.to_string()))?;
+
+            let verbosity: u8 =
+                get_optional_field(&params, 1, "verbosity", get_numeric)?.unwrap_or(0);
+
+            let blockhash: Option<BlockHash> =
+                get_optional_field(&params, 2, "blockhash", get_hash)?;
+
+            state
+                .verify_utxo_chain_tip_inclusion_proof(proof, verbosity, blockhash)
+                .map(|v| serde_json::to_value(v).unwrap())
+        }
         _ => {
             let error = JsonRpcError::MethodNotFound;
             Err(error)
@@ -465,6 +483,7 @@ fn get_http_error_code(err: &JsonRpcError) -> u16 {
         | JsonRpcError::ChainWorkOverflow
         | JsonRpcError::ConversionOverflow(_)
         | JsonRpcError::MempoolAccept(_)
+        | JsonRpcError::InvalidProof(_)
         | JsonRpcError::Wallet(_) => 400,
 
         // idunnolol
@@ -506,6 +525,7 @@ fn get_json_rpc_error_code(err: &JsonRpcError) -> i32 {
         | JsonRpcError::ChainWorkOverflow
         | JsonRpcError::ConversionOverflow(_)
         | JsonRpcError::Wallet(_)
+        | JsonRpcError::InvalidProof(_)
         | JsonRpcError::MempoolAccept(_) => -32600,
 
         // server error
