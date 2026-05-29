@@ -564,10 +564,9 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     /// activates it if it has more work. If the candidate loses, it is
     /// stored as an alternative tip with `InFork` status.
     ///
-    /// Unlike `reorg()`, this method does not call `find_fork_point()` or
-    /// `mark_chain_as_active/inactive`, so it is safe to call after
-    /// `reconsider_block` where the reconsidered blocks are already indexed
-    /// as `HeadersOnly` on the main chain.
+    /// Unlike `reorg()`, this method does not call `mark_chain_as_active/inactive`,
+    ///  so it is safe to call after `reconsider_block` where the reconsidered blocks
+    /// are already indexed as `HeadersOnly` on the main chain.
     ///
     /// Analogous to Bitcoin Core's `ActivateBestChain`.
     fn activate_best_chain(&self, candidate_tip: BlockHeader) -> Result<(), BlockchainError> {
