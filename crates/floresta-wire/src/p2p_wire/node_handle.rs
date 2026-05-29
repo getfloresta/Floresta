@@ -93,6 +93,9 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Add a peer to the address manager.
+    AddPeerAddress((BitcoinSocketAddr, bool)),
 }
 
 #[derive(Debug)]
@@ -139,6 +142,9 @@ pub enum NodeResponse {
 
     /// Address manager statistics.
     GetAddrManInfo(ConnectionStats),
+
+    /// Whether an address was successfully added to the address manager.
+    AddPeerAddress(bool),
 }
 
 #[derive(Debug)]
