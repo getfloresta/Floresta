@@ -35,6 +35,8 @@ use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_handle::NodeResponse;
 use crate::node_handle::UserRequest;
+use crate::node_interface::AddedNodeAddress;
+use crate::node_interface::AddedNodeInfo;
 use crate::node_interface::PeerInfo;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::PeerMessages;
@@ -872,6 +874,43 @@ where
             kind: peer.kind,
             transport_protocol: peer.transport_protocol,
         })
+    }
+
+    pub(crate) fn handle_get_added_node_info(
+        &self,
+        node: Option<BitcoinSocketAddr>,
+    ) -> Vec<AddedNodeInfo> {
+        self.added_peers
+            .iter()
+            .filter_map(|added| {
+                // If a node filter is specified, skip entries that don't match
+                if let Some(filter) = &node {
+                    if added.address != *filter {
+                        return None;
+                    }
+                }
+
+                let connected = self.peers.values().any(|peer| {
+                    *peer.address.as_bitcoin_socket_addr() == added.address
+                        && peer.state == PeerStatus::Ready
+                });
+
+                let addresses = if connected {
+                    vec![AddedNodeAddress {
+                        address: added.address.clone(),
+                        connected: "outbound".to_string(),
+                    }]
+                } else {
+                    vec![]
+                };
+
+                Some(AddedNodeInfo {
+                    addednode: added.address.clone(),
+                    connected,
+                    addresses,
+                })
+            })
+            .collect()
     }
 
     // === ADDNODE ===

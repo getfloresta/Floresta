@@ -33,6 +33,29 @@ use super::transport::TransportProtocol;
 use crate::address_man::ConnectionStats;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 
+#[derive(Debug, Clone)]
+/// Information about a manually added node (via `addnode`).
+pub struct AddedNodeInfo {
+    /// The address of the added node.
+    pub addednode: BitcoinSocketAddr,
+
+    /// Whether we are currently connected to this node.
+    pub connected: bool,
+
+    /// Connection details. Only populated when `connected` is true.
+    pub addresses: Vec<AddedNodeAddress>,
+}
+
+#[derive(Debug, Clone)]
+/// Address information for a connected added node.
+pub struct AddedNodeAddress {
+    /// The peer address.
+    pub address: BitcoinSocketAddr,
+
+    /// The connection direction: "outbound" (Floresta does not accept inbound).
+    pub connected: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 /// A struct representing a peer connected to the node.
 ///
@@ -142,6 +165,12 @@ pub trait NetworkMethods {
     /// This function will return a list of `PeerInfo` structs, each of which contains information
     /// about a single peer.
     fn get_peer_info(&self) -> impl Future<Output = Result<Vec<PeerInfo>, Self::Error>>;
+
+    /// Information about all manually added nodes possibly filtering by a given one.
+    fn get_added_node_info(
+        &self,
+        node: Option<BitcoinSocketAddr>,
+    ) -> impl Future<Output = Result<Vec<AddedNodeInfo>, Self::Error>>;
 
     /// Returns the number of peers currently connected to the node
     fn get_connection_count(&self) -> impl Future<Output = Result<usize, Self::Error>>;
