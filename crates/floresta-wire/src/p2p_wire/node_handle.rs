@@ -106,6 +106,15 @@ pub enum UserRequest {
         /// The remote node will send min(height(stop_hash), 2_000) headers on each request.
         stop_hash: BlockHash,
     },
+
+    /// Add a peer to the address manager.
+    AddPeerAddress {
+        /// The Peers address.
+        peer_address: BitcoinSocketAddr,
+
+        /// Whether we should add this address to the tried table.
+        tried: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -155,6 +164,9 @@ pub enum NodeResponse {
 
     /// Received compact block filter headers.
     CFilterHeaders(CFHeaders),
+
+    /// Whether an address was successfully added to the address manager.
+    AddPeerAddress(bool),
 }
 
 #[derive(Debug)]
@@ -261,6 +273,21 @@ impl NetworkMethods for NodeHandle {
             .await?;
 
         extract_variant!(Add, val);
+    }
+
+    async fn add_peer_address(
+        &self,
+        address: BitcoinSocketAddr,
+        tried: bool,
+    ) -> Result<bool, Self::Error> {
+        let val = self
+            .send_request(UserRequest::AddPeerAddress {
+                peer_address: address,
+                tried,
+            })
+            .await?;
+
+        extract_variant!(AddPeerAddress, val);
     }
 
     async fn remove_peer(&self, addr: BitcoinSocketAddr) -> Result<bool, Self::Error> {

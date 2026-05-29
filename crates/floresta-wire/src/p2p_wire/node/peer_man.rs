@@ -15,6 +15,7 @@ use floresta_common::try_and_log;
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::IteratorRandom;
+use rand::random;
 use rand::seq::IndexedRandom;
 use tracing::debug;
 use tracing::error;
@@ -874,6 +875,30 @@ where
             kind: peer.kind,
             transport_protocol: peer.transport_protocol,
         })
+    }
+
+    /// Add a peer to the address manager returning whether it was added or not.
+    pub(crate) fn handle_add_peer_address(&mut self, addr: BitcoinSocketAddr, tried: bool) -> bool {
+        let state = if tried {
+            AddressState::Tried(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            )
+        } else {
+            AddressState::NeverTried
+        };
+
+        let services = ServiceFlags::WITNESS | ServiceFlags::NETWORK_LIMITED;
+        let id = random::<u64>() as usize;
+        let local_addr = LocalAddress::new(addr, 0, state, services, id);
+
+        let count_before = self.address_man.address_count();
+        self.address_man.push_addresses(&[local_addr]);
+        let count_after = self.address_man.address_count();
+
+        count_after > count_before
     }
 
     // === ADDNODE ===
