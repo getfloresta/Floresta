@@ -138,6 +138,9 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.get_deployment_info(blockhash)?)?
         }
         Methods::GetAddrManInfo => serde_json::to_string_pretty(&client.get_addrman_info()?)?,
+        Methods::GetAddedNodeInfo { node } => {
+            serde_json::to_string_pretty(&client.get_added_node_info(node)?)?
+        }
     })
 }
 
@@ -456,4 +459,16 @@ pub enum Methods {
         disable_help_subcommand = true
     )]
     GetAddrManInfo,
+
+    #[doc = include_str!("../../../doc/rpc/getaddednodeinfo.md")]
+    #[command(
+        name = "getaddednodeinfo",
+        about = "Returns information about manually added nodes",
+        long_about = Some(include_str!("../../../doc/rpc/getaddednodeinfo.md")),
+        disable_help_subcommand = true
+    )]
+    GetAddedNodeInfo {
+        /// Filter results to a specific added node (ip or ip:port)
+        node: Option<String>,
+    },
 }
