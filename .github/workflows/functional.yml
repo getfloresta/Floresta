@@ -46,13 +46,9 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      - name: Prepare functional tests tasks
+      - name: Run functional tests
         run: |
-          tests/prepare.sh --release
-
-      - name: Run functional tests tasks
-        run: |
-          tests/run.sh
+          uv run pytest
 
       - name: Log tests on failure
         if: failure()

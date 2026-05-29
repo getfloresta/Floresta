@@ -9,32 +9,29 @@ This module provides fixtures for creating and managing test nodes
 
 # pylint: disable=redefined-outer-name
 
-import os
 import logging
+import os
 import time
 from typing import List
-import pytest
 
+import pytest
 from test_framework import FlorestaTestFramework
-from test_framework.node import Node, NodeType
-from test_framework.util import Utility
 from test_framework.constants import (
-    FLORESTA_TEMP_DIR,
     WALLET_ADDRESS,
     WALLET_DESCRIPTOR_EXTERNAL,
     WALLET_DESCRIPTOR_INTERNAL,
 )
+from test_framework.node import Node, NodeType
+from test_framework.prepare import get_temp_dir, prepare_binaries
+from test_framework.util import Utility
 
 
 @pytest.fixture(scope="session", autouse=True)
 def validate_and_check_environment():
-    """Validate environment and check for required binaries before running tests."""
-    temp_dir = FLORESTA_TEMP_DIR
-    if not temp_dir:
-        pytest.fail("FLORESTA_TEMP_DIR environment variable not set")
+    """Prepare binaries and validate environment before running tests."""
+    prepare_binaries()
 
-    if not os.path.exists(temp_dir):
-        pytest.fail(f"FLORESTA_TEMP_DIR directory does not exist: {temp_dir}")
+    temp_dir = get_temp_dir()
 
     # Create necessary subdirectories
     os.makedirs(os.path.join(temp_dir, "logs"), exist_ok=True)
@@ -79,7 +76,7 @@ def setup_logging(request):
 
     # Configure log file
     git_describe = Utility.get_git_describe()
-    log_file = os.path.join(FLORESTA_TEMP_DIR, "logs", git_describe, f"{test_name}.log")
+    log_file = os.path.join(get_temp_dir(), "logs", git_describe, f"{test_name}.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     file_handler = logging.FileHandler(log_file, mode="w")
     file_handler.setFormatter(formatter)
