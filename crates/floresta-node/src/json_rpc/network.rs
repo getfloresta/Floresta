@@ -9,6 +9,8 @@ use corepc_types::v30::AddPeerAddress;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetNetworkInfo;
 use corepc_types::v30::GetNetworkInfoNetwork;
+use corepc_types::v30::GetNodeAddresses;
+use corepc_types::v30::NodeAddress as CorepcNodeAddress;
 use floresta_common::PROTOCOL_VERSION;
 use floresta_common::advertised_services;
 use floresta_common::service_flags_strings;
@@ -188,6 +190,31 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .map_err(|e| JsonRpcError::Node(e.to_string()))?;
 
         Ok(AddPeerAddress { success })
+    }
+
+    pub(crate) async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<GetNodeAddresses> {
+        let addresses = self
+            .node
+            .get_node_addresses(count, network)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        Ok(GetNodeAddresses(
+            addresses
+                .into_iter()
+                .map(|addr| CorepcNodeAddress {
+                    time: addr.time,
+                    services: addr.services,
+                    address: addr.address,
+                    port: addr.port,
+                    network: addr.network.to_string(),
+                })
+                .collect(),
+        ))
     }
 
     pub(crate) async fn get_network_info(&self) -> Result<GetNetworkInfo> {
