@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use bitcoin::Transaction;
 use bitcoin::p2p::ServiceFlags;
+use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message_blockdata::Inventory;
 use floresta_chain::ChainBackend;
@@ -16,6 +17,7 @@ use rand::distr::weighted::WeightedIndex;
 use rand::prelude::IteratorRandom;
 use rand::random;
 use rand::seq::IndexedRandom;
+use rand::seq::SliceRandom;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -29,6 +31,7 @@ use super::PeerStatus;
 use super::UtreexoNode;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
+use crate::address_man::ReachableNetworks;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
@@ -36,7 +39,9 @@ use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::node_handle::NodeResponse;
 use crate::node_handle::UserRequest;
+use crate::node_interface::NodeAddress;
 use crate::node_interface::PeerInfo;
+use crate::onion::OnionV3Addr;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
@@ -873,6 +878,51 @@ where
             kind: peer.kind,
             transport_protocol: peer.transport_protocol,
         })
+    }
+
+    pub(crate) fn handle_get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Vec<NodeAddress> {
+        let mut addresses = self.address_man.get_all_not_terrible();
+        // Shuffle to make it harder to fingerprint/eclipse the node, matching Bitcoin Core behavior
+        addresses.shuffle(&mut rand::rng());
+
+        // count=0 means return all known addresses, matching Bitcoin Core behavior
+        let count = if count == 0 {
+            usize::MAX
+        } else {
+            count as usize
+        };
+
+        addresses
+            .into_iter()
+            .filter_map(|(addr, time, services, port)| {
+                let (address, addr_network) = match (&addr, &network) {
+                    (AddrV2::Ipv4(ip), None | Some(ReachableNetworks::IPv4)) => {
+                        (ip.to_string(), ReachableNetworks::IPv4)
+                    }
+                    (AddrV2::Ipv6(ip), None | Some(ReachableNetworks::IPv6)) => {
+                        (ip.to_string(), ReachableNetworks::IPv6)
+                    }
+                    (AddrV2::TorV3(key), None | Some(ReachableNetworks::TorV3)) => (
+                        OnionV3Addr::from(*key).to_string(),
+                        ReachableNetworks::TorV3,
+                    ),
+                    _ => return None,
+                };
+
+                Some(NodeAddress {
+                    time,
+                    services: services.to_u64(),
+                    address,
+                    port,
+                    network: addr_network,
+                })
+            })
+            .take(count)
+            .collect()
     }
 
     /// Add a peer to the address manager returning whether it was added or not.

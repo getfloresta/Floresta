@@ -30,10 +30,12 @@ use tokio::sync::oneshot::error::RecvError;
 use super::UtreexoNodeConfig;
 use super::node::NodeNotification;
 use crate::address_man::ConnectionStats;
+use crate::address_man::ReachableNetworks;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::node_interface::ChainMethods;
 use crate::node_interface::MempoolMethods;
 use crate::node_interface::NetworkMethods;
+use crate::node_interface::NodeAddress;
 use crate::node_interface::NodeConfigMethods;
 use crate::node_interface::PeerInfo;
 
@@ -107,6 +109,9 @@ pub enum UserRequest {
         stop_hash: BlockHash,
     },
 
+    /// Return known peer addresses from the address manager.
+    GetNodeAddresses(u32, Option<ReachableNetworks>),
+
     /// Add a peer to the address manager.
     AddPeerAddress {
         /// The Peers address.
@@ -164,6 +169,9 @@ pub enum NodeResponse {
 
     /// Received compact block filter headers.
     CFilterHeaders(CFHeaders),
+
+    /// Known peer addresses from the address manager.
+    GetNodeAddresses(Vec<NodeAddress>),
 
     /// Whether an address was successfully added to the address manager.
     AddPeerAddress(bool),
@@ -334,6 +342,18 @@ impl NetworkMethods for NodeHandle {
         let val = self.send_request(UserRequest::GetAddrManInfo).await?;
 
         extract_variant!(GetAddrManInfo, val)
+    }
+
+    async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<Vec<NodeAddress>, Self::Error> {
+        let val = self
+            .send_request(UserRequest::GetNodeAddresses(count, network))
+            .await?;
+
+        extract_variant!(GetNodeAddresses, val)
     }
 }
 

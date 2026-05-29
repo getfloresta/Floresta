@@ -82,7 +82,8 @@ pub enum AddressState {
 }
 
 /// All the networks we might receive addresses for
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReachableNetworks {
     IPv4,
     IPv6,
@@ -649,6 +650,24 @@ impl AddressMan {
                     address.services,
                     address.get_port(),
                 ))
+            })
+            .collect()
+    }
+
+    /// Returns all known addresses that are not terrible, matching Bitcoin Core's
+    /// `GetAddr_()` behavior. This includes untried and recently-failed peers,
+    /// excluding only banned addresses.
+    pub fn get_all_not_terrible(&self) -> AddressToSend {
+        self.addresses
+            .values()
+            .filter(|addr| addr.is_routable() && !matches!(addr.state, AddressState::Banned(_)))
+            .map(|addr| {
+                (
+                    addr.address.as_addrv2().clone(),
+                    addr.last_connected,
+                    addr.services,
+                    addr.get_port(),
+                )
             })
             .collect()
     }
