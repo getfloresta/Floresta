@@ -7,14 +7,11 @@ utreexod. Then, assert that the command returns the same hash of
 and utreexod, respectively.
 """
 
-import time
 import pytest
-
-TIMEOUT_SECONDS = 20
 
 
 @pytest.mark.rpc
-def test_get_best_block_hash(florestad_utreexod):
+def test_get_best_block_hash(florestad_utreexod, node_manager):
     """
     Test checks if Floresta can synchronize with the blockchain
     and retrieve the hash of the last block via the getbestblockhash RPC.
@@ -27,14 +24,7 @@ def test_get_best_block_hash(florestad_utreexod):
     assert floresta_best_block == utreexo_best_block
 
     utreexod.rpc.generate(10)
-    end = time.time() + TIMEOUT_SECONDS
-    while time.time() < end:
-        floresta_block = florestad.rpc.get_block_count()
-        utreexo_block = utreexod.rpc.get_block_count()
-        if floresta_block == utreexo_block:
-            break
-
-        time.sleep(1)
+    node_manager.wait_for_sync(florestad, 10)
 
     utreexo_chain = utreexod.rpc.get_blockchain_info()
     floresta_best_block = florestad.rpc.get_bestblockhash()

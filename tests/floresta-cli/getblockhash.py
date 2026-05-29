@@ -6,17 +6,14 @@ getblockhash.py
 This functional test cli utility to interact with a Floresta node with `getblockhash`
 """
 
-import time
 import pytest
-
 from test_framework.constants import GENESIS_BLOCK_HASH
 
 MINED_BLOCKS = 10
-TIMEOUT = 20
 
 
 @pytest.mark.rpc
-def test_get_block_hash(florestad_utreexod):
+def test_get_block_hash(florestad_utreexod, node_manager):
     """
     Test the `getblockhash` shows the block hash.
     """
@@ -30,15 +27,7 @@ def test_get_block_hash(florestad_utreexod):
 
     # Mine blocks with utreexod
     utreexod.rpc.generate(MINED_BLOCKS)
-    timeout = time.time() + TIMEOUT
-    while time.time() < timeout:
-        if (
-            florestad.rpc.get_block_count()
-            == utreexod.rpc.get_block_count()
-            == MINED_BLOCKS
-        ):
-            break
-        time.sleep(1)
+    node_manager.wait_for_sync(florestad, MINED_BLOCKS)
 
     # Get final block hashes
     final_florestad_hash = florestad.rpc.get_blockhash(MINED_BLOCKS)
