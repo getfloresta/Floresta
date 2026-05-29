@@ -16,6 +16,7 @@ use floresta_common::advertised_services;
 use floresta_common::service_flags_strings;
 use floresta_wire::address_man::NetworkStats;
 use floresta_wire::address_man::ReachableNetworks;
+use floresta_wire::node_interface::NodeAddress;
 use floresta_wire::node_interface::PeerInfo;
 use serde_json::Value;
 use serde_json::json;
@@ -188,6 +189,17 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         );
 
         Ok(GetAddrManInfo(map))
+    }
+
+    pub(crate) async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<Vec<NodeAddress>> {
+        self.node
+            .get_node_addresses(count, network)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))
     }
 
     pub(crate) async fn get_network_info(&self) -> Result<GetNetworkInfo> {
