@@ -237,6 +237,18 @@ impl NetworkMethods for NodeHandle {
         extract_variant!(Add, val);
     }
 
+    async fn add_peer_address(
+        &self,
+        address: BitcoinSocketAddr,
+        tried: bool,
+    ) -> Result<bool, Self::Error> {
+        let val = self
+            .send_request(UserRequest::AddPeerAddress((address, tried)))
+            .await?;
+
+        extract_variant!(AddPeerAddress, val);
+    }
+
     async fn remove_peer(&self, addr: BitcoinSocketAddr) -> Result<bool, Self::Error> {
         let val = self.send_request(UserRequest::Remove(addr)).await?;
         extract_variant!(Remove, val);
