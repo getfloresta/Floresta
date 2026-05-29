@@ -20,6 +20,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 
 use super::UtreexoNodeConfig;
+use super::address_man::ReachableNetworks;
 use super::node::ConnectionKind;
 use super::node::NodeNotification;
 use super::node::PeerStatus;
@@ -101,6 +102,28 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Return known peer addresses from the address manager.
+    GetNodeAddresses(u32, Option<ReachableNetworks>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// A known peer address from the address manager.
+pub struct NodeAddress {
+    /// Last time this address was seen (unix timestamp).
+    pub time: u64,
+
+    /// Services offered by this peer.
+    pub services: u64,
+
+    /// The IP address of this peer.
+    pub address: String,
+
+    /// The port of this peer.
+    pub port: u16,
+
+    /// The network the address belongs to (e.g. "ipv4", "ipv6", "onion", "i2p", "cjdns").
+    pub network: ReachableNetworks,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,6 +188,9 @@ pub enum NodeResponse {
 
     /// Address manager statistics.
     GetAddrManInfo(ConnectionStats),
+
+    /// Known peer addresses from the address manager.
+    GetNodeAddresses(Vec<NodeAddress>),
 }
 
 #[derive(Debug, Clone)]
@@ -341,6 +367,19 @@ impl NodeInterface {
         let val = self.send_request(UserRequest::GetAddrManInfo).await?;
 
         extract_variant!(GetAddrManInfo, val)
+    }
+
+    /// Returns known peer addresses from the address manager.
+    pub async fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Result<Vec<NodeAddress>, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::GetNodeAddresses(count, network))
+            .await?;
+
+        extract_variant!(GetNodeAddresses, val)
     }
 }
 

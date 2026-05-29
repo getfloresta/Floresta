@@ -78,7 +78,8 @@ pub enum AddressState {
 }
 
 /// All the networks we might receive addresses for
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReachableNetworks {
     IPv4,
     IPv6,
