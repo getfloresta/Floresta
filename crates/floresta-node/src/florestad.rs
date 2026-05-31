@@ -462,6 +462,10 @@ impl Florestad {
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
         {
+            let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
+            json_rpc::auth::generate_cookie(&cookie_path)?;
+            info!("RPC cookie file written to {}", cookie_path.display());
+
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
                 blockchain_state.clone(),
                 wallet.clone(),

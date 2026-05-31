@@ -1153,6 +1153,7 @@ dependencies = [
  "metrics",
  "miniscript",
  "pretty_assertions",
+ "rand 0.10.1",
  "rcgen",
  "rustreexo",
  "serde",
