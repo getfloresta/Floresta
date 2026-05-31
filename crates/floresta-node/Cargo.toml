@@ -14,6 +14,7 @@ bitcoin = { workspace = true }
 corepc-types = { workspace = true }
 dns-lookup = { workspace = true }
 miniscript = { workspace = true, features = ["std"] }
+rand = { workspace = true }
 rcgen = { workspace = true }
 rustreexo = { workspace = true }
 serde = { workspace = true }
