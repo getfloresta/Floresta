@@ -15,6 +15,7 @@
 //! overwritten.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io;
@@ -22,6 +23,8 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use bitcoin::hex::DisplayHex;
 use rand::Rng;
 
@@ -33,6 +36,9 @@ pub(crate) const COOKIE_FILE_NAME: &str = ".cookie";
 
 /// Token length in raw random bytes; hex-encoded to 64 ASCII chars.
 const COOKIE_TOKEN_BYTES: usize = 32;
+
+/// Upper bound on the inbound `Authorization` header to cap base64 decode allocation.
+const MAX_AUTH_HEADER_LEN: usize = 16 * 1024;
 
 /// Generate a fresh cookie and write it to `path` with no trailing newline.
 ///
@@ -60,6 +66,84 @@ pub(crate) fn generate_cookie(path: &Path) -> io::Result<()> {
     fs::rename(&tmp, path)?;
 
     Ok(())
+}
+
+/// Errors produced by [`parse_basic_auth_header`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BasicAuthHeaderError {
+    /// The header value did not start with the literal `"Basic "` prefix.
+    MissingBasicPrefix,
+    /// The base64 payload could not be decoded.
+    InvalidBase64,
+    /// The decoded payload was not valid UTF-8.
+    InvalidUtf8,
+    /// The decoded payload contained no `:` separator.
+    MissingColon,
+    /// The header value exceeded the inbound length cap.
+    PayloadTooLarge,
+}
+
+impl fmt::Display for BasicAuthHeaderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingBasicPrefix => write!(f, "Authorization header must start with 'Basic '"),
+            Self::InvalidBase64 => write!(f, "Authorization payload is not valid base64"),
+            Self::InvalidUtf8 => write!(f, "Authorization payload is not valid UTF-8"),
+            Self::MissingColon => write!(f, "Authorization payload missing ':' separator"),
+            Self::PayloadTooLarge => write!(
+                f,
+                "Authorization header exceeds {MAX_AUTH_HEADER_LEN}-byte cap"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BasicAuthHeaderError {}
+
+/// Axum middleware that parses an inbound `Authorization: Basic` header and
+/// logs the parsed username at debug level. Requests without the header or
+/// with a malformed value are passed through unchanged; this layer does not
+/// reject anything.
+pub(crate) async fn auth_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some(header) = req.headers().get(axum::http::header::AUTHORIZATION) {
+        match header.to_str() {
+            Ok(value) => match parse_basic_auth_header(value) {
+                Ok((user, _)) => tracing::debug!("rpc auth header parsed for user {user}"),
+                Err(e) => tracing::debug!("rpc auth header parse failed: {e}"),
+            },
+            Err(_) => tracing::debug!("rpc auth header is not valid ascii"),
+        }
+    }
+    next.run(req).await
+}
+
+/// Parse an HTTP `Authorization: Basic <b64>` header value into `(user, pass)`.
+///
+/// Mirrors Bitcoin Core: the `"Basic "` prefix check is case-sensitive, the
+/// base64 payload is whitespace-trimmed before decoding, and the split between
+/// user and password is on the **first** `:`. Passwords may contain `:`;
+/// usernames may not.
+pub(crate) fn parse_basic_auth_header(
+    value: &str,
+) -> Result<(String, String), BasicAuthHeaderError> {
+    if value.len() > MAX_AUTH_HEADER_LEN {
+        return Err(BasicAuthHeaderError::PayloadTooLarge);
+    }
+    let payload = value
+        .strip_prefix("Basic ")
+        .ok_or(BasicAuthHeaderError::MissingBasicPrefix)?
+        .trim();
+    let decoded = BASE64
+        .decode(payload)
+        .map_err(|_| BasicAuthHeaderError::InvalidBase64)?;
+    let decoded = String::from_utf8(decoded).map_err(|_| BasicAuthHeaderError::InvalidUtf8)?;
+    let (user, pass) = decoded
+        .split_once(':')
+        .ok_or(BasicAuthHeaderError::MissingColon)?;
+    Ok((user.to_string(), pass.to_string()))
 }
 
 /// Remove the cookie file at `path`. Treats `NotFound` as success so shutdown
@@ -218,6 +302,75 @@ mod tests {
 
         delete_cookie(&path).expect("delete is idempotent on missing file");
         delete_cookie(&path).expect("delete is idempotent on missing file");
+    }
+
+    #[test]
+    fn parse_basic_auth_header_accepts_valid_header() {
+        // base64("alice:hunter2") = "YWxpY2U6aHVudGVyMg=="
+        let (user, pass) = parse_basic_auth_header("Basic YWxpY2U6aHVudGVyMg==")
+            .expect("valid Basic header should parse");
+        assert_eq!(user, "alice");
+        assert_eq!(pass, "hunter2");
+    }
+
+    #[test]
+    fn parse_basic_auth_header_trims_whitespace_around_payload() {
+        let (user, pass) = parse_basic_auth_header("Basic   YWxpY2U6aHVudGVyMg==  ")
+            .expect("valid Basic header with whitespace should parse");
+        assert_eq!(user, "alice");
+        assert_eq!(pass, "hunter2");
+    }
+
+    #[test]
+    fn parse_basic_auth_header_allows_colon_in_password() {
+        // base64("alice:pass:with:colons") = "YWxpY2U6cGFzczp3aXRoOmNvbG9ucw=="
+        let (user, pass) = parse_basic_auth_header("Basic YWxpY2U6cGFzczp3aXRoOmNvbG9ucw==")
+            .expect("valid Basic header with colons in pass should parse");
+        assert_eq!(user, "alice");
+        assert_eq!(pass, "pass:with:colons");
+    }
+
+    #[test]
+    fn parse_basic_auth_header_rejects_wrong_scheme() {
+        // The "Basic " prefix is case-sensitive; reject "basic ", "Bearer ...", and empty.
+        assert_eq!(
+            parse_basic_auth_header("basic YWxpY2U6aHVudGVyMg=="),
+            Err(BasicAuthHeaderError::MissingBasicPrefix),
+        );
+        assert_eq!(
+            parse_basic_auth_header("Bearer YWxpY2U6aHVudGVyMg=="),
+            Err(BasicAuthHeaderError::MissingBasicPrefix),
+        );
+        assert_eq!(
+            parse_basic_auth_header(""),
+            Err(BasicAuthHeaderError::MissingBasicPrefix),
+        );
+    }
+
+    #[test]
+    fn parse_basic_auth_header_rejects_bad_base64() {
+        assert_eq!(
+            parse_basic_auth_header("Basic !!!not-base64!!!"),
+            Err(BasicAuthHeaderError::InvalidBase64),
+        );
+    }
+
+    #[test]
+    fn parse_basic_auth_header_rejects_missing_colon() {
+        // base64("nocolon") = "bm9jb2xvbg=="
+        assert_eq!(
+            parse_basic_auth_header("Basic bm9jb2xvbg=="),
+            Err(BasicAuthHeaderError::MissingColon),
+        );
+    }
+
+    #[test]
+    fn parse_basic_auth_header_rejects_oversized_payload() {
+        let oversized = format!("Basic {}", "A".repeat(MAX_AUTH_HEADER_LEN));
+        assert_eq!(
+            parse_basic_auth_header(&oversized),
+            Err(BasicAuthHeaderError::PayloadTooLarge),
+        );
     }
 
     #[cfg(unix)]
