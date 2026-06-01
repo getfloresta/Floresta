@@ -68,7 +68,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.get_tx_out(txid, vout)?)?
         }
         Methods::GetTxOutProof { txids, blockhash } => {
-            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash))?
+            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash)?)?
         }
         Methods::GetTransaction { txid, .. } => {
             serde_json::to_string_pretty(&client.get_transaction(txid, Some(true))?)?
