@@ -306,6 +306,12 @@ impl Florestad {
         if let Some(chan) = chan {
             try_and_log!(chan.await);
         }
+
+        #[cfg(feature = "json-rpc")]
+        {
+            let cookie_path = self.config.datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
+            try_and_log!(json_rpc::auth::delete_cookie(&cookie_path));
+        }
     }
 
     /// Parses an address in the format `<hostname>[<:port>]` and returns a
