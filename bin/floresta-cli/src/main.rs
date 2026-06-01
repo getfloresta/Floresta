@@ -215,8 +215,13 @@ pub enum Methods {
     )]
     GetDifficulty,
 
-    /// Returns the proof that one or more transactions were included in a block
-    #[command(name = "gettxoutproof")]
+    #[doc = include_str!("../../../doc/rpc/gettxoutproof.md")]
+    #[command(
+        name = "gettxoutproof",
+        about = "Returns a hex-encoded Merkle proof showing that one or more transactions were included in a block.",
+        long_about = Some(include_str!("../../../doc/rpc/gettxoutproof.md")),
+        disable_help_subcommand = true
+    )]
     GetTxOutProof {
         /// The transaction IDs to prove
         #[arg(required = true, value_parser = |s: &str| serde_json::from_str::<Vec<Txid>>(s).map_err(|e| e.to_string()))]
