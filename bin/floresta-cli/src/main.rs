@@ -2,7 +2,6 @@
 
 use core::fmt::Debug;
 use std::path::PathBuf;
-mod parsers;
 
 use anyhow::Ok;
 use bitcoin::BlockHash;
@@ -220,7 +219,7 @@ pub enum Methods {
     #[command(name = "gettxoutproof")]
     GetTxOutProof {
         /// The transaction IDs to prove
-        #[arg(required = true, value_parser = crate::parsers::parse_json_array::<Txid>)]
+        #[arg(required = true, value_parser = |s: &str| serde_json::from_str::<Vec<Txid>>(s).map_err(|e| e.to_string()))]
         txids: std::vec::Vec<Txid>, // you need to specify the path of Vec https://github.com/clap-rs/clap/discussions/4695
 
         /// The block in which to look for the transactions
