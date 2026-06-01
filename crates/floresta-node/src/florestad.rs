@@ -273,6 +273,11 @@ pub struct Florestad {
     #[cfg(feature = "json-rpc")]
     /// A handle to our json-rpc server
     json_rpc: OnceLock<tokio::task::JoinHandle<()>>,
+
+    #[cfg(feature = "json-rpc")]
+    /// Set once after this process writes the RPC cookie file. Gates cookie
+    /// deletion at shutdown so we never remove a cookie written by a prior run.
+    cookie_generated: OnceLock<()>,
 }
 
 impl Florestad {
@@ -303,6 +308,12 @@ impl Florestad {
         };
         if let Some(chan) = chan {
             try_and_log!(chan.await);
+        }
+
+        #[cfg(feature = "json-rpc")]
+        if self.cookie_generated.get().is_some() {
+            let cookie_path = self.config.datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
+            try_and_log!(json_rpc::auth::delete_cookie(&cookie_path));
         }
     }
 
@@ -462,6 +473,7 @@ impl Florestad {
         {
             let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
             json_rpc::auth::generate_cookie(&cookie_path)?;
+            let _ = self.cookie_generated.set(());
             info!("RPC cookie file written to {}", cookie_path.display());
 
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
@@ -902,6 +914,8 @@ impl From<Config> for Florestad {
             stop_notify: Arc::new(Mutex::new(None)),
             #[cfg(feature = "json-rpc")]
             json_rpc: OnceLock::new(),
+            #[cfg(feature = "json-rpc")]
+            cookie_generated: OnceLock::new(),
         }
     }
 }

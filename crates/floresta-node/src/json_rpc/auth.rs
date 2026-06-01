@@ -62,6 +62,17 @@ pub(crate) fn generate_cookie(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Remove the cookie file at `path`. Treats `NotFound` as success so shutdown
+/// is idempotent. Caller must only invoke this after a successful
+/// [`generate_cookie`] in this process.
+pub(crate) fn delete_cookie(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 fn tmp_path(path: &Path) -> PathBuf {
     let mut buf = OsString::from(path);
     buf.push(".tmp");
@@ -188,6 +199,25 @@ mod tests {
         assert!(!tmp.exists(), "stale tmp file should be consumed by rename");
 
         fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn delete_cookie_removes_existing_file() {
+        let path = tmp_cookie_path("delete_existing");
+        generate_cookie(&path).expect("cookie write should succeed in test");
+        assert!(path.exists());
+
+        delete_cookie(&path).expect("delete should succeed for an existing file");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_cookie_is_idempotent_on_missing_file() {
+        let path = tmp_cookie_path("delete_missing");
+        assert!(!path.exists());
+
+        delete_cookie(&path).expect("delete is idempotent on missing file");
+        delete_cookie(&path).expect("delete is idempotent on missing file");
     }
 
     #[cfg(unix)]
