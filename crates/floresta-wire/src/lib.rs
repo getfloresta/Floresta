@@ -23,6 +23,8 @@ use bitcoin::block::Header as BlockHeader;
 pub use rustreexo;
 #[cfg(not(target_arch = "wasm32"))]
 mod p2p_wire;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod private_broadcast;
 pub use p2p_wire::UtreexoNodeConfig;
 #[cfg(not(target_arch = "wasm32"))]
 pub use p2p_wire::address_man;
