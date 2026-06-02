@@ -1556,13 +1556,22 @@ mod test {
     use bitcoin::CompactTarget;
     use bitcoin::Network;
     use bitcoin::OutPoint;
+    use bitcoin::ScriptBuf;
+    use bitcoin::Sequence;
+    use bitcoin::Transaction;
+    use bitcoin::TxMerkleNode;
     use bitcoin::Work;
+    use bitcoin::absolute::LockTime;
     use bitcoin::block::Header as BlockHeader;
     use bitcoin::block::Version as HeaderVersion;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::constants::genesis_block;
+    use bitcoin::hashes::Hash;
+    use bitcoin::opcodes::OP_TRUE;
+    use bitcoin::script::Builder;
+    use bitcoin::transaction::Version as TransactionVersion;
     use floresta_common::assert_ok;
     use floresta_common::bhash;
     use rand::RngExt;
@@ -1582,12 +1591,14 @@ mod test {
     use crate::extensions::WorkExt;
     use crate::prelude::HashMap;
     use crate::pruned_utreexo::consensus::Consensus;
+    use crate::pruned_utreexo::error::BlockValidationErrors;
     use crate::pruned_utreexo::utxo_data::UtxoData;
+    use crate::txin;
+    use crate::txout;
 
     const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
     const TEST_FORK_FILE_SIZE: usize = 10_000;
     const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
-
     fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
@@ -1606,6 +1617,85 @@ mod test {
 
         let chainstore = FlatChainStore::new(config).unwrap();
         ChainState::open(chainstore, network, assume_valid_arg).unwrap()
+    }
+
+    fn anyone_can_spend_script() -> ScriptBuf {
+        let mut script = ScriptBuf::new();
+        script.push_opcode(OP_TRUE);
+        script
+    }
+
+    fn test_coinbase(height: u32, sequence: Sequence, lock_time: LockTime) -> Transaction {
+        let script_sig = Builder::new()
+            .push_int(i64::from(height))
+            .push_int(0)
+            .into_script();
+
+        Transaction {
+            version: TransactionVersion::TWO,
+            lock_time,
+            input: vec![txin!(OutPoint::null(), script_sig, sequence)],
+            output: vec![txout!(0, ScriptBuf::new_op_return([0x0, 0x1]))],
+        }
+    }
+
+    fn block_with_transactions(height: u32, txdata: Vec<Transaction>) -> Block {
+        let mut block = Block {
+            header: BlockHeader {
+                version: HeaderVersion::TWO,
+                prev_blockhash: genesis_block(Network::Regtest).block_hash(),
+                merkle_root: TxMerkleNode::all_zeros(),
+                time: 1_716_400_000 + height,
+                bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+                nonce: 0,
+            },
+            txdata,
+        };
+        block.header.merkle_root = block.compute_merkle_root().expect("block txs");
+        block
+    }
+
+    fn block_with_coinbase(height: u32, coinbase: Transaction) -> Block {
+        block_with_transactions(height, vec![coinbase])
+    }
+
+    fn test_outpoint(vout: u32) -> OutPoint {
+        OutPoint {
+            txid: genesis_block(Network::Regtest).txdata[0].compute_txid(),
+            vout,
+        }
+    }
+
+    /// Builds a two-input test transaction with the given lock time and sequences,
+    /// plus its referenced input UTXOs.
+    fn test_spend(
+        lock_time: LockTime,
+        first_sequence: Sequence,
+        second_sequence: Sequence,
+    ) -> (Transaction, HashMap<OutPoint, UtxoData>) {
+        let first_prevout = test_outpoint(0);
+        let second_prevout = test_outpoint(1);
+        let transaction = Transaction {
+            version: TransactionVersion::TWO,
+            lock_time,
+            input: vec![
+                txin!(first_prevout, ScriptBuf::new(), first_sequence),
+                txin!(second_prevout, ScriptBuf::new(), second_sequence),
+            ],
+            output: vec![txout!(1, ScriptBuf::new_op_return([0x0, 0x1]))],
+        };
+        let input_utxo = UtxoData {
+            txout: txout!(1, anyone_can_spend_script()),
+            is_coinbase: false,
+            creation_height: 0,
+            creation_time: 0,
+        };
+        let inputs = HashMap::from([
+            (first_prevout, input_utxo.clone()),
+            (second_prevout, input_utxo),
+        ]);
+
+        (transaction, inputs)
     }
 
     fn decode_block_and_inputs(
@@ -1667,6 +1757,59 @@ mod test {
         }
 
         prev_hash
+    }
+
+    #[test]
+    fn reject_non_final_block_transaction() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let height = 1;
+
+        let invalid = block_with_coinbase(
+            height,
+            test_coinbase(
+                height,
+                Sequence::ENABLE_LOCKTIME_NO_RBF,
+                LockTime::from_height(height).unwrap(),
+            ),
+        );
+        let valid =
+            block_with_coinbase(height, test_coinbase(height, Sequence::MAX, LockTime::ZERO));
+
+        match chain.validate_block_no_acc(&invalid, height, HashMap::new()) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::NonFinalTransaction)) => {}
+            other => panic!("expected NonFinalTransaction, got {other:?}"),
+        }
+
+        chain
+            .validate_block_no_acc(&valid, height, HashMap::new())
+            .expect("block transactions are valid and final");
+    }
+
+    #[test]
+    fn future_lock_time_requires_all_input_sequences_to_be_final() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let height = 1;
+        let future_lock_time = LockTime::from_height(height + 1).unwrap();
+        let coinbase = || test_coinbase(height, Sequence::MAX, LockTime::ZERO);
+
+        let (transaction, inputs) = test_spend(future_lock_time, Sequence::MAX, Sequence::MAX);
+        let block = block_with_transactions(height, vec![coinbase(), transaction]);
+
+        chain
+            .validate_block_no_acc(&block, height, inputs)
+            .expect("all input sequences are final");
+
+        let (transaction, inputs) = test_spend(
+            future_lock_time,
+            Sequence::MAX,
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let block = block_with_transactions(height, vec![coinbase(), transaction]);
+
+        match chain.validate_block_no_acc(&block, height, inputs) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::NonFinalTransaction)) => {}
+            other => panic!("expected NonFinalTransaction, got {other:?}"),
+        }
     }
 
     #[test]

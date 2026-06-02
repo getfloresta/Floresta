@@ -1012,7 +1012,6 @@ mod tests {
     use bitcoin::TxIn;
     use bitcoin::TxOut;
     use bitcoin::Txid;
-    use bitcoin::Witness;
     use bitcoin::absolute::LockTime;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -1033,41 +1032,43 @@ mod tests {
 
     use super::*;
 
+    #[macro_export]
     /// Macro for creating a TxOut
     macro_rules! txout {
         ($sats:expr, $script:expr) => {
-            TxOut {
-                value: Amount::from_sat($sats),
+            bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat($sats),
                 script_pubkey: $script,
             }
         };
     }
 
+    #[macro_export]
     /// Macro for constructing a legacy [`TxIn`] with optional scriptSig and sequence number.
     /// Needs the outpoint and, if not provided, defaults to empty scriptSig and `Sequence::MAX`.
     macro_rules! txin {
         ($outpoint:expr) => {
-            TxIn {
+            bitcoin::TxIn {
                 previous_output: $outpoint,
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: Witness::new(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
             }
         };
         ($outpoint:expr, $script:expr) => {
-            TxIn {
+            bitcoin::TxIn {
                 previous_output: $outpoint,
                 script_sig: $script,
-                sequence: Sequence::MAX,
-                witness: Witness::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
             }
         };
         ($outpoint:expr, $script:expr, $sequence:expr) => {
-            TxIn {
+            bitcoin::TxIn {
                 previous_output: $outpoint,
                 script_sig: $script,
                 sequence: $sequence,
-                witness: Witness::new(),
+                witness: bitcoin::Witness::new(),
             }
         };
     }
