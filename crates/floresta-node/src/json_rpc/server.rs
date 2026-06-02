@@ -449,6 +449,13 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
+        "getprivatebroadcastinfo" => state.get_private_broadcast_info().await,
+
+        "abortprivatebroadcast" => {
+            let id: String = get_at(&params, 0, "id")?;
+            state.abort_private_broadcast(&id).await
+        }
+
         _ => Err(JsonRpcError::MethodNotFound),
     }
 }

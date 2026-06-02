@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 
+use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::hashes::Hash;
 use corepc_types::v26::AddrManInfoNetwork;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetNetworkInfo;
@@ -17,6 +19,7 @@ use floresta_wire::bitcoin_socket_addr::BitcoinSocketAddr;
 use floresta_wire::bitcoin_socket_addr::SystemResolver;
 use floresta_wire::node_interface::NetworkMethods;
 use floresta_wire::node_interface::PeerInfo;
+use floresta_wire::node_interface::PrivateBroadcastMethods;
 use serde_json::Value;
 use serde_json::json;
 
@@ -219,6 +222,80 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             local_addresses: Vec::new(), // Floresta doesn't track local addresses since it does not accept inbound connections
             warnings: Vec::new(),
         })
+    }
+
+    /// Returns a snapshot of transactions in the private-broadcast queue.
+    ///
+    /// Each [`floresta_wire::private_broadcast::TxBroadcastInfo`] includes the transaction body,
+    /// txid, wtxid, time added, and per-peer send and acknowledgment timestamps.
+    pub(crate) async fn get_private_broadcast_info(&self) -> Result<Value> {
+        let infos = self
+            .node
+            .get_private_broadcast_info()
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        let transactions: Vec<Value> = infos
+            .into_iter()
+            .map(|info| {
+                json!({
+                    "txid": info.txid.to_string(),
+                    "wtxid": info.wtxid.to_string(),
+                    "hex": serialize_hex(&info.tx),
+                    "time_added": info.time_added,
+                    "peers": info.peers.iter().map(|p| {
+                        let mut peer = json!({
+                            "address": p.address,
+                            "sent": p.sent,
+                        });
+                        if let Some(received) = p.received {
+                            peer["received"] = json!(received);
+                        }
+                        peer
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+
+        Ok(json!({ "transactions": transactions }))
+    }
+
+    /// Aborts private broadcast for a transaction identified by txid or wtxid.
+    ///
+    /// `id_hex` is parsed as either a [`bitcoin::Txid`] or [`bitcoin::Wtxid`], matched against
+    /// queued [`floresta_wire::private_broadcast::TxBroadcastInfo`] entries, and removed from
+    /// the queue. Returns a JSON object with `removed_transactions` (txid, wtxid, hex per entry).
+    pub(crate) async fn abort_private_broadcast(&self, id_hex: &str) -> Result<Value> {
+        let id: [u8; 32] = if let Ok(txid) = id_hex.parse::<bitcoin::Txid>() {
+            *txid.as_byte_array()
+        } else if let Ok(wtxid) = id_hex.parse::<bitcoin::Wtxid>() {
+            *wtxid.as_byte_array()
+        } else {
+            return Err(JsonRpcError::InvalidHex);
+        };
+
+        let removed = self
+            .node
+            .abort_private_broadcast(id)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        if removed.is_empty() {
+            return Err(JsonRpcError::TxNotFound);
+        }
+
+        let transactions: Vec<Value> = removed
+            .into_iter()
+            .map(|tx| {
+                json!({
+                    "txid": tx.compute_txid().to_string(),
+                    "wtxid": tx.compute_wtxid().to_string(),
+                    "hex": serialize_hex(&tx),
+                })
+            })
+            .collect();
+
+        Ok(json!({ "removed_transactions": transactions }))
     }
 }
 
