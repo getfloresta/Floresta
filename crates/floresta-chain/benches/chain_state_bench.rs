@@ -6,12 +6,15 @@ use std::hint::black_box;
 use std::io::Cursor;
 
 use bitcoin::Block;
+use bitcoin::CompactTarget;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use bitcoin::block::Header as BlockHeader;
+use bitcoin::block::Version as HeaderVersion;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::deserialize;
+use bitcoin::constants::genesis_block;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::SamplingMode;
@@ -25,6 +28,9 @@ use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_chain::pruned_utreexo::utxo_data::UtxoData;
 use rustreexo::proof::Proof;
+
+const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
+const TEST_FORK_FILE_SIZE: usize = 10_000;
 
 /// Reads the first 151 blocks (or 150 blocks on top of genesis) from `regtest_blocks.txt`
 fn read_blocks_txt() -> Vec<Block> {
@@ -65,12 +71,14 @@ fn read_mainnet_headers() -> Vec<BlockHeader> {
 fn setup_test_chain(
     network: Network,
     assume_valid_arg: AssumeValidArg,
+    header_capacity: Option<usize>,
 ) -> ChainState<FlatChainStore> {
     let test_id = rand::random::<u64>();
+    let capacity = header_capacity.unwrap_or(DEFAULT_TEST_CHAINSTORE_SIZE);
     let config = FlatChainStoreConfig {
-        block_index_size: Some(32_768),
-        headers_file_size: Some(32_768),
-        fork_file_size: Some(10_000), // Will be rounded up to 16,384
+        block_index_size: Some(capacity),
+        headers_file_size: Some(capacity),
+        fork_file_size: Some(TEST_FORK_FILE_SIZE), // Will be rounded up to 16,384
         cache_size: Some(10),
         file_permission: Some(0o660),
         path: format!("./tmp-db/{test_id}/").into(),
@@ -103,6 +111,34 @@ fn decode_block_and_inputs(
     assert!(stxos.is_empty(), "Moved all stxos to the inputs map");
 
     (block, inputs)
+}
+
+/// Stores 11 synthetic headers ending at `tip_height` for Median Time Past (MTP).
+fn store_mtp_headers(
+    chain: &ChainState<FlatChainStore>,
+    network: Network,
+    tip_height: u32,
+    time: u32,
+) {
+    assert!(tip_height > 10, "Need at least 11 headers for MTP");
+    let genesis = genesis_block(network);
+    let mut prev_hash = genesis.block_hash();
+    let headers: Vec<_> = ((tip_height - 10)..=tip_height)
+        .map(|height| {
+            let header = BlockHeader {
+                version: HeaderVersion::NO_SOFT_FORK_SIGNALLING,
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(0x1702_8c74),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            header
+        })
+        .collect();
+
+    chain.push_headers(headers, tip_height - 10).unwrap();
 }
 
 fn initialize_chainstore_benchmark(c: &mut Criterion) {
@@ -141,7 +177,7 @@ fn accept_mainnet_headers_benchmark(c: &mut Criterion) {
 
     c.bench_function("accept_10k_mainnet_headers", |b| {
         b.iter_batched(
-            || setup_test_chain(Network::Bitcoin, AssumeValidArg::Hardcoded),
+            || setup_test_chain(Network::Bitcoin, AssumeValidArg::Hardcoded, None),
             |chain| {
                 headers
                     .iter()
@@ -157,7 +193,7 @@ fn accept_headers_benchmark(c: &mut Criterion) {
 
     c.bench_function("accept_150_headers", |b| {
         b.iter_batched(
-            || setup_test_chain(Network::Regtest, AssumeValidArg::Disabled),
+            || setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None),
             |chain| {
                 blocks
                     .iter()
@@ -172,7 +208,7 @@ fn connect_blocks_benchmark(c: &mut Criterion) {
     let blocks = read_blocks_txt();
 
     let setup_chain = || {
-        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
         // We need to accept the headers before connecting blocks
         blocks
             .iter()
@@ -197,22 +233,29 @@ fn connect_blocks_benchmark(c: &mut Criterion) {
 }
 
 fn validate_full_block_benchmark(c: &mut Criterion) {
+    const HEIGHT: u32 = 866342;
+    const BLOCKS: usize = (HEIGHT + 1) as usize;
+
     let block_file = File::open("./testdata/block_866342/raw.zst").unwrap();
     let stxos_file = File::open("./testdata/block_866342/spent_utxos.zst").unwrap();
     let (block, inputs) = decode_block_and_inputs(block_file, stxos_file);
 
-    let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+    let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled, Some(BLOCKS));
+    store_mtp_headers(&chain, Network::Bitcoin, HEIGHT - 1, block.header.time);
 
     c.bench_function("validate_block_866342", |b| {
         b.iter_batched(
             || inputs.clone(),
-            |inputs| chain.validate_block_no_acc(&block, 866342, inputs).unwrap(),
+            |inputs| chain.validate_block_no_acc(&block, HEIGHT, inputs).unwrap(),
             BatchSize::LargeInput,
         )
     });
 }
 
 fn validate_many_inputs_block_benchmark(c: &mut Criterion) {
+    const HEIGHT: u32 = 367891;
+    const BLOCKS: usize = (HEIGHT + 1) as usize;
+
     if std::env::var("EXPENSIVE_BENCHES").is_err() {
         println!(
             "validate_many_inputs_block_benchmark ... \x1b[33mskipped\x1b[0m\n\
@@ -226,7 +269,8 @@ fn validate_many_inputs_block_benchmark(c: &mut Criterion) {
     let stxos_file = File::open("./testdata/block_367891/spent_utxos.zst").unwrap();
     let (block, inputs) = decode_block_and_inputs(block_file, stxos_file);
 
-    let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+    let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled, Some(BLOCKS));
+    store_mtp_headers(&chain, Network::Bitcoin, HEIGHT - 1, block.header.time);
 
     // Create a group with the lowest possible sample size, as validating this block is very slow
     let mut group = c.benchmark_group("validate_block_367891");
@@ -236,7 +280,7 @@ fn validate_many_inputs_block_benchmark(c: &mut Criterion) {
     group.bench_function("validate_block_367891", |b| {
         b.iter_batched(
             || inputs.clone(),
-            |inputs| chain.validate_block_no_acc(&block, 367891, inputs).unwrap(),
+            |inputs| chain.validate_block_no_acc(&block, HEIGHT, inputs).unwrap(),
             BatchSize::LargeInput,
         )
     });

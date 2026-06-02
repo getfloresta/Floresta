@@ -1533,10 +1533,12 @@ mod test {
 
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::Work;
     use bitcoin::block::Header as BlockHeader;
+    use bitcoin::block::Version as HeaderVersion;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -1562,15 +1564,20 @@ mod test {
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::utxo_data::UtxoData;
 
+    const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
+    const TEST_FORK_FILE_SIZE: usize = 10_000;
+
     fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
+        header_capacity: Option<usize>,
     ) -> ChainState<FlatChainStore> {
         let test_id = rand::random::<u64>();
-        let config = crate::FlatChainStoreConfig {
-            block_index_size: Some(32_768),
-            headers_file_size: Some(32_768),
-            fork_file_size: Some(10_000), // Will be rounded up to 16,384
+        let capacity = header_capacity.unwrap_or(DEFAULT_TEST_CHAINSTORE_SIZE);
+        let config = FlatChainStoreConfig {
+            block_index_size: Some(capacity),
+            headers_file_size: Some(capacity),
+            fork_file_size: Some(TEST_FORK_FILE_SIZE), // Will be rounded up to 16,384
             cache_size: Some(10),
             file_permission: Some(0o660),
             path: format!("./tmp-db/{test_id}/").into(),
@@ -1605,9 +1612,45 @@ mod test {
         (block, inputs)
     }
 
+    /// Stores 11 synthetic headers ending at `tip_height` for Median Time Past (MTP).
+    fn store_mtp_headers(
+        chain: &ChainState<FlatChainStore>,
+        network: Network,
+        tip_height: u32,
+        time: u32,
+    ) {
+        assert!(tip_height > 10, "Need at least 11 headers for MTP");
+        let genesis = genesis_block(network);
+        let mut prev_hash = genesis.block_hash();
+        let mut inner = write_lock!(chain);
+
+        for height in (tip_height - 10)..=tip_height {
+            let header = BlockHeader {
+                version: HeaderVersion::NO_SOFT_FORK_SIGNALLING,
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(0x1702_8c74),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            inner
+                .chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, height))
+                .unwrap();
+            inner
+                .chainstore
+                .update_block_index(height, prev_hash)
+                .unwrap();
+        }
+    }
+
     #[test]
     #[cfg_attr(debug_assertions, ignore = "this test is very slow in debug mode")]
     fn test_validate_many_inputs_block() {
+        const HEIGHT: u32 = 367891;
+        const BLOCKS: usize = (HEIGHT + 1) as usize;
+
         let block_file = File::open("./testdata/block_367891/raw.zst").unwrap();
         let stxos_file = File::open("./testdata/block_367891/spent_utxos.zst").unwrap();
         let (block, inputs) = decode_block_and_inputs(block_file, stxos_file);
@@ -1618,14 +1661,18 @@ mod test {
         );
 
         // Check whether the block validation passes or not
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled, Some(BLOCKS));
+        store_mtp_headers(&chain, Network::Bitcoin, HEIGHT - 1, block.header.time);
         chain
-            .validate_block_no_acc(&block, 367891, inputs)
+            .validate_block_no_acc(&block, HEIGHT, inputs)
             .expect("Block must be valid");
     }
 
     #[test]
     fn test_validate_full_block() {
+        const HEIGHT: u32 = 866342;
+        const BLOCKS: usize = (HEIGHT + 1) as usize;
+
         let block_file = File::open("./testdata/block_866342/raw.zst").unwrap();
         let stxos_file = File::open("./testdata/block_866342/spent_utxos.zst").unwrap();
         let (block, inputs) = decode_block_and_inputs(block_file, stxos_file);
@@ -1636,9 +1683,10 @@ mod test {
         );
 
         // Check whether the block validation passes or not
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled, Some(BLOCKS));
+        store_mtp_headers(&chain, Network::Bitcoin, HEIGHT - 1, block.header.time);
         chain
-            .validate_block_no_acc(&block, 866342, inputs)
+            .validate_block_no_acc(&block, HEIGHT, inputs)
             .expect("Block must be valid");
     }
 
@@ -1650,7 +1698,7 @@ mod test {
         let mut buffer = uncompressed.as_slice();
 
         let mut headers = Vec::new();
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Hardcoded);
+        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Hardcoded, None);
 
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
             chain.accept_header(header).unwrap();
@@ -1712,7 +1760,7 @@ mod test {
         let uncompressed: Vec<u8> = zstd::decode_all(Cursor::new(file)).unwrap();
         let mut buffer = uncompressed.as_slice();
 
-        let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded);
+        let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded, None);
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
             chain.accept_header(header).unwrap();
         }
@@ -1734,7 +1782,7 @@ mod test {
 
     #[test]
     fn test_reorg() {
-        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded, None);
         let json_blocks = include_str!("../../testdata/test_reorg.json");
         let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
         let mut fork_acc = Stump::default();
@@ -1882,7 +1930,7 @@ mod test {
 
     #[test]
     fn test_fork_tips() {
-        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded, None);
         let json_blocks = include_str!("../../testdata/test_reorg.json");
         let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
 
@@ -1929,7 +1977,7 @@ mod test {
         let uncompressed: Vec<u8> = zstd::decode_all(Cursor::new(file)).unwrap();
         let mut buffer = uncompressed.as_slice();
 
-        let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded);
+        let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded, None);
         let mut headers: Vec<BlockHeader> = Vec::new();
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
             headers.push(header);
