@@ -302,15 +302,18 @@ where
     /// reduces the connector budget by the number of
     /// [`crate::private_broadcast::NUM_PRIVATE_BROADCAST_PER_TX`] outbounds that were still
     /// unacknowledged.
-    pub(crate) fn handle_private_broadcast_echo(&mut self, tx: &Transaction) {
+    pub(crate) fn handle_private_broadcast_echo(&mut self, peer: u32, tx: &Transaction) {
         if !self.config.private_broadcast {
             return;
         }
+        let txid = tx.compute_txid();
         if let Some(num_confirmed) = self.tx_for_private_broadcast.remove(tx) {
+            let peer_log = self.peers.get(&peer).map_or_else(
+                || format!("peer={peer}"),
+                |p| peer_log(peer, &p.address.to_string()),
+            );
             debug!(
-                "private broadcast tx {} echoed; confirmed on {} peers",
-                tx.compute_txid(),
-                num_confirmed
+                "Received our privately broadcast transaction (txid={txid}) from the network from {peer_log}; stopping private broadcast attempts"
             );
             if NUM_PRIVATE_BROADCAST_PER_TX > num_confirmed {
                 self.private_broadcast_connector

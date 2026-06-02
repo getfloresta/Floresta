@@ -8,6 +8,7 @@ mod blocks;
 pub mod chain_selector_ctx;
 mod conn;
 mod peer_man;
+mod private_broadcast_man;
 pub mod running_ctx;
 pub mod sync_ctx;
 mod user_req;

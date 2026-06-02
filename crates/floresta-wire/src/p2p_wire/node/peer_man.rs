@@ -192,6 +192,9 @@ where
             if peer.state != PeerStatus::Ready {
                 continue;
             }
+            if peer.kind == ConnectionKind::PrivateBroadcast {
+                continue;
+            }
 
             if let Err(err) = peer.channel.send(request.clone()) {
                 warn!("Failed to send request to peer {}: {err}", peer.address);
@@ -221,10 +224,20 @@ where
     ) -> Result<(), WireError> {
         self.inflight.remove(&InflightRequests::Connect(peer));
 
+        if self.peers.get(&peer).is_some_and(|p| p.is_outbound_tor_v3) {
+            self.is_outbound_tor_proven = true;
+        }
+
         // Mark this peer as ready to communicate with
         self.peers.entry(peer).and_modify(|p| {
             p.state = PeerStatus::Ready;
+            p.ready_since = Some(Instant::now());
         });
+
+        // If this is a private broadcast peer, assign a queued transaction and return early
+        if version.kind == ConnectionKind::PrivateBroadcast {
+            return self.on_private_broadcast_peer_ready(peer);
+        }
 
         // Ask for new addresses to populate our address manager
         self.send_to_peer(peer, NodeRequest::GetAddresses)?;
@@ -398,10 +411,15 @@ where
         Ok(())
     }
 
-    /// Handles an incoming mempool transaction by completing any matching inflight user request.
-    pub(crate) fn handle_tx_msg(&mut self, tx: Transaction) -> Result<(), WireError> {
+    /// Handles an incoming mempool transaction.
+    ///
+    /// When private broadcast is enabled, drops a matching queued tx from the private-broadcast
+    /// queue before completing any inflight [`UserRequest::MempoolTransaction`].
+    pub(crate) fn handle_tx_msg(&mut self, peer: PeerId, tx: Transaction) -> Result<(), WireError> {
         let txid = tx.compute_txid();
         debug!("saw a mempool transaction with txid={txid}");
+
+        self.handle_private_broadcast_echo(peer, &tx);
 
         if let Some(request) = self
             .inflight_user_requests
@@ -433,7 +451,7 @@ where
                 Ok(None)
             }
             PeerMessages::Transaction(tx) => {
-                self.handle_tx_msg(tx)?;
+                self.handle_tx_msg(peer, tx)?;
                 Ok(None)
             }
             PeerMessages::UtreexoState(_) => {
@@ -445,10 +463,27 @@ where
         }
     }
 
+    /// Handles a peer disconnection.
+    ///
+    /// Removes the peer, updates addrman from its last [`PeerStatus`], clears per-service peer
+    /// lists, and redoes inflight node requests for that peer. For every
+    /// [`ConnectionKind::PrivateBroadcast`] disconnect, calls
+    /// [`UtreexoNode::on_private_broadcast_disconnect`] before dropping the channel (that helper
+    /// no-ops when receipt was already confirmed).
     pub(crate) fn handle_disconnection(&mut self, peer: u32, idx: usize) -> Result<(), WireError> {
+        let was_private = self
+            .peers
+            .get(&peer)
+            .is_some_and(|p| p.kind == ConnectionKind::PrivateBroadcast);
+
         if let Some(p) = self.peers.remove(&peer) {
             if p.is_long_lived() && p.state == PeerStatus::Ready {
                 info!("Peer disconnected: {peer}");
+            }
+
+            if was_private {
+                let peer_log = super::private_broadcast_man::peer_log(peer, &p.address.to_string());
+                self.on_private_broadcast_disconnect(peer, &peer_log);
             }
 
             std::mem::drop(p.channel);
