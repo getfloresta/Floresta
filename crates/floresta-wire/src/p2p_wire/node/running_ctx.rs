@@ -446,6 +446,17 @@ where
             no_log,
         );
 
+        if self.config.private_broadcast {
+            try_and_log!(self.try_open_private_broadcast_connections());
+            try_and_log!(self.disconnect_stale_private_broadcast_peers());
+            if self.last_private_broadcast_reattempt.elapsed()
+                > crate::private_broadcast::REATTEMPT_INTERVAL_BASE
+            {
+                self.reattempt_private_broadcast().await;
+                self.last_private_broadcast_reattempt = Instant::now();
+            }
+        }
+
         // The jobs below need a connected peer to work
         if self.peer_ids.is_empty() {
             return LoopControl::Continue;
@@ -794,6 +805,10 @@ where
                             version.kind
                         );
                         self.handle_peer_ready(peer, version)?;
+                    }
+
+                    PeerMessages::PrivateBroadcastConfirmed => {
+                        self.on_private_broadcast_confirmed(peer)?;
                     }
 
                     PeerMessages::Disconnected(idx) => {
