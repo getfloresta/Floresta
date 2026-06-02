@@ -1072,6 +1072,7 @@ dependencies = [
  "anyhow",
  "bitcoin",
  "clap",
+ "dirs",
  "floresta-rpc",
  "serde_json",
 ]
