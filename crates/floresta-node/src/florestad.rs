@@ -469,8 +469,9 @@ impl Florestad {
         #[cfg(feature = "json-rpc")]
         {
             let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
-            json_rpc::auth::generate_cookie(&cookie_path)?;
+            let cookie = json_rpc::auth::generate_cookie(&cookie_path)?;
             info!("RPC cookie file written to {}", cookie_path.display());
+            let credentials = Arc::new(json_rpc::auth::Auth::Cookie(cookie));
 
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
                 blockchain_state.clone(),
@@ -487,6 +488,7 @@ impl Florestad {
                 datadir.join("debug.log"),
                 self.config.user_agent.clone(),
                 proxy,
+                credentials,
             ));
 
             if self.json_rpc.set(server).is_err() {
