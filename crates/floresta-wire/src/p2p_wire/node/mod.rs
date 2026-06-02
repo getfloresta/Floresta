@@ -338,6 +338,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) last_dns_seed_call: Instant,
     pub(crate) used_fixed_addresses: bool,
     pub(crate) last_private_broadcast_reattempt: Instant,
+    pub(crate) last_private_broadcast_unreachable_warn: Instant,
 
     // 6. Configuration and Metadata
     pub(crate) config: UtreexoNodeConfig,
@@ -440,6 +441,7 @@ where
                 last_send_addresses: Instant::now(),
                 used_fixed_addresses: false,
                 last_private_broadcast_reattempt: Instant::now(),
+                last_private_broadcast_unreachable_warn: Instant::now(),
                 datadir: config.datadir.clone(),
                 max_banscore: config.max_banscore,
                 socks5,
