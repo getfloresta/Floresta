@@ -57,6 +57,10 @@ pub struct Cli {
     /// The url of a proxy we should open p2p connections through (e.g. 127.0.0.1:9050)
     pub proxy: Option<String>,
 
+    #[arg(long, default_value_t = false)]
+    /// Broadcast submitted transactions via Tor private connections only (requires `--proxy`).
+    pub private_broadcast: bool,
+
     #[arg(long, value_name = "XPUB")]
     /// Add an xpub to our wallet
     ///

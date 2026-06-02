@@ -95,6 +95,9 @@ pub enum FlorestadError {
     /// Failed to create a chain provider.
     CouldNotCreateChainProvider(String),
 
+    /// `--private-broadcast` is inconsistent with other startup options.
+    InvalidPrivateBroadcastConfig(String),
+
     /// Failed to create an Electrum server.
     CouldNotCreateElectrumServer(Box<dyn error::Error>),
 
@@ -193,6 +196,9 @@ impl Display for FlorestadError {
 
             FlorestadError::CouldNotCreateChainProvider(err) => {
                 write!(f, "Could not create chain provider: {err}")
+            }
+            FlorestadError::InvalidPrivateBroadcastConfig(err) => {
+                write!(f, "Invalid private-broadcast configuration: {err}")
             }
             FlorestadError::CouldNotCreateElectrumServer(err) => {
                 write!(f, "Could not create Electrum server: {err}")

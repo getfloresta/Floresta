@@ -214,6 +214,17 @@ pub struct Config {
 
     /// Whether to allow fallback to v1 transport if v2 connection fails.
     pub allow_v1_fallback: bool,
+
+    /// Whether to broadcast locally submitted transactions only over Tor private
+    /// connections.
+    ///
+    /// When enabled, transactions you submit through the node are queued for the
+    /// private-broadcast path instead of being relayed on the public P2P mempool. The
+    /// node opens a limited number of outbound Tor connections to tx-recipient peers from
+    /// the address manager, completes a minimal decoy-version handshake, and announces
+    /// each transaction with the usual inv/getdata/tx flow. Requires `proxy` to be set
+    /// so those connections can reach onion services.
+    pub private_broadcast: bool,
     /// Whether we should backfill
     ///
     /// If we assumeutreexo or use pow fraud proofs, you have the option to download and validate
@@ -255,6 +266,7 @@ impl Config {
             tls_cert_path: None,
             allow_v1_fallback: false,
             backfill: false,
+            private_broadcast: false,
         }
     }
 }
@@ -406,6 +418,24 @@ impl Florestad {
             .map(|addr| Self::resolve_hostname(addr, 9050))
             .transpose()?;
 
+        if self.config.private_broadcast {
+            if proxy.is_none() {
+                return Err(FlorestadError::InvalidPrivateBroadcastConfig(
+                    "Private broadcast of own transactions requested (--private-broadcast), \
+                     but no Tor proxy is configured (--proxy)"
+                        .into(),
+                ));
+            }
+            if !self.config.connect.is_empty() {
+                return Err(FlorestadError::InvalidPrivateBroadcastConfig(
+                    "Private broadcast of own transactions requested (--private-broadcast), \
+                     but --connect is also configured. Private broadcast needs to open new \
+                     connections to randomly chosen Tor peers."
+                        .into(),
+                ));
+            }
+        }
+
         let config = UtreexoNodeConfig {
             disable_dns_seeds: self.config.disable_dns_seeds,
             network: self.config.network,
@@ -419,10 +449,17 @@ impl Florestad {
             filter_start_height: self.config.filters_start_height,
             user_agent: self.config.user_agent.clone(),
             allow_v1_fallback: self.config.allow_v1_fallback,
+            private_broadcast: self.config.private_broadcast,
             ..Default::default()
         };
 
         let kill_signal = self.stop_signal.clone();
+
+        let reachable_networks = if proxy.is_some() {
+            ReachableNetworks::with_proxy()
+        } else {
+            ReachableNetworks::SUPPORTED.to_vec()
+        };
 
         // Chain Provider (p2p)
         let chain_provider = UtreexoNode::<_, RunningNode>::new(
@@ -433,7 +470,7 @@ impl Florestad {
             ))),
             cfilters.clone(),
             kill_signal.clone(),
-            AddressMan::new(None, &ReachableNetworks::SUPPORTED),
+            AddressMan::new(None, &reachable_networks),
         )
         .map_err(|e| FlorestadError::CouldNotCreateChainProvider(format!("{e}")))?;
 
