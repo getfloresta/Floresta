@@ -76,6 +76,9 @@ pub enum MempoolError {
     /// The [`Mempool`] is full and cannot accept more [`Transaction`]s.
     FullMempool,
 
+    /// Private broadcast was requested but Tor/proxy is not configured.
+    PrivateBroadcastUnavailable,
+
     /// The [`Transaction`] conflicts with another [`Transaction`] in the [`Mempool`].
     ConflictingTransaction,
 
@@ -95,6 +98,12 @@ impl Display for MempoolError {
                 write!(
                     f,
                     "The mempool is full and cannot accept any more transactions"
+                )
+            }
+            Self::PrivateBroadcastUnavailable => {
+                write!(
+                    f,
+                    "Private broadcast was requested but no Tor/proxy is configured"
                 )
             }
             Self::ConflictingTransaction => {
