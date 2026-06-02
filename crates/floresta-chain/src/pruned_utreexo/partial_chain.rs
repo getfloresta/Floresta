@@ -39,6 +39,7 @@ use super::chainparams::ChainParams;
 use super::consensus::Consensus;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
+use crate::extensions::HeaderExt;
 use crate::pruned_utreexo::IBDState;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 
@@ -129,6 +130,27 @@ impl PartialChainStateInner {
         Ok(*prev)
     }
 
+    fn median_time_past(&self, height: u32) -> Result<u32, BlockchainError> {
+        let header = self
+            .get_block(height)
+            .ok_or(BlockchainError::BlockNotPresent)?;
+        let mut current_height = height;
+
+        header.median_time_past_with(|_| {
+            current_height = current_height
+                .checked_sub(1)
+                .expect("height 0 must be genesis and short-circuit MTP computation");
+
+            self.get_block(current_height)
+                .copied()
+                .ok_or(BlockchainError::BlockNotPresent)
+        })
+    }
+
+    fn previous_median_time_past(&self, height: u32) -> Result<u32, BlockchainError> {
+        self.median_time_past(height.saturating_sub(1))
+    }
+
     /// Process a block, given the proof, inputs, and deleted hashes. If we find an error,
     /// we save it.
     pub fn process_block(
@@ -184,6 +206,11 @@ impl PartialChainStateInner {
 
         // Validate block transactions
         let subsidy = self.consensus.get_subsidy(height);
+        let lock_time_cutoff =
+            self.consensus
+                .block_lock_time_cutoff(height, &block.header, || {
+                    self.previous_median_time_past(height)
+                })?;
         let verify_script = self.assume_valid;
 
         #[cfg(feature = "bitcoinkernel")]
@@ -196,6 +223,7 @@ impl PartialChainStateInner {
 
         Consensus::verify_block_transactions(
             height,
+            lock_time_cutoff,
             inputs,
             &block.txdata,
             subsidy,
@@ -481,9 +509,12 @@ mod tests {
     use std::collections::HashMap;
 
     use bitcoin::Block;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
     use bitcoin::block::Header;
+    use bitcoin::block::Version;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::constants::genesis_block;
     use floresta_common::acchashes;
     use rustreexo::node_hash::BitcoinNodeHash;
     use rustreexo::proof::Proof;
@@ -496,6 +527,8 @@ mod tests {
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::error::BlockValidationErrors;
     use crate::pruned_utreexo::partial_chain::PartialChainStateInner;
+
+    const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
 
     #[test]
     fn test_with_invalid_block() {
@@ -538,6 +571,72 @@ mod tests {
             error: None,
         }
         .into()
+    }
+
+    fn test_pchain_inner_with_times(times: &[u32]) -> PartialChainStateInner {
+        let genesis = genesis_block(Network::Regtest);
+        let mut prev_hash = genesis.header.prev_blockhash;
+        let mut blocks = Vec::with_capacity(times.len());
+
+        for (height, &time) in (0u32..).zip(times) {
+            let header = Header {
+                version: Version::TWO,
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            blocks.push(header);
+        }
+
+        PartialChainStateInner {
+            assume_valid: true,
+            consensus: Consensus::from(Network::Regtest),
+            current_height: 0,
+            current_acc: Stump::default(),
+            final_height: times.len().saturating_sub(1) as u32,
+            blocks,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn partial_chain_median_time_past_uses_available_headers() {
+        let chainstate = test_pchain_inner_with_times(&[90, 120, 100, 110]);
+
+        assert_eq!(chainstate.median_time_past(3).unwrap(), 110);
+    }
+
+    #[test]
+    fn partial_chain_median_time_past_uses_last_eleven_headers() {
+        let times = [
+            300, 301, 311, 303, 309, 307, 305, 310, 302, 308, 304, 306, 312,
+        ];
+        let chainstate = test_pchain_inner_with_times(&times);
+
+        assert_eq!(chainstate.median_time_past(12).unwrap(), 307);
+    }
+
+    #[test]
+    fn partial_chain_median_time_past_requires_window_headers() {
+        let chainstate = test_pchain_inner_with_times(&[400, 401, 402]);
+
+        assert!(matches!(
+            chainstate.median_time_past(10),
+            Err(BlockchainError::BlockNotPresent)
+        ));
+    }
+
+    #[test]
+    fn partial_chain_previous_median_time_past_uses_previous_height() {
+        let times = [
+            500, 511, 501, 509, 507, 503, 505, 510, 502, 508, 504, 506, 900,
+        ];
+        let chainstate = test_pchain_inner_with_times(&times);
+
+        assert_eq!(chainstate.previous_median_time_past(12).unwrap(), 506);
     }
 
     #[test]

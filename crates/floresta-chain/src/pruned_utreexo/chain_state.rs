@@ -64,6 +64,7 @@ use super::partial_chain::PartialChainState;
 use super::partial_chain::PartialChainStateInner;
 use crate::BestChain;
 use crate::ChainStore;
+use crate::extensions::HeaderExt;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::IBDState;
@@ -565,6 +566,20 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
+    /// Returns the Median Time Past (MTP) of `header`, following its `prev_blockhash` chain.
+    fn median_time_past(&self, header: BlockHeader) -> Result<u32, BlockchainError> {
+        header.median_time_past_with(|current_header| {
+            self.get_disk_block_header(&current_header.prev_blockhash)
+                .map(|header| *header)
+        })
+    }
+
+    /// Returns the Median Time Past (MTP) of `header`'s parent, resolved by `prev_blockhash`.
+    fn previous_median_time_past(&self, header: &BlockHeader) -> Result<u32, BlockchainError> {
+        let previous_header = *self.get_disk_block_header(&header.prev_blockhash)?;
+        self.median_time_past(previous_header)
+    }
+
     fn notify(&self, block: &Block, height: u32, inputs: Option<&HashMap<OutPoint, UtxoData>>) {
         let inner = self.inner.read();
         for client in &inner.subscribers {
@@ -1003,20 +1018,25 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
         inputs: HashMap<OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
-        read_lock!(self).consensus.check_block(block, height)?;
+        let consensus = read_lock!(self).consensus.clone();
+        consensus.check_block(block, height)?;
 
         // Validate block transactions
-        let subsidy = read_lock!(self).consensus.get_subsidy(height);
-        let verify_script = self.verify_script(height)?;
+        let subsidy = consensus.get_subsidy(height);
+        let lock_time_cutoff = consensus.block_lock_time_cutoff(height, &block.header, || {
+            self.previous_median_time_past(&block.header)
+        })?;
         #[cfg(feature = "bitcoinkernel")]
-        let flags = self
-            .chain_params()
+        let flags = consensus
+            .parameters
             .get_validation_flags(height, block.block_hash());
         #[cfg(not(feature = "bitcoinkernel"))]
         let flags = 0;
+        let verify_script = self.verify_script(height)?;
 
         Consensus::verify_block_transactions(
             height,
+            lock_time_cutoff,
             inputs,
             &block.txdata,
             subsidy,
@@ -1566,6 +1586,7 @@ mod test {
 
     const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
     const TEST_FORK_FILE_SIZE: usize = 10_000;
+    const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
 
     fn setup_test_chain(
         network: Network,
@@ -1691,6 +1712,99 @@ mod test {
         chain
             .validate_block_no_acc(&block, HEIGHT, inputs)
             .expect("Block must be valid");
+    }
+
+    fn store_linked_headers(chain: &ChainState<FlatChainStore>, times: &[u32]) -> Vec<BlockHeader> {
+        let genesis = genesis_block(Network::Regtest);
+        let mut prev_hash = genesis.block_hash();
+        let mut headers = Vec::with_capacity(times.len());
+
+        for (height, &time) in (1u32..).zip(times) {
+            let header = BlockHeader {
+                version: HeaderVersion::TWO,
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            write_lock!(chain)
+                .chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, height))
+                .unwrap();
+            write_lock!(chain)
+                .chainstore
+                .update_block_index(height, prev_hash)
+                .unwrap();
+            headers.push(header);
+        }
+
+        headers
+    }
+
+    fn median_time(mut times: Vec<u32>) -> u32 {
+        times.sort_unstable();
+        times[times.len() / 2]
+    }
+
+    #[test]
+    fn chain_state_median_time_past_sorts_recent_headers() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let times = [111, 101, 109, 107, 103, 105, 110, 102, 108, 104, 106];
+        let headers = store_linked_headers(&chain, &times);
+
+        assert_eq!(
+            chain.median_time_past(headers[10]).unwrap(),
+            median_time(times.to_vec())
+        );
+    }
+
+    #[test]
+    fn chain_state_median_time_past_requires_connected_headers() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let missing_prev = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: genesis_block(Network::Regtest).block_hash(),
+            merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+            time: 100,
+            bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+            nonce: 1,
+        };
+        let header = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: missing_prev.block_hash(),
+            merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+            time: 200,
+            bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+            nonce: 2,
+        };
+
+        assert!(matches!(
+            chain.median_time_past(header),
+            Err(BlockchainError::BlockNotPresent)
+        ));
+    }
+
+    #[test]
+    fn chain_state_previous_median_time_past_uses_parent_hash() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let times = [211, 201, 209, 207, 203, 205, 210, 202, 208, 204, 206];
+        let headers = store_linked_headers(&chain, &times);
+
+        let candidate = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: headers[10].block_hash(),
+            merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+            time: 100,
+            bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+            nonce: 12,
+        };
+
+        assert_eq!(
+            chain.previous_median_time_past(&candidate).unwrap(),
+            median_time(times.to_vec())
+        );
     }
 
     #[test]
