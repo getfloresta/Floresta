@@ -226,6 +226,7 @@ where
             (peer_count, Instant::now()),
         );
 
+        let is_outbound_tor_v3 = self.socks5.is_some() && peer_address.is_tor_v3();
         self.peers.insert(
             peer_count,
             LocalPeerView {
@@ -242,7 +243,7 @@ where
                 // Will be downgraded to V1 if the V2 handshake fails, and we allow fallback
                 transport_protocol: TransportProtocol::V2,
                 ready_since: None,
-                is_outbound_tor_v3: false,
+                is_outbound_tor_v3,
             },
         );
 
