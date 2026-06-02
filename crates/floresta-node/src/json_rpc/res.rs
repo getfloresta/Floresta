@@ -436,11 +436,23 @@ pub mod jsonrpc_interface {
                     message: "Wallet error".into(),
                     data: Some(Value::String(msg.clone())),
                 },
-                JsonRpcError::MempoolAccept(msg) => RpcError {
-                    code: MEMPOOL_ERROR,
-                    message: "Mempool error".into(),
-                    data: Some(Value::String(format!("{msg}"))),
-                },
+                JsonRpcError::MempoolAccept(e) => {
+                    let detail = match e {
+                        MempoolError::PrivateBroadcastUnavailable => {
+                            format!("Could not broadcast transaction: {e}")
+                        }
+                        _ => format!("Could not send transaction to mempool due to {e}"),
+                    };
+                    RpcError {
+                        code: MEMPOOL_ERROR,
+                        message: if matches!(e, MempoolError::PrivateBroadcastUnavailable) {
+                            "Could not broadcast transaction".into()
+                        } else {
+                            "Mempool error".into()
+                        },
+                        data: Some(Value::String(detail)),
+                    }
+                }
                 JsonRpcError::InInitialBlockDownload => RpcError {
                     code: IN_INITIAL_BLOCK_DOWNLOAD,
                     message: "Node is in initial block download".into(),

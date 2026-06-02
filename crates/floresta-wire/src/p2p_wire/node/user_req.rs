@@ -6,6 +6,7 @@ use bitcoin::Block;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
 use floresta_common::try_and_log;
+use floresta_mempool::mempool::MempoolError;
 use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::info;
@@ -169,6 +170,27 @@ where
 
             UserRequest::SendTransaction(transaction) => {
                 let txid = transaction.compute_txid();
+
+                if self.config.private_broadcast {
+                    if self.socks5.is_none() {
+                        warn!("Private broadcast was requested but no Tor/proxy is configured");
+                        let _ = responder.send(NodeResponse::TransactionBroadcastResult(Err(
+                            MempoolError::PrivateBroadcastUnavailable,
+                        )));
+                        return;
+                    }
+                    let mut mempool = self.mempool.lock().await;
+                    if let Err(e) = mempool.validate_transaction(&transaction) {
+                        warn!("Could not validate transaction {txid} for private broadcast: {e}");
+                        let _ = responder.send(NodeResponse::TransactionBroadcastResult(Err(e)));
+                        return;
+                    }
+                    drop(mempool);
+                    self.schedule_private_broadcast_for_tx(transaction);
+                    let _ = responder.send(NodeResponse::TransactionBroadcastResult(Ok(txid)));
+                    return;
+                }
+
                 let mut mempool = self.mempool.lock().await;
 
                 if let Err(e) = mempool.accept_to_mempool(transaction) {
@@ -182,6 +204,18 @@ where
                 // Announce the transaction to our peers, broadcast from mempool if requested
                 self.broadcast_to_peers(NodeRequest::BroadcastTransaction(txid));
                 let _ = responder.send(NodeResponse::TransactionBroadcastResult(Ok(txid)));
+                return;
+            }
+
+            UserRequest::GetPrivateBroadcastInfo => {
+                let info = self.tx_for_private_broadcast.get_broadcast_info();
+                let _ = responder.send(NodeResponse::GetPrivateBroadcastInfo(info));
+                return;
+            }
+
+            UserRequest::AbortPrivateBroadcast(id) => {
+                let removed = self.abort_private_broadcast(id);
+                let _ = responder.send(NodeResponse::AbortPrivateBroadcast(removed));
                 return;
             }
         };

@@ -108,6 +108,12 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Return the private-broadcast queue (in-flight Tor outbounds per transaction).
+    GetPrivateBroadcastInfo,
+
+    /// Stop private broadcast for a transaction identified by txid or wtxid bytes.
+    AbortPrivateBroadcast([u8; 32]),
 }
 
 #[derive(Debug, Clone, Serialize)]

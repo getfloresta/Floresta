@@ -35,6 +35,7 @@ use crate::node_interface::MempoolMethods;
 use crate::node_interface::NetworkMethods;
 use crate::node_interface::NodeConfigMethods;
 use crate::node_interface::PeerInfo;
+use crate::private_broadcast::TxBroadcastInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A request that can be made to the node.
@@ -93,6 +94,12 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Return the private-broadcast queue (in-flight Tor outbounds per transaction).
+    GetPrivateBroadcastInfo,
+
+    /// Stop private broadcast for a transaction identified by txid or wtxid bytes.
+    AbortPrivateBroadcast([u8; 32]),
 }
 
 #[derive(Debug)]
@@ -139,6 +146,12 @@ pub enum NodeResponse {
 
     /// Address manager statistics.
     GetAddrManInfo(ConnectionStats),
+
+    /// Private-broadcast queue snapshot.
+    GetPrivateBroadcastInfo(Vec<TxBroadcastInfo>),
+
+    /// Transactions removed from the private-broadcast queue by abort.
+    AbortPrivateBroadcast(Vec<Transaction>),
 }
 
 #[derive(Debug)]
