@@ -94,8 +94,13 @@ impl ReachableNetworks {
     /// All networks Floresta is aware of.
     pub const ALL: [Self; 5] = [Self::IPv4, Self::IPv6, Self::TorV3, Self::I2P, Self::Cjdns];
 
-    /// Networks this implementation currently supports.
+    /// Networks this implementation currently supports for general outbound peers.
     pub const SUPPORTED: [Self; 2] = [Self::IPv4, Self::IPv6];
+
+    /// Reachable networks when a SOCKS5 proxy is configured (includes Tor v3 for private broadcast).
+    pub fn with_proxy() -> Vec<Self> {
+        vec![Self::IPv4, Self::IPv6, Self::TorV3]
+    }
 }
 
 impl Display for ReachableNetworks {
@@ -234,6 +239,11 @@ impl LocalAddress {
             services,
             id,
         }
+    }
+
+    /// Whether this address is a Tor v3 onion service.
+    pub fn is_tor_v3(&self) -> bool {
+        matches!(self.as_addrv2(), AddrV2::TorV3(_))
     }
 
     /// Get the [`SocketAddr`] for this [`LocalAddress`].
@@ -803,6 +813,54 @@ impl AddressMan {
             }
         }
 
+        None
+    }
+
+    /// Select a random Tor v3 peer for a private-broadcast outbound connection.
+    ///
+    /// Private broadcast dials random onion tx-recipients over SOCKS5. Only good,
+    /// reachable Tor v3 addresses are considered; banned and already-connected peers
+    /// are excluded. Peers we failed to reach recently stay excluded until the
+    /// 10-minute retry window elapses, then they may be chosen again.
+    ///
+    /// Picks randomly from the eligible set, retrying up to ten times (for example when
+    /// the draw hits a peer still in the failed-retry window). Returns [`None`] when no
+    /// suitable onion peer is known.
+    pub fn select_for_private_broadcast(&mut self) -> Option<(usize, LocalAddress)> {
+        let onion_ids: Vec<usize> = self
+            .good_addresses
+            .iter()
+            .filter_map(|id| self.addresses.get(id))
+            .filter(|addr| addr.is_tor_v3() && self.is_net_reachable(addr))
+            .filter(|addr| {
+                !matches!(
+                    addr.state,
+                    AddressState::Banned(_) | AddressState::Connected
+                )
+            })
+            .map(|addr| addr.id)
+            .collect();
+
+        if onion_ids.is_empty() {
+            return None;
+        }
+
+        for _ in 0..10 {
+            let idx = rand::rng().random_range(0..onion_ids.len());
+            let id = onion_ids[idx];
+            let Some(peer) = self.addresses.get(&id).cloned() else {
+                continue;
+            };
+            match peer.state {
+                AddressState::NeverTried | AddressState::Tried(_) => return Some((id, peer)),
+                AddressState::Failed(when) => {
+                    if when + RETRY_TIME < Self::time_since_unix() {
+                        return Some((id, peer));
+                    }
+                }
+                AddressState::Connected | AddressState::Banned(_) => {}
+            }
+        }
         None
     }
 
