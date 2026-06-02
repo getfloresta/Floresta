@@ -1523,10 +1523,12 @@ mod test {
 
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::Work;
     use bitcoin::block::Header as BlockHeader;
+    use bitcoin::block::Version as HeaderVersion;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -1552,22 +1554,43 @@ mod test {
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::utxo_data::UtxoData;
 
+    const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
+    const VALIDATE_FULL_BLOCK_HEADERS_FILE_SIZE: usize = 1 << 20;
+    const VALIDATE_MANY_INPUTS_HEADERS_FILE_SIZE: usize = 1 << 19;
+    const TEST_FORK_FILE_SIZE: usize = 10_000;
+
     fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
     ) -> ChainState<FlatChainStore> {
+        setup_test_chain_with_header_capacity(
+            network,
+            assume_valid_arg,
+            DEFAULT_TEST_CHAINSTORE_SIZE,
+        )
+    }
+
+    fn setup_test_chain_with_header_capacity(
+        network: Network,
+        assume_valid_arg: AssumeValidArg,
+        headers_file_size: usize,
+    ) -> ChainState<FlatChainStore> {
         let test_id = rand::random::<u64>();
-        let config = crate::FlatChainStoreConfig {
-            block_index_size: Some(32_768),
-            headers_file_size: Some(32_768),
-            fork_file_size: Some(10_000), // Will be rounded up to 16,384
-            cache_size: Some(10),
-            file_permission: Some(0o660),
-            path: format!("./tmp-db/{test_id}/").into(),
-        };
+        let config = test_chain_config(format!("./tmp-db/{test_id}/"), headers_file_size);
 
         let chainstore = FlatChainStore::new(config).unwrap();
         ChainState::open(chainstore, network, assume_valid_arg).unwrap()
+    }
+
+    fn test_chain_config(path: String, headers_file_size: usize) -> FlatChainStoreConfig {
+        FlatChainStoreConfig {
+            block_index_size: Some(DEFAULT_TEST_CHAINSTORE_SIZE),
+            headers_file_size: Some(headers_file_size),
+            fork_file_size: Some(TEST_FORK_FILE_SIZE), // Will be rounded up to 16,384
+            cache_size: Some(10),
+            file_permission: Some(0o660),
+            path: path.into(),
+        }
     }
 
     fn decode_block_and_inputs(
@@ -1595,6 +1618,37 @@ mod test {
         (block, inputs)
     }
 
+    fn store_mtp_headers(
+        chain: &ChainState<FlatChainStore>,
+        network: Network,
+        tip_height: u32,
+        time: u32,
+    ) {
+        let genesis = genesis_block(network);
+        let mut prev_hash = genesis.block_hash();
+        let mut inner = write_lock!(chain);
+
+        for height in (tip_height - 10)..=tip_height {
+            let header = BlockHeader {
+                version: HeaderVersion::from_consensus(0x2000_0000),
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(0x1702_8c74),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            inner
+                .chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, height))
+                .unwrap();
+            inner
+                .chainstore
+                .update_block_index(height, prev_hash)
+                .unwrap();
+        }
+    }
+
     #[test]
     #[cfg_attr(debug_assertions, ignore = "this test is very slow in debug mode")]
     fn test_validate_many_inputs_block() {
@@ -1608,7 +1662,12 @@ mod test {
         );
 
         // Check whether the block validation passes or not
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+        let chain = setup_test_chain_with_header_capacity(
+            Network::Bitcoin,
+            AssumeValidArg::Disabled,
+            VALIDATE_MANY_INPUTS_HEADERS_FILE_SIZE,
+        );
+        store_mtp_headers(&chain, Network::Bitcoin, 367890, block.header.time);
         chain
             .validate_block_no_acc(&block, 367891, inputs)
             .expect("Block must be valid");
@@ -1626,7 +1685,12 @@ mod test {
         );
 
         // Check whether the block validation passes or not
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+        let chain = setup_test_chain_with_header_capacity(
+            Network::Bitcoin,
+            AssumeValidArg::Disabled,
+            VALIDATE_FULL_BLOCK_HEADERS_FILE_SIZE,
+        );
+        store_mtp_headers(&chain, Network::Bitcoin, 866341, block.header.time);
         chain
             .validate_block_no_acc(&block, 866342, inputs)
             .expect("Block must be valid");
