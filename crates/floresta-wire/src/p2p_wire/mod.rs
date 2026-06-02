@@ -66,6 +66,16 @@ pub struct UtreexoNodeConfig {
     pub allow_v1_fallback: bool,
     /// Whether to disable DNS seeds. Defaults to false.
     pub disable_dns_seeds: bool,
+    /// Whether to broadcast locally submitted transactions only over Tor private
+    /// connections. Defaults to false.
+    ///
+    /// When enabled, transactions you submit through the node are queued for the
+    /// private-broadcast path instead of being relayed on the public P2P mempool. The
+    /// node opens a limited number of outbound Tor connections to tx-recipient peers from
+    /// the address manager, completes a minimal decoy-version handshake, and announces
+    /// each transaction with the usual inv/getdata/tx flow. Configure a SOCKS5 proxy so
+    /// those connections can reach onion services.
+    pub private_broadcast: bool,
 }
 
 impl Default for UtreexoNodeConfig {
@@ -84,6 +94,7 @@ impl Default for UtreexoNodeConfig {
             filter_start_height: None,
             user_agent: format!("floresta:{}", env!("CARGO_PKG_VERSION")),
             allow_v1_fallback: true,
+            private_broadcast: false,
         }
     }
 }

@@ -80,9 +80,10 @@ where
         // Get the peer's `ServiceFlags`.
         let required_services = match conn_kind {
             ConnectionKind::Regular(services) => services,
-            ConnectionKind::Feeler | ConnectionKind::Extra | ConnectionKind::Manual => {
-                ServiceFlags::NONE
-            }
+            ConnectionKind::Feeler
+            | ConnectionKind::Extra
+            | ConnectionKind::Manual
+            | ConnectionKind::PrivateBroadcast => ServiceFlags::NONE,
         };
 
         // Pick the first fixed peer that we are not already connected to, or
@@ -240,6 +241,8 @@ where
                 banscore: 0,
                 // Will be downgraded to V1 if the V2 handshake fails, and we allow fallback
                 transport_protocol: TransportProtocol::V2,
+                ready_since: None,
+                is_outbound_tor_v3: false,
             },
         );
 

@@ -395,6 +395,15 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 self.write(NetworkMessage::Inv(vec![Inventory::Transaction(tx)]))
                     .await?;
             }
+            NodeRequest::PrivateBroadcastInv(tx) => {
+                self.write(NetworkMessage::Inv(vec![Inventory::Transaction(
+                    tx.compute_txid(),
+                )]))
+                .await?;
+            }
+            NodeRequest::PrivateBroadcastSendTx(tx) => {
+                self.write(NetworkMessage::Tx(tx)).await?;
+            }
             NodeRequest::MempoolTransaction(txid) => {
                 self.write(NetworkMessage::GetData(vec![Inventory::Transaction(txid)]))
                     .await?;

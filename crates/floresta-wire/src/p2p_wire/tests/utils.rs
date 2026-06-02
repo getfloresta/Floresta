@@ -185,6 +185,8 @@ pub fn create_peer(
         banscore: 0,
         _last_message: Instant::now(),
         transport_protocol: TransportProtocol::V2,
+        ready_since: Some(Instant::now()),
+        is_outbound_tor_v3: false,
     }
 }
 

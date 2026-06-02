@@ -23,6 +23,7 @@ use std::time::Instant;
 
 use bitcoin::BlockHash;
 use bitcoin::Network;
+use bitcoin::Transaction;
 use bitcoin::Txid;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::address::AddrV2Message;
@@ -59,6 +60,8 @@ use super::transport::TransportProtocol;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::bitcoin_socket_addr::SystemResolver;
 use crate::node_context::PeerId;
+use crate::private_broadcast::PrivateBroadcast;
+use crate::private_broadcast::PrivateBroadcastConnector;
 
 /// As per BIP 155, limit the number of addresses to 1,000
 pub const MAX_ADDRV2_ADDRESSES: usize = 1_000;
@@ -87,6 +90,27 @@ pub enum NodeRequest {
 
     /// Sends a transaction to peers
     BroadcastTransaction(Txid),
+
+    /// Announce a queued transaction on a Tor private-broadcast outbound.
+    ///
+    /// Sent to a [`ConnectionKind::PrivateBroadcast`] peer after verack, when the node
+    /// has assigned a transaction from [`PrivateBroadcast`] to that connection. The peer
+    /// task keeps the full [`Transaction`] so it can answer the recipient's `getdata` without
+    /// relying on the mempool, and writes a normal Bitcoin `inv` with the txid (same wire
+    /// shape as [`NodeRequest::BroadcastTransaction`], but on a short-lived anonymous handshake).
+    /// See [`crate::private_broadcast`] for the full inv → getdata → tx → ping flow.
+    PrivateBroadcastInv(Transaction),
+
+    /// Deliver the full transaction and probe for receipt on a private-broadcast peer.
+    ///
+    /// On the wire this is `tx` followed by `ping`; the recipient's `pong` is treated
+    /// as confirmation that the transaction was received, after which the node shuts
+    /// the connection down. Only used on [`ConnectionKind::PrivateBroadcast`] peers.
+    /// The [`Transaction`] must match the txid previously announced with
+    /// [`NodeRequest::PrivateBroadcastInv`]. In practice the peer task usually performs this step
+    /// when it handles an incoming `getdata` for that txid rather than receiving this
+    /// request from the node.
+    PrivateBroadcastSendTx(Transaction),
 
     /// Ask for an unconfirmed transaction
     MempoolTransaction(Txid),
@@ -163,6 +187,15 @@ pub enum ConnectionKind {
     /// misbehaving, and won't respect the [`ServiceFlags`] requirements when creating a
     /// connection.
     Manual,
+
+    /// A short-lived outbound Tor peer used to announce one locally submitted transaction.
+    ///
+    /// Opened when [`UtreexoNodeConfig::private_broadcast`] is enabled and a SOCKS5 proxy is
+    /// configured. The node picks tx-recipient onion addresses from the address manager,
+    /// completes a minimal handshake, relays the transaction with the usual inv/getdata/tx
+    /// flow, and disconnects once the peer acknowledges receipt or the connection ages out.
+    /// These peers do not participate in block sync or the public mempool relay path.
+    PrivateBroadcast,
 }
 
 impl Serialize for ConnectionKind {
@@ -175,6 +208,7 @@ impl Serialize for ConnectionKind {
             ConnectionKind::Regular(_) => serializer.serialize_str("regular"),
             ConnectionKind::Extra => serializer.serialize_str("extra"),
             ConnectionKind::Manual => serializer.serialize_str("manual"),
+            ConnectionKind::PrivateBroadcast => serializer.serialize_str("private_broadcast"),
         }
     }
 }
@@ -224,6 +258,17 @@ pub struct LocalPeerView {
 
     /// The transport protocol this peer is using (v1 or v2)
     pub(crate) transport_protocol: TransportProtocol,
+
+    /// When this peer entered [`PeerStatus::Ready`], if ever.
+    ///
+    /// `None` while the handshake is incomplete ([`PeerStatus::Awaiting`]). Set when verack
+    /// completes. Used with [`PeerStatus::Ready`] to disconnect stale
+    /// [`ConnectionKind::PrivateBroadcast`] peers that stay ready too long without confirming
+    /// transaction receipt.
+    pub(crate) ready_since: Option<Instant>,
+
+    /// Outbound dial targets Tor v3 via SOCKS5 (set in [`UtreexoNode::open_connection`]).
+    pub(crate) is_outbound_tor_v3: bool,
 }
 
 impl LocalPeerView {
@@ -264,6 +309,8 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) max_banscore: u32,
     pub(crate) address_man: AddressMan,
     pub(crate) added_peers: Vec<AddedPeerInfo>,
+    pub(crate) tx_for_private_broadcast: PrivateBroadcast,
+    pub(crate) private_broadcast_connector: PrivateBroadcastConnector,
 
     // 3. Internal Communication
     pub(crate) node_rx: UnboundedReceiver<NodeNotification>,
@@ -272,6 +319,8 @@ pub struct NodeCommon<Chain: ChainBackend> {
     // 4. Networking Configuration
     pub(crate) socks5: Option<Socks5StreamBuilder>,
     pub(crate) fixed_peers: Vec<LocalAddress>,
+    /// Outbound Tor v3 handshake succeeded at least once this process (via SOCKS5).
+    pub(crate) is_outbound_tor_proven: bool,
 
     // 5. Time and Event Tracking
     pub(crate) inflight: HashMap<InflightRequests, (u32, Instant)>,
@@ -288,6 +337,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) startup_time: Instant,
     pub(crate) last_dns_seed_call: Instant,
     pub(crate) used_fixed_addresses: bool,
+    pub(crate) last_private_broadcast_reattempt: Instant,
 
     // 6. Configuration and Metadata
     pub(crate) config: UtreexoNodeConfig,
@@ -389,13 +439,17 @@ where
                 last_get_address_request: Instant::now(),
                 last_send_addresses: Instant::now(),
                 used_fixed_addresses: false,
+                last_private_broadcast_reattempt: Instant::now(),
                 datadir: config.datadir.clone(),
                 max_banscore: config.max_banscore,
                 socks5,
                 fixed_peers,
+                is_outbound_tor_proven: false,
                 config,
                 kill_signal,
                 added_peers: Vec::new(),
+                tx_for_private_broadcast: PrivateBroadcast::default(),
+                private_broadcast_connector: PrivateBroadcastConnector::default(),
             },
             context: T::default(),
         })
