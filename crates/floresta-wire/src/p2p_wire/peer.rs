@@ -151,6 +151,8 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     // This is kept as an option to avoid the need to keep the other half around during tests.
     cancellation_sender: Option<oneshot::Sender<()>>,
     transport_protocol: TransportProtocol,
+    private_broadcast_tx: Option<Transaction>,
+    private_broadcast_awaiting_pong: bool,
 }
 
 #[derive(Debug)]
@@ -270,6 +272,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
     async fn peer_loop_inner(&mut self) -> Result<()> {
         // Send a `version` message to the peer.
         let message_version = peer_utils::build_version_message(
+            self.kind,
             self.our_user_agent.clone(),
             self.our_best_block,
             &self.address,
@@ -352,8 +355,27 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         }
     }
 
+    fn private_broadcast_peer_log(&self) -> String {
+        format!("peer={} addr={}", self.id, self.address)
+    }
+
     pub async fn handle_node_request(&mut self, request: NodeRequest) -> Result<()> {
         assert_eq!(self.state, State::Connected);
+        if self.kind == ConnectionKind::PrivateBroadcast {
+            match &request {
+                NodeRequest::PrivateBroadcastInv(_)
+                | NodeRequest::PrivateBroadcastSendTx(_)
+                | NodeRequest::Shutdown
+                | NodeRequest::Ping => {}
+                other => {
+                    debug!(
+                        "Omitting send of message '{other:?}', {}",
+                        self.private_broadcast_peer_log()
+                    );
+                    return Ok(());
+                }
+            }
+        }
         debug!("Handling node request: {request:?}");
         match request {
             NodeRequest::GetBlock(block_hashes) => {
@@ -396,13 +418,14 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     .await?;
             }
             NodeRequest::PrivateBroadcastInv(tx) => {
+                self.private_broadcast_tx = Some(tx.clone());
                 self.write(NetworkMessage::Inv(vec![Inventory::Transaction(
                     tx.compute_txid(),
                 )]))
                 .await?;
             }
             NodeRequest::PrivateBroadcastSendTx(tx) => {
-                self.write(NetworkMessage::Tx(tx)).await?;
+                self.send_private_broadcast_tx_and_probe(tx).await?;
             }
             NodeRequest::MempoolTransaction(txid) => {
                 self.write(NetworkMessage::GetData(vec![Inventory::Transaction(txid)]))
@@ -453,6 +476,11 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         self.messages += 1;
 
         debug!("Received {} from peer {}", message.command(), self.id);
+        if self.kind == ConnectionKind::PrivateBroadcast && self.state == State::Connected {
+            return self
+                .handle_private_broadcast_connected_message(message, time)
+                .await;
+        }
         match self.state {
             State::Connected => match message {
                 NetworkMessage::Inv(inv) => {
@@ -714,6 +742,8 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             our_best_block,
             cancellation_sender: Some(cancellation_sender),
             transport_protocol,
+            private_broadcast_tx: None,
+            private_broadcast_awaiting_pong: false,
         };
 
         spawn(peer.read_loop());
@@ -724,18 +754,91 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         self.write(pong).await
     }
 
+    /// Sends `tx` then a probe `ping`. The peer's `pong` confirms receipt of the `tx`.
+    async fn send_private_broadcast_tx_and_probe(&mut self, tx: Transaction) -> Result<()> {
+        self.write(NetworkMessage::Tx(tx)).await?;
+        self.private_broadcast_awaiting_pong = true;
+        let nonce = rand::random();
+        self.last_ping = Some(Instant::now());
+        self.write(NetworkMessage::Ping(nonce)).await
+    }
+
     async fn handle_version(&mut self, version: VersionMessage) -> Result<()> {
         self.user_agent = version.user_agent;
         self.blocks_only = !version.relay;
         self.current_best_block = version.start_height;
         self.services = version.services;
+
+        if self.kind == ConnectionKind::PrivateBroadcast {
+            if !version.relay {
+                debug!(
+                    "Disconnecting: does not support transaction relay (connected in vain), {}",
+                    self.private_broadcast_peer_log()
+                );
+                return Err(PeerError::UnexpectedMessage);
+            }
+            self.state = State::SentVerack;
+            return self.write(NetworkMessage::Verack).await;
+        }
+
         if version.version >= PROTOCOL_VERSION {
             self.write(NetworkMessage::SendAddrV2).await?;
         }
         self.state = State::SentVerack;
-        let verack = NetworkMessage::Verack;
-        self.state = State::SentVerack;
-        self.write(verack).await
+        self.write(NetworkMessage::Verack).await
+    }
+
+    /// Handles post-handshake messages for [`ConnectionKind::PrivateBroadcast`] peers.
+    ///
+    /// Once `inv` has been sent, only two inbound messages matter:
+    /// - `getdata` for the queued transaction → deliver `tx` and a probe `ping` via
+    ///   [`Self::send_private_broadcast_tx_and_probe`];
+    /// - `pong` for that probe → [`PeerMessages::PrivateBroadcastConfirmed`] to the node.
+    ///
+    /// Other messages are ignored. Unexpected `getdata` returns [`PeerError::UnexpectedMessage`].
+    async fn handle_private_broadcast_connected_message(
+        &mut self,
+        message: NetworkMessage,
+        time: Instant,
+    ) -> Result<()> {
+        let peer_log = self.private_broadcast_peer_log();
+        match message {
+            NetworkMessage::GetData(inv) => {
+                let Some(ref tx) = self.private_broadcast_tx else {
+                    debug!("Disconnecting: got GETDATA without sending an INV, {peer_log}");
+                    return Err(PeerError::UnexpectedMessage);
+                };
+                if inv.len() != 1 {
+                    debug!("Disconnecting: got an unexpected GETDATA message, {peer_log}");
+                    return Err(PeerError::UnexpectedMessage);
+                }
+                match inv[0] {
+                    Inventory::Transaction(txid) | Inventory::WitnessTransaction(txid)
+                        if txid == tx.compute_txid() =>
+                    {
+                        self.send_private_broadcast_tx_and_probe(tx.clone()).await?;
+                    }
+                    _ => {
+                        debug!("Disconnecting: got an unexpected GETDATA message, {peer_log}");
+                        return Err(PeerError::UnexpectedMessage);
+                    }
+                }
+            }
+            NetworkMessage::Pong(_) => {
+                if self.private_broadcast_awaiting_pong {
+                    self.private_broadcast_awaiting_pong = false;
+                    self.last_ping = None;
+                    self.send_to_node(PeerMessages::PrivateBroadcastConfirmed, time);
+                }
+            }
+            other => {
+                debug!(
+                    "Ignoring incoming message '{}', {peer_log}",
+                    other.command()
+                );
+            }
+        }
+        Ok(())
     }
 
     fn send_to_node(&self, message: PeerMessages, time: Instant) {
@@ -752,6 +855,7 @@ pub(super) mod peer_utils {
     use std::time::UNIX_EPOCH;
 
     use bitcoin::p2p::Address;
+    use bitcoin::p2p::ServiceFlags;
     use bitcoin::p2p::message::NetworkMessage;
     use bitcoin::p2p::message_network::VersionMessage;
     use floresta_common::PROTOCOL_VERSION;
@@ -760,6 +864,8 @@ pub(super) mod peer_utils {
     use rand::rng;
 
     use crate::address_man::LocalAddress;
+    use crate::node::ConnectionKind;
+    use crate::private_broadcast::PRIVATE_BROADCAST_USER_AGENT;
 
     /// Build the [pong](NetworkMessage::Pong) message, which must be sent whenever a peer sends us a
     /// [ping](NetworkMessage::Ping). Note that the nonce received in the ping must be reused in the pong.
@@ -770,10 +876,15 @@ pub(super) mod peer_utils {
     /// Build the [version](NetworkMessage::Version) message used to perform the peer connection
     /// handshake, as described in the [Bitcoin Wiki](https://en.bitcoin.it/wiki/Protocol_documentation#version).
     pub(crate) fn build_version_message(
+        kind: ConnectionKind,
         user_agent: String,
         best_block: u32,
         peer_address: &LocalAddress,
     ) -> NetworkMessage {
+        if kind == ConnectionKind::PrivateBroadcast {
+            return build_private_broadcast_version_message();
+        }
+
         // The set of services supported by this node.
         let services = advertised_services();
 
@@ -812,6 +923,27 @@ pub(super) mod peer_utils {
             user_agent,
             start_height,
             relay,
+        })
+    }
+
+    /// Builds a minimal version for Tor private-broadcast outbounds.
+    fn build_private_broadcast_version_message() -> NetworkMessage {
+        let services = ServiceFlags::NONE;
+        let empty_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+        let dummy_address = Address::new(&empty_socket, ServiceFlags::NONE);
+        let mut prng = rng();
+        let nonce: u64 = prng.random();
+
+        NetworkMessage::Version(VersionMessage {
+            version: PROTOCOL_VERSION,
+            services,
+            timestamp: 0,
+            sender: dummy_address.clone(),
+            receiver: dummy_address,
+            nonce,
+            user_agent: PRIVATE_BROADCAST_USER_AGENT.into(),
+            start_height: 0,
+            relay: false,
         })
     }
 }
@@ -856,6 +988,9 @@ pub enum PeerMessages {
 
     /// Remote peer sent us a transaction
     Transaction(Transaction),
+
+    /// Private-broadcast peer acknowledged our post-TX ping with pong.
+    PrivateBroadcastConfirmed,
 
     /// Remote peer sent us a Utreexo state
     UtreexoState(Vec<u8>),
@@ -958,6 +1093,8 @@ mod tests {
             current_best_block: 0,
             transport_protocol: TransportProtocol::V1,
             cancellation_sender: Some(cancellation_sender),
+            private_broadcast_tx: None,
+            private_broadcast_awaiting_pong: false,
         };
 
         SetupData {
@@ -975,6 +1112,43 @@ mod tests {
         actor_sender
             .send(ReaderMessage::Message(network_message, Instant::now()))
             .unwrap();
+    }
+
+    #[test]
+    fn private_broadcast_version_is_anonymous() {
+        use crate::private_broadcast::PRIVATE_BROADCAST_USER_AGENT;
+
+        const NODE_USER_AGENT: &str = "/Floresta-test:0.0.0/";
+        const NODE_BEST_HEIGHT: u32 = 900_000;
+
+        let address = LocalAddress::new(
+            BitcoinSocketAddr::new(AddrV2::Ipv4(Ipv4Addr::new(127, 0, 0, 1)), 18444),
+            0,
+            AddressState::NeverTried,
+            ServiceFlags::NONE,
+            0,
+        );
+
+        let msg = peer_utils::build_version_message(
+            ConnectionKind::PrivateBroadcast,
+            NODE_USER_AGENT.into(),
+            NODE_BEST_HEIGHT,
+            &address,
+        );
+
+        let NetworkMessage::Version(version) = msg else {
+            panic!("expected version message");
+        };
+
+        assert_eq!(version.services, ServiceFlags::NONE);
+        assert_eq!(version.timestamp, 0);
+        assert_eq!(version.start_height, 0);
+        assert!(!version.relay);
+        assert_eq!(version.user_agent, PRIVATE_BROADCAST_USER_AGENT);
+        assert_eq!(version.sender.services, ServiceFlags::NONE);
+        assert_eq!(version.receiver.services, ServiceFlags::NONE);
+        assert_eq!(version.sender.port, 0);
+        assert_eq!(version.receiver.port, 0);
     }
 
     #[tokio::test]
@@ -1012,7 +1186,12 @@ mod tests {
 
         send_to_peer(
             &mut actor_sender,
-            peer_utils::build_version_message("/Floresta-test:0.0.0/".into(), 0, &address),
+            peer_utils::build_version_message(
+                ConnectionKind::Manual,
+                "/Floresta-test:0.0.0/".into(),
+                0,
+                &address,
+            ),
         );
 
         send_to_peer(&mut actor_sender, NetworkMessage::Verack);
