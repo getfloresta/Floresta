@@ -293,11 +293,11 @@ impl Mempool {
         Ok(())
     }
 
-    /// Accepts a transaction to mempool
+    /// Validates a transaction without adding it to the mempool
     ///
     /// This method will perform some context-less validations on a transaction,
-    /// and then accept to our mempool. It assumes that we have validated this transaction's
-    /// proof.
+    /// and check that it won't conflict with other mempool transactions. It does not
+    /// add the transaction to our mempool.
     ///
     /// # Errors
     ///  - If we don't have space left in our mempool
@@ -307,6 +307,32 @@ impl Mempool {
     ///    the theoretical maximum amount of Bitcoins
     ///  - If either vIn or vOut are empty
     ///  - If any script is larger than the maximum allowed size
+    pub fn validate_transaction(&mut self, transaction: &Transaction) -> Result<(), MempoolError> {
+        // Make sure our mempool has space
+        let tx_size = transaction.total_size();
+        if self.mempool_size + tx_size > self.max_mempool_size {
+            return Err(MempoolError::FullMempool);
+        }
+
+        // Perform context-free consensus checks
+        Consensus::check_transaction_context_free(transaction)
+            .map_err(MempoolError::ConsensusValidation)?;
+
+        // Make sure transaction won't conflict with other mempool transaction
+        self.check_for_conflicts(transaction)?;
+
+        Ok(())
+    }
+
+    /// Accepts a transaction to mempool
+    ///
+    /// Calls [`validate_transaction`](Self::validate_transaction) and, if we don't already have
+    /// this transaction, adds it to our mempool. It assumes that we have validated this
+    /// transaction's proof.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`validate_transaction`](Self::validate_transaction).
     pub fn accept_to_mempool(&mut self, transaction: Transaction) -> Result<(), MempoolError> {
         debug!(
             "Accepting {} to mempool {:?}",
@@ -314,25 +340,15 @@ impl Mempool {
             self.transactions
         );
 
-        // Make sure our mempool has space
-        let tx_size = transaction.total_size();
-        if self.mempool_size + tx_size > self.max_mempool_size {
-            return Err(MempoolError::FullMempool);
-        }
+        self.validate_transaction(&transaction)?;
 
+        let tx_size = transaction.total_size();
         let short_txid = self.hasher.hash_one(transaction.compute_txid());
 
         // Checks if we don't have this tx already
         if self.transactions.contains_key(&short_txid) {
             return Ok(());
         }
-
-        // Perform context-free consensus checks
-        Consensus::check_transaction_context_free(&transaction)
-            .map_err(MempoolError::ConsensusValidation)?;
-
-        // Make sure transaction won't conflict with other mempool transaction
-        self.check_for_conflicts(&transaction)?;
 
         // List dependants for this transaction
         let depends = self.find_mempool_depends(&transaction);
