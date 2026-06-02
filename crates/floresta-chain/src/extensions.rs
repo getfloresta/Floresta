@@ -10,6 +10,7 @@ use bitcoin::BlockHash;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::hashes::Hash;
 use floresta_common::bhash;
 use floresta_common::prelude::Box;
 use floresta_common::prelude::String;
@@ -46,6 +47,14 @@ pub trait HeaderExt {
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<u32, HeaderExtError>;
+
+    /// Calculates Median Time Past using a caller-provided previous-header lookup.
+    fn median_time_past_with<E>(
+        &self,
+        previous_header: impl FnMut(&Self) -> Result<Self, E>,
+    ) -> Result<u32, E>
+    where
+        Self: Sized;
 
     /// Calculates the total accumulated chain work up to the current block.
     fn calculate_chain_work(
@@ -123,19 +132,29 @@ impl HeaderExt for Header {
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<u32, HeaderExtError> {
+        self.median_time_past_with(|current_header| current_header.get_previous_block_header(chain))
+    }
+
+    fn median_time_past_with<E>(
+        &self,
+        mut previous_header: impl FnMut(&Self) -> Result<Self, E>,
+    ) -> Result<u32, E> {
         let mut block_timestamps = Vec::with_capacity(MEDIAN_TIME_PAST_BLOCK_COUNT);
         let mut current_header = *self;
+
         for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
             block_timestamps.push(current_header.time);
-            let Ok(prev_header) = current_header.get_previous_block_header(chain) else {
+            if block_timestamps.len() == MEDIAN_TIME_PAST_BLOCK_COUNT
+                || current_header.prev_blockhash == BlockHash::all_zeros()
+            {
                 break;
-            };
-            current_header = prev_header;
-        }
-        block_timestamps.sort();
-        let median_time_past = block_timestamps[block_timestamps.len() / 2];
+            }
 
-        Ok(median_time_past)
+            current_header = previous_header(&current_header)?;
+        }
+
+        block_timestamps.sort();
+        Ok(block_timestamps[block_timestamps.len() / 2])
     }
 
     fn calculate_chain_work(
