@@ -370,6 +370,7 @@ where
             | BlockValidationErrors::BadBip34
             | BlockValidationErrors::BIP94TimeWarp
             | BlockValidationErrors::UnspendableUTXO
+            | BlockValidationErrors::NonFinalTransaction
             | BlockValidationErrors::CoinbaseNotMatured => {
                 try_and_log!(self.chain.invalidate_block(hash));
 
