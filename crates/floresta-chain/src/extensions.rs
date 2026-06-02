@@ -10,6 +10,7 @@ use bitcoin::BlockHash;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::hashes::Hash;
 use floresta_common::bhash;
 use floresta_common::prelude::Box;
 use floresta_common::prelude::String;
@@ -127,9 +128,12 @@ impl HeaderExt for Header {
         let mut current_header = *self;
         for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
             block_timestamps.push(current_header.time);
-            let Ok(prev_header) = current_header.get_previous_block_header(chain) else {
+
+            if current_header.prev_blockhash == BlockHash::all_zeros() {
                 break;
-            };
+            }
+
+            let prev_header = current_header.get_previous_block_header(chain)?;
             current_header = prev_header;
         }
         block_timestamps.sort();
