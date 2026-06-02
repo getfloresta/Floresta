@@ -1546,18 +1546,30 @@ mod test {
     use std::io::Cursor;
     use std::vec::Vec;
 
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::CompactTarget;
     use bitcoin::Network;
     use bitcoin::OutPoint;
+    use bitcoin::ScriptBuf;
+    use bitcoin::Sequence;
+    use bitcoin::Transaction;
+    use bitcoin::TxIn;
+    use bitcoin::TxOut;
+    use bitcoin::Witness;
     use bitcoin::Work;
+    use bitcoin::absolute::LockTime;
     use bitcoin::block::Header as BlockHeader;
     use bitcoin::block::Version as HeaderVersion;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::constants::genesis_block;
+    use bitcoin::opcodes::OP_TRUE;
+    use bitcoin::opcodes::all::OP_RETURN;
+    use bitcoin::script::Builder;
+    use bitcoin::transaction::Version as TransactionVersion;
     use floresta_common::assert_ok;
     use floresta_common::bhash;
     use rand::Rng;
@@ -1618,6 +1630,126 @@ mod test {
         }
     }
 
+    fn op_return_script() -> ScriptBuf {
+        let mut script = ScriptBuf::new();
+        script.push_opcode(OP_RETURN);
+        script
+    }
+
+    fn anyone_can_spend_script() -> ScriptBuf {
+        let mut script = ScriptBuf::new();
+        script.push_opcode(OP_TRUE);
+        script
+    }
+
+    fn test_coinbase(height: u32, sequence: Sequence, lock_time: LockTime) -> Transaction {
+        let script_sig = Builder::new()
+            .push_int(i64::from(height))
+            .push_int(0)
+            .into_script();
+
+        Transaction {
+            version: TransactionVersion::TWO,
+            lock_time,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig,
+                sequence,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::ZERO,
+                script_pubkey: op_return_script(),
+            }],
+        }
+    }
+
+    fn block_with_transactions(height: u32, txdata: Vec<Transaction>) -> Block {
+        let mut block = Block {
+            header: BlockHeader {
+                version: HeaderVersion::from_consensus(0x2000_0000),
+                prev_blockhash: genesis_block(Network::Regtest).block_hash(),
+                merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+                time: 1_716_400_000 + height,
+                bits: CompactTarget::from_consensus(0x207f_ffff),
+                nonce: 0,
+            },
+            txdata,
+        };
+        block.header.merkle_root = block.compute_merkle_root().expect("block txs");
+        block
+    }
+
+    fn block_with_coinbase(height: u32, coinbase: Transaction) -> Block {
+        block_with_transactions(height, vec![coinbase])
+    }
+
+    fn test_outpoint(vout: u32) -> OutPoint {
+        OutPoint {
+            txid: genesis_block(Network::Regtest).txdata[0].compute_txid(),
+            vout,
+        }
+    }
+
+    fn test_spend(
+        lock_time: LockTime,
+        first_sequence: Sequence,
+        second_sequence: Sequence,
+    ) -> (Transaction, HashMap<OutPoint, UtxoData>) {
+        let first_prevout = test_outpoint(0);
+        let second_prevout = test_outpoint(1);
+        let transaction = Transaction {
+            version: TransactionVersion::TWO,
+            lock_time,
+            input: vec![
+                TxIn {
+                    previous_output: first_prevout,
+                    script_sig: ScriptBuf::new(),
+                    sequence: first_sequence,
+                    witness: Witness::new(),
+                },
+                TxIn {
+                    previous_output: second_prevout,
+                    script_sig: ScriptBuf::new(),
+                    sequence: second_sequence,
+                    witness: Witness::new(),
+                },
+            ],
+            output: vec![TxOut {
+                value: Amount::from_sat(1),
+                script_pubkey: op_return_script(),
+            }],
+        };
+        let inputs = HashMap::from([
+            (
+                first_prevout,
+                UtxoData {
+                    txout: TxOut {
+                        value: Amount::from_sat(1),
+                        script_pubkey: anyone_can_spend_script(),
+                    },
+                    is_coinbase: false,
+                    creation_height: 0,
+                    creation_time: 0,
+                },
+            ),
+            (
+                second_prevout,
+                UtxoData {
+                    txout: TxOut {
+                        value: Amount::from_sat(1),
+                        script_pubkey: anyone_can_spend_script(),
+                    },
+                    is_coinbase: false,
+                    creation_height: 0,
+                    creation_time: 0,
+                },
+            ),
+        ]);
+
+        (transaction, inputs)
+    }
+
     fn decode_block_and_inputs(
         block_file: File,
         stxos_file: File,
@@ -1672,6 +1804,84 @@ mod test {
                 .update_block_index(height, prev_hash)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn reject_non_final_block_transaction() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let height = 1;
+
+        let invalid = block_with_coinbase(
+            height,
+            test_coinbase(
+                height,
+                Sequence::ENABLE_LOCKTIME_NO_RBF,
+                LockTime::from_height(height).unwrap(),
+            ),
+        );
+        let valid =
+            block_with_coinbase(height, test_coinbase(height, Sequence::MAX, LockTime::ZERO));
+
+        let invalid_result = chain.validate_block_no_acc(&invalid, height, HashMap::new());
+        assert!(
+            invalid_result.is_err(),
+            "accepted a block containing a non-final transaction"
+        );
+
+        let valid_result = chain.validate_block_no_acc(&valid, height, HashMap::new());
+        assert!(
+            valid_result.is_ok(),
+            "rejected a block containing only final transactions: {valid_result:?}"
+        );
+    }
+
+    #[test]
+    fn accept_future_lock_time_when_all_input_sequences_are_final() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let height = 1;
+        let future_lock_time = LockTime::from_height(height + 1).unwrap();
+        let (final_sequence_tx, final_sequence_inputs) =
+            test_spend(future_lock_time, Sequence::MAX, Sequence::MAX);
+        let final_sequence_block = block_with_transactions(
+            height,
+            vec![
+                test_coinbase(height, Sequence::MAX, LockTime::ZERO),
+                final_sequence_tx,
+            ],
+        );
+
+        let final_sequence_result =
+            chain.validate_block_no_acc(&final_sequence_block, height, final_sequence_inputs);
+        assert!(
+            final_sequence_result.is_ok(),
+            "rejected a block containing a future-lock-time transaction whose inputs all have final sequence: {final_sequence_result:?}"
+        );
+    }
+
+    #[test]
+    fn reject_future_lock_time_with_one_non_final_input_sequence() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let height = 1;
+        let future_lock_time = LockTime::from_height(height + 1).unwrap();
+        let (mixed_sequence_tx, mixed_sequence_inputs) = test_spend(
+            future_lock_time,
+            Sequence::MAX,
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let mixed_sequence_block = block_with_transactions(
+            height,
+            vec![
+                test_coinbase(height, Sequence::MAX, LockTime::ZERO),
+                mixed_sequence_tx,
+            ],
+        );
+
+        let mixed_sequence_result =
+            chain.validate_block_no_acc(&mixed_sequence_block, height, mixed_sequence_inputs);
+        assert!(
+            mixed_sequence_result.is_err(),
+            "accepted a block containing a transaction with a future lock time and one non-final input sequence"
+        );
     }
 
     #[test]
