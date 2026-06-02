@@ -35,6 +35,7 @@ use crate::node_interface::MempoolMethods;
 use crate::node_interface::NetworkMethods;
 use crate::node_interface::NodeConfigMethods;
 use crate::node_interface::PeerInfo;
+use crate::node_interface::PrivateBroadcastMethods;
 use crate::private_broadcast::TxBroadcastInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -298,6 +299,24 @@ impl NodeConfigMethods for NodeHandle {
         let val = self.send_request(UserRequest::Config).await?;
 
         extract_variant!(Config, val)
+    }
+}
+
+impl PrivateBroadcastMethods for NodeHandle {
+    type Error = RecvError;
+
+    async fn get_private_broadcast_info(&self) -> Result<Vec<TxBroadcastInfo>, Self::Error> {
+        let val = self
+            .send_request(UserRequest::GetPrivateBroadcastInfo)
+            .await?;
+        extract_variant!(GetPrivateBroadcastInfo, val)
+    }
+
+    async fn abort_private_broadcast(&self, id: [u8; 32]) -> Result<Vec<Transaction>, Self::Error> {
+        let val = self
+            .send_request(UserRequest::AbortPrivateBroadcast(id))
+            .await?;
+        extract_variant!(AbortPrivateBroadcast, val)
     }
 }
 

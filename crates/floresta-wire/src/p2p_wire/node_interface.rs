@@ -237,14 +237,48 @@ pub trait NodeConfigMethods {
     fn get_config(&self) -> impl Future<Output = Result<UtreexoNodeConfig, Self::Error>>;
 }
 
+/// Methods for the private-broadcast Tor relay queue.
+pub trait PrivateBroadcastMethods {
+    type Error: core::error::Error;
+
+    /// Returns a snapshot of transactions in the private-broadcast queue.
+    ///
+    /// Each [`crate::private_broadcast::TxBroadcastInfo`] includes the transaction body,
+    /// txid, wtxid, time added, and per-peer send and acknowledgment timestamps.
+    fn get_private_broadcast_info(
+        &self,
+    ) -> impl Future<Output = Result<Vec<crate::private_broadcast::TxBroadcastInfo>, Self::Error>>;
+
+    /// Aborts private broadcast for a transaction identified by txid or wtxid.
+    ///
+    /// `id` is matched against queued [`crate::private_broadcast::TxBroadcastInfo`]
+    /// entries. Returns the removed [`Transaction`] bodies; empty when nothing matches.
+    fn abort_private_broadcast(
+        &self,
+        id: [u8; 32],
+    ) -> impl Future<Output = Result<Vec<Transaction>, Self::Error>>;
+}
+
 /// A trait defining what methods our node can expose.
 pub trait NodeMethods:
-    ChainMethods + MempoolMethods + NetworkMethods + NodeConfigMethods + Send + 'static
+    ChainMethods
+    + MempoolMethods
+    + NetworkMethods
+    + NodeConfigMethods
+    + PrivateBroadcastMethods
+    + Send
+    + 'static
 {
 }
 
 impl<T> NodeMethods for T where
-    T: ChainMethods + MempoolMethods + NetworkMethods + NodeConfigMethods + Send + 'static
+    T: ChainMethods
+        + MempoolMethods
+        + NetworkMethods
+        + NodeConfigMethods
+        + PrivateBroadcastMethods
+        + Send
+        + 'static
 {
 }
 
