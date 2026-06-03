@@ -667,7 +667,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         log_path: impl AsRef<Path>,
         user_agent: String,
         proxy: Option<SocketAddr>,
-        credentials: Arc<super::auth::Credentials>,
+        credentials: Arc<super::auth::Auth>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
