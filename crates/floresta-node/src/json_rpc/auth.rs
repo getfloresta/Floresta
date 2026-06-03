@@ -196,6 +196,10 @@ pub(crate) enum Auth {
     /// Cookie auth. Stores the full `__cookie__:<hex>` line as written to
     /// disk by [`generate_cookie`].
     Cookie(String),
+
+    /// Plaintext `-rpcuser`/`-rpcpassword` pair stored as a pre-formatted
+    /// `user:pass` line so it shares the same comparison shape as `Cookie`.
+    UserPass(String),
 }
 
 impl Auth {
@@ -203,7 +207,7 @@ impl Auth {
     /// against the configured credentials. All comparisons are constant-time.
     pub(crate) fn matches(&self, user: &str, pass: &str) -> bool {
         match self {
-            Self::Cookie(expected) => {
+            Self::Cookie(expected) | Self::UserPass(expected) => {
                 constant_time_eq(format!("{user}:{pass}").as_bytes(), expected.as_bytes())
             }
         }
@@ -506,6 +510,15 @@ mod tests {
         assert!(!creds.matches("wronguser", pass));
 
         fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn user_pass_credentials_match_their_own_user_and_pass() {
+        let creds = Auth::UserPass(String::from("alice:hunter2"));
+
+        assert!(creds.matches("alice", "hunter2"));
+        assert!(!creds.matches("alice", "wrong"));
+        assert!(!creds.matches("eve", "hunter2"));
     }
 
     #[cfg(unix)]
