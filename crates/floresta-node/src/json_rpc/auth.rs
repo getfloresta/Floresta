@@ -101,12 +101,12 @@ impl fmt::Display for BasicAuthHeaderError {
 
 impl std::error::Error for BasicAuthHeaderError {}
 
-/// Axum middleware that gates each request on the configured [`Credentials`].
+/// Axum middleware that gates each request on the configured [`Auth`].
 /// Missing, malformed, non-ASCII, or non-matching `Authorization: Basic`
 /// headers all return HTTP 401 with `WWW-Authenticate: Basic realm="jsonrpc"`
 /// per RFC 7235. Matching requests pass through to the handler.
 pub(crate) async fn auth_middleware(
-    axum::extract::State(creds): axum::extract::State<std::sync::Arc<Credentials>>,
+    axum::extract::State(creds): axum::extract::State<std::sync::Arc<Auth>>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -175,19 +175,23 @@ pub(crate) fn parse_basic_auth_header(
 
 /// Configured RPC credentials for this process. The middleware compares each
 /// inbound `Authorization: Basic` request against the stored value via
-/// [`Credentials::matches`].
-pub(crate) enum Credentials {
+/// [`Auth::matches`].
+pub(crate) enum Auth {
     /// Cookie auth. Stores the full `__cookie__:<hex>` line as written to
     /// disk by [`generate_cookie`].
     Cookie(String),
+
+    /// Plaintext `-rpcuser`/`-rpcpassword` pair stored as a pre-formatted
+    /// `user:pass` line so it shares the same comparison shape as `Cookie`.
+    UserPass(String),
 }
 
-impl Credentials {
+impl Auth {
     /// True if the supplied basic-auth `user`/`pass` pair authenticates
     /// against the configured credentials. All comparisons are constant-time.
     pub(crate) fn matches(&self, user: &str, pass: &str) -> bool {
         match self {
-            Self::Cookie(expected) => {
+            Self::Cookie(expected) | Self::UserPass(expected) => {
                 constant_time_eq(format!("{user}:{pass}").as_bytes(), expected.as_bytes())
             }
         }
@@ -460,7 +464,7 @@ mod tests {
     fn cookie_credentials_match_their_own_user_and_pass() {
         let path = tmp_cookie_path("creds_cookie");
         let auth = generate_cookie(&path).expect("cookie write should succeed in test");
-        let creds = Credentials::Cookie(auth.clone());
+        let creds = Auth::Cookie(auth.clone());
 
         let (user, pass) = auth
             .split_once(':')
@@ -470,6 +474,15 @@ mod tests {
         assert!(!creds.matches("wronguser", pass));
 
         fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn user_pass_credentials_match_their_own_user_and_pass() {
+        let creds = Auth::UserPass(String::from("alice:hunter2"));
+
+        assert!(creds.matches("alice", "hunter2"));
+        assert!(!creds.matches("alice", "wrong"));
+        assert!(!creds.matches("eve", "hunter2"));
     }
 
     #[cfg(unix)]
