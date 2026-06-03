@@ -168,6 +168,14 @@ pub struct Config {
     /// The address our json-rpc should listen to
     pub json_rpc_address: Option<String>,
 
+    /// Username for `-rpcuser`/`-rpcpassword` auth.
+    #[cfg(feature = "json-rpc")]
+    pub rpc_user: Option<String>,
+
+    /// Password for `-rpcuser`/`-rpcpassword` auth; setting it disables cookie auth.
+    #[cfg(feature = "json-rpc")]
+    pub rpc_password: Option<String>,
+
     /// Whether we should write logs to `stdout`.
     pub log_to_stdout: bool,
 
@@ -243,6 +251,10 @@ impl Config {
             connect: Vec::new(),
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
+            #[cfg(feature = "json-rpc")]
+            rpc_user: None,
+            #[cfg(feature = "json-rpc")]
+            rpc_password: None,
             log_to_stdout: false,
             log_to_file: false,
             assume_utreexo: false,
@@ -468,10 +480,21 @@ impl Florestad {
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
         {
-            let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
-            let cookie = json_rpc::auth::generate_cookie(&cookie_path)?;
-            info!("RPC cookie file written to {}", cookie_path.display());
-            let credentials = Arc::new(json_rpc::auth::Auth::Cookie(cookie));
+            let credentials = if let Some(pass) = self.get_rpc_password() {
+                let user = self.get_rpc_user().unwrap_or_default();
+                info!("RPC password auth configured for user '{user}'");
+                Arc::new(json_rpc::auth::Auth::UserPass(format!("{user}:{pass}")))
+            } else {
+                if self.get_rpc_user().is_some() {
+                    warn!(
+                        "--rpc-user is set but --rpc-password is not; falling back to cookie auth"
+                    );
+                }
+                let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
+                let cookie = json_rpc::auth::generate_cookie(&cookie_path)?;
+                info!("RPC cookie file written to {}", cookie_path.display());
+                Arc::new(json_rpc::auth::Auth::Cookie(cookie))
+            };
 
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
                 blockchain_state.clone(),
@@ -770,6 +793,30 @@ impl Florestad {
 
         info!("Wallet setup completed!");
         Ok(wallet)
+    }
+
+    /// Get the configured RPC user; CLI/struct value wins over the config file.
+    /// Empty strings are treated as unset (Bitcoin Core parity).
+    #[cfg(feature = "json-rpc")]
+    fn get_rpc_user(&self) -> Option<String> {
+        self.config
+            .rpc_user
+            .clone()
+            .or_else(|| self.get_config_file().rpc.user)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Get the configured RPC password; CLI/struct value wins over the config file.
+    /// Empty strings are treated as unset (Bitcoin Core parity: an empty
+    /// `-rpcpassword` falls through to cookie auth instead of guarding the
+    /// server with `<user>:`).
+    #[cfg(feature = "json-rpc")]
+    fn get_rpc_password(&self) -> Option<String> {
+        self.config
+            .rpc_password
+            .clone()
+            .or_else(|| self.get_config_file().rpc.password)
+            .filter(|s| !s.is_empty())
     }
 
     /// Get the wallet descriptors from the config file
