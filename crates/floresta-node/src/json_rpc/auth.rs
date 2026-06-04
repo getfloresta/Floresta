@@ -45,15 +45,18 @@ const COOKIE_TOKEN_BYTES: usize = 32;
 /// Upper bound on the inbound `Authorization` header to cap base64 decode allocation.
 const MAX_AUTH_HEADER_LEN: usize = 16 * 1024;
 
-/// Generate a fresh cookie, write it to `path` with no trailing newline, and
-/// return the `__cookie__:<hex>` line for in-process validation.
+/// Generate a fresh cookie, write `<user>:<token_hex>` to `path` with no
+/// trailing newline, and return `(user, token_hex)` so the caller can feed the
+/// token directly into the in-memory auth vector byte-identical to what landed
+/// in the file.
 ///
 /// Writes go to `<path>.tmp` first with mode `0600` on Unix, then atomically
 /// rename over `path`. A pre-existing cookie file is silently overwritten.
-pub(crate) fn generate_cookie(path: &Path) -> io::Result<String> {
+pub(crate) fn generate_cookie(path: &Path) -> io::Result<(String, String)> {
     let mut token = [0u8; COOKIE_TOKEN_BYTES];
     rand::rng().fill(&mut token);
-    let auth = format!("{COOKIE_USER}:{}", token.to_lower_hex_string());
+    let token_hex = token.to_lower_hex_string();
+    let line = format!("{COOKIE_USER}:{token_hex}");
 
     let tmp = tmp_path(path);
 
@@ -66,12 +69,12 @@ pub(crate) fn generate_cookie(path: &Path) -> io::Result<String> {
     }
 
     let mut file = opts.open(&tmp)?;
-    file.write_all(auth.as_bytes())?;
+    file.write_all(line.as_bytes())?;
     drop(file);
 
     fs::rename(&tmp, path)?;
 
-    Ok(auth)
+    Ok((COOKIE_USER.to_string(), token_hex))
 }
 
 /// Errors produced by [`parse_basic_auth_header`].
@@ -178,26 +181,23 @@ pub(crate) fn parse_basic_auth_header(
     Ok((user.to_string(), pass.to_string()))
 }
 
-/// Configured RPC credentials for this process. The middleware compares each
-/// inbound `Authorization: Basic` request against the stored value via
-/// [`Auth::matches`].
-pub(crate) enum Auth {
-    /// Full `__cookie__:<hex>` line as written to disk.
-    Cookie(String),
-
-    /// Configured users with salted HMAC-SHA256 password hashes.
-    Hashed(Vec<RpcAuth>),
+/// Configured RPC credentials for this process: cookie, `-rpcuser`/`-rpcpassword`,
+/// and any `-rpcauth` entries all live in a single vector. First match wins.
+/// Mirrors Bitcoin Core's `g_rpcauth` (httprpc.cpp:36).
+pub(crate) struct Auth {
+    entries: Vec<RpcAuth>,
 }
 
 impl Auth {
-    /// True if the basic-auth `user`/`pass` pair authenticates. Constant-time.
+    /// Build from a pre-collected vector of entries.
+    pub(crate) fn new(entries: Vec<RpcAuth>) -> Self {
+        Self { entries }
+    }
+
+    /// True if the basic-auth `user`/`pass` pair authenticates against any
+    /// configured entry. Each entry's check is constant-time.
     pub(crate) fn matches(&self, user: &str, pass: &str) -> bool {
-        match self {
-            Self::Cookie(expected) => {
-                constant_time_eq(format!("{user}:{pass}").as_bytes(), expected.as_bytes())
-            }
-            Self::Hashed(entries) => entries.iter().any(|a| a.verify(user, pass)),
-        }
+        self.entries.iter().any(|a| a.verify(user, pass))
     }
 }
 
@@ -221,6 +221,38 @@ impl RpcAuth {
         }
     }
 
+    /// Parse a `<user>:<salt_hex>$<hash_hex>` line, mirroring Bitcoin Core.
+    pub(crate) fn parse(line: &str) -> Result<Self, RpcAuthParseError> {
+        let colon_parts: Vec<&str> = line.split(':').collect();
+        if colon_parts.len() != 2 {
+            return Err(RpcAuthParseError::MalformedLine);
+        }
+        let user = colon_parts[0];
+        let salt_hash: Vec<&str> = colon_parts[1].split('$').collect();
+        if salt_hash.len() != 2 {
+            return Err(RpcAuthParseError::MalformedLine);
+        }
+        let salt_hex = salt_hash[0];
+        let hash_hex = salt_hash[1];
+        if user.is_empty() || salt_hex.is_empty() || hash_hex.is_empty() {
+            return Err(RpcAuthParseError::EmptyField);
+        }
+        // The salt's hex string is used verbatim as the HMAC key bytes (not
+        // decoded), so an uppercase salt would silently never authenticate.
+        let is_lowercase_hex = |s: &str| {
+            s.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        };
+        if !is_lowercase_hex(salt_hex) || !is_lowercase_hex(hash_hex) {
+            return Err(RpcAuthParseError::NonLowercaseHexField);
+        }
+        Ok(Self {
+            user: user.to_string(),
+            salt_hex: salt_hex.to_string(),
+            hash_hex: hash_hex.to_string(),
+        })
+    }
+
     /// Constant-time check: user matches and HMAC(pass) equals the stored hash.
     pub(crate) fn verify(&self, user: &str, pass: &str) -> bool {
         if !constant_time_eq(user.as_bytes(), self.user.as_bytes()) {
@@ -230,6 +262,26 @@ impl RpcAuth {
         constant_time_eq(computed.as_bytes(), self.hash_hex.as_bytes())
     }
 }
+
+/// Errors from [`RpcAuth::parse`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RpcAuthParseError {
+    /// Wrong number of `:` or `$` separators.
+    MalformedLine,
+    /// User, salt, or hash field is empty.
+    EmptyField,
+    /// Salt or hash field contains non-`[0-9a-f]` characters.
+    NonLowercaseHexField,
+}
+
+impl fmt::Display for RpcAuthParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Match Bitcoin Core's wording (httprpc.cpp:308) for the operator log.
+        write!(f, "Invalid -rpcauth argument.")
+    }
+}
+
+impl std::error::Error for RpcAuthParseError {}
 
 /// Constant-time byte slice comparison. Returns `false` immediately on length
 /// mismatch (lengths of both comparands are public), then XORs every byte into
@@ -298,15 +350,9 @@ mod tests {
     #[test]
     fn generate_cookie_writes_expected_format() {
         let path = tmp_cookie_path("format");
-        let auth = generate_cookie(&path).expect("cookie write should succeed in test");
+        let (user, token) = generate_cookie(&path).expect("cookie write should succeed in test");
 
-        assert!(
-            auth.starts_with("__cookie__:"),
-            "auth string missing prefix: {auth}"
-        );
-        let token = auth
-            .strip_prefix("__cookie__:")
-            .expect("generated cookie always begins with __cookie__:");
+        assert_eq!(user, "__cookie__");
         assert_eq!(
             token.len(),
             64,
@@ -322,8 +368,9 @@ mod tests {
 
         let written = fs::read_to_string(&path).expect("test wrote this cookie file above");
         assert_eq!(
-            written, auth,
-            "file content should match returned auth string"
+            written,
+            format!("{user}:{token}"),
+            "file content should match returned (user, token) joined by ':'",
         );
 
         fs::remove_file(&path).ok();
@@ -344,12 +391,9 @@ mod tests {
     fn generate_cookie_produces_distinct_tokens() {
         let path1 = tmp_cookie_path("distinct1");
         let path2 = tmp_cookie_path("distinct2");
-        let auth1 = generate_cookie(&path1).expect("cookie write should succeed in test");
-        let auth2 = generate_cookie(&path2).expect("cookie write should succeed in test");
-        assert_ne!(
-            auth1, auth2,
-            "two consecutive calls produced identical tokens"
-        );
+        let (_, t1) = generate_cookie(&path1).expect("cookie write should succeed in test");
+        let (_, t2) = generate_cookie(&path2).expect("cookie write should succeed in test");
+        assert_ne!(t1, t2, "two consecutive calls produced identical tokens");
 
         fs::remove_file(&path1).ok();
         fs::remove_file(&path2).ok();
@@ -359,11 +403,12 @@ mod tests {
     fn generate_cookie_overwrites_existing_file() {
         let path = tmp_cookie_path("overwrite");
         fs::write(&path, "stale-content").expect("test temp path should be writable");
-        let auth = generate_cookie(&path).expect("cookie write should succeed in test");
+        let (user, token) = generate_cookie(&path).expect("cookie write should succeed in test");
         let written = fs::read_to_string(&path).expect("test wrote this cookie file above");
         assert_eq!(
-            written, auth,
-            "file content should match returned auth string"
+            written,
+            format!("{user}:{token}"),
+            "file content should match returned (user, token) joined by ':'",
         );
 
         fs::remove_file(&path).ok();
@@ -512,24 +557,21 @@ mod tests {
     }
 
     #[test]
-    fn cookie_credentials_match_their_own_user_and_pass() {
+    fn cookie_entry_matches_its_own_user_and_token() {
         let path = tmp_cookie_path("creds_cookie");
-        let auth = generate_cookie(&path).expect("cookie write should succeed in test");
-        let creds = Auth::Cookie(auth.clone());
+        let (user, token) = generate_cookie(&path).expect("cookie write should succeed in test");
+        let creds = Auth::new(vec![RpcAuth::from_password(&user, &token)]);
 
-        let (user, pass) = auth
-            .split_once(':')
-            .expect("generated auth string always contains a ':' separator");
-        assert!(creds.matches(user, pass));
-        assert!(!creds.matches(user, "wrong"));
-        assert!(!creds.matches("wronguser", pass));
+        assert!(creds.matches(&user, &token));
+        assert!(!creds.matches(&user, "wrong"));
+        assert!(!creds.matches("wronguser", &token));
 
         fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn hashed_credentials_match_any_configured_entry() {
-        let creds = Auth::Hashed(vec![
+    fn auth_matches_any_configured_entry() {
+        let creds = Auth::new(vec![
             RpcAuth::from_password("alice", "hunter2"),
             RpcAuth::from_password("bob", "letmein"),
         ]);
@@ -575,6 +617,67 @@ mod tests {
         let pass = "Ys-WMXs6znL6q2BH9yjh77k9keytl4JpCshiapNCMyg";
         let expected = "9e0770d953ba59dcd5cf447615717764936d48b01d4428d251628f0156088901";
         assert_eq!(hmac_password(salt_hex, pass), expected);
+    }
+
+    #[test]
+    fn rpcauth_parse_accepts_well_formed_line() {
+        // Reuses the rpcauth.py vector pinned by hmac_password_matches_rpcauth_py_vector.
+        let line = "alice:cf2c6b493e4690de904306d1a82ef1cc$9e0770d953ba59dcd5cf447615717764936d48b01d4428d251628f0156088901";
+        let parsed = RpcAuth::parse(line).expect("rpcauth.py output should parse");
+        assert_eq!(parsed.user, "alice");
+        assert_eq!(parsed.salt_hex, "cf2c6b493e4690de904306d1a82ef1cc");
+        assert_eq!(parsed.hash_hex.len(), 64);
+    }
+
+    #[test]
+    fn rpcauth_parse_rejects_malformed_lines() {
+        assert_eq!(
+            RpcAuth::parse("nocolon$hash"),
+            Err(RpcAuthParseError::MalformedLine)
+        );
+        assert_eq!(
+            RpcAuth::parse("user:salt"),
+            Err(RpcAuthParseError::MalformedLine)
+        );
+        assert_eq!(
+            RpcAuth::parse("user:extra:s$h"),
+            Err(RpcAuthParseError::MalformedLine)
+        );
+        assert_eq!(
+            RpcAuth::parse("user:salt$h$extra"),
+            Err(RpcAuthParseError::MalformedLine)
+        );
+    }
+
+    #[test]
+    fn rpcauth_parse_rejects_empty_field() {
+        assert_eq!(
+            RpcAuth::parse(":salt$abcdef"),
+            Err(RpcAuthParseError::EmptyField)
+        );
+        assert_eq!(
+            RpcAuth::parse("user:$abcdef"),
+            Err(RpcAuthParseError::EmptyField)
+        );
+        assert_eq!(
+            RpcAuth::parse("user:salt$"),
+            Err(RpcAuthParseError::EmptyField)
+        );
+    }
+
+    #[test]
+    fn rpcauth_parse_rejects_uppercase_hex() {
+        // Bitcoin Core's HexStr only emits lowercase, and the salt is used
+        // verbatim as the HMAC key bytes, so any uppercase char in either
+        // field can never authenticate against a legitimate entry.
+        assert_eq!(
+            RpcAuth::parse("user:cf2c6b$ABCDEF0123"),
+            Err(RpcAuthParseError::NonLowercaseHexField),
+        );
+        assert_eq!(
+            RpcAuth::parse("user:CF2C6B$abcdef"),
+            Err(RpcAuthParseError::NonLowercaseHexField),
+        );
     }
 
     #[cfg(unix)]
