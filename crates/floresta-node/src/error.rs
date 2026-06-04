@@ -121,6 +121,9 @@ pub enum FlorestadError {
 
     /// Load a flat chain store error.
     CouldNotLoadFlatChainStore(BlockchainError),
+
+    /// A malformed `-rpcauth` entry was provided at startup.
+    InvalidRpcAuth(String),
 }
 
 impl Display for FlorestadError {
@@ -224,6 +227,9 @@ impl Display for FlorestadError {
             }
             Self::CouldNotLoadFlatChainStore(err) => {
                 write!(f, "Failure while loading flat chainstore: {err:?}")
+            }
+            Self::InvalidRpcAuth(line) => {
+                write!(f, "Invalid -rpcauth argument: {line}")
             }
         }
     }
