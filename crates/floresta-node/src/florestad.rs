@@ -483,7 +483,9 @@ impl Florestad {
             let credentials = if let Some(pass) = self.get_rpc_password() {
                 let user = self.get_rpc_user().unwrap_or_default();
                 info!("RPC password auth configured for user '{user}'");
-                Arc::new(json_rpc::auth::Auth::UserPass(format!("{user}:{pass}")))
+                Arc::new(json_rpc::auth::Auth::Hashed(vec![
+                    json_rpc::auth::RpcAuth::from_password(&user, &pass),
+                ]))
             } else {
                 if self.get_rpc_user().is_some() {
                     warn!(
