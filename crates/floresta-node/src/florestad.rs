@@ -486,7 +486,9 @@ impl Florestad {
             let credentials = if let Some(pass) = self.get_rpc_password() {
                 let user = self.get_rpc_user().unwrap_or_default();
                 info!("RPC password auth configured for user '{user}'");
-                Arc::new(json_rpc::auth::Auth::UserPass(format!("{user}:{pass}")))
+                Arc::new(json_rpc::auth::Auth::Hashed(vec![
+                    json_rpc::auth::RpcAuth::from_password(&user, &pass),
+                ]))
             } else {
                 let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
                 let cookie = json_rpc::auth::generate_cookie(&cookie_path)?;
