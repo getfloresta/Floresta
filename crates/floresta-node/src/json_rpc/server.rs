@@ -56,8 +56,8 @@ use super::res::GetRawTransactionRes;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
+use crate::json_rpc::request::arg_parser::get_optional;
 use crate::json_rpc::request::arg_parser::get_with_default;
-use crate::json_rpc::request::arg_parser::try_into_optional;
 use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::res::jsonrpc_interface::Response;
 
@@ -308,7 +308,7 @@ async fn handle_json_rpc_request(
         "addnode" => {
             let node = get_at(&params, 0, "node")?;
             let command = get_at(&params, 1, "command")?;
-            let v2transport = try_into_optional(get_at(&params, 2, "v2transport"))?;
+            let v2transport = get_optional(&params, 2, "v2transport")?;
 
             state
                 .add_node(node, command, v2transport)
@@ -318,7 +318,7 @@ async fn handle_json_rpc_request(
 
         "disconnectnode" => {
             let node_address = get_at(&params, 0, "node_address")?;
-            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
+            let node_id = get_optional(&params, 1, "node_id")?;
 
             state
                 .disconnect_node(node_address, node_id)
@@ -331,7 +331,7 @@ async fn handle_json_rpc_request(
             let vout = get_at(&params, 1, "vout")?;
             let script: String = get_at(&params, 2, "script")?;
             let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_at(&params, 3, "height")?;
+            let height = get_with_default(&params, 3, "height", 0)?;
 
             state.clone().find_tx_out(txid, vout, script, height).await
         }
@@ -389,7 +389,7 @@ async fn handle_json_rpc_request(
         }
 
         "getdeploymentinfo" => {
-            let blockhash = try_into_optional(get_at(&params, 0, "blockhash"))?;
+            let blockhash = get_optional(&params, 0, "blockhash")?;
 
             state
                 .get_deployment_info(blockhash)
@@ -416,7 +416,7 @@ async fn handle_json_rpc_request(
 
         "gettxoutproof" => {
             let txids: Vec<Txid> = get_at(&params, 0, "txids")?;
-            let block_hash = try_into_optional(get_at(&params, 1, "block_hash"))?;
+            let block_hash = get_optional(&params, 1, "block_hash")?;
 
             state
                 .get_txout_proof(&txids, block_hash)

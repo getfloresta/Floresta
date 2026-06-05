@@ -37,60 +37,52 @@ pub mod arg_parser {
 
     use crate::json_rpc::res::jsonrpc_interface::JsonRpcError;
 
-    /// Extracts a parameter from the request parameters at the specified index.
+    /// Extracts an optional parameter from the request by position (array params) or name (object params).
     ///
-    /// This function can extract any type that implements `FromStr`, such as `BlockHash` or
-    /// `Txid`. It checks if the parameter exists and is a valid string representation of the type.
-    /// Returns an error otherwise.
+    /// Returns `Ok(None)` if the field is absent or `null`.
+    /// Returns an error if `params` itself is `null` or has an unexpected structure.
+    pub fn get_optional<'de, T: Deserialize<'de>>(
+        params: &'de Value,
+        index: usize,
+        field_name: &str,
+    ) -> Result<Option<T>, JsonRpcError> {
+        let value = match params {
+            Value::Null => {
+                return Err(JsonRpcError::MissingParameter(field_name.to_string()));
+            }
+            Value::Array(values) => values.get(index),
+            Value::Object(map) => map.get(field_name),
+            _ => {
+                return Err(JsonRpcError::InvalidParameterStructure(params.to_string()));
+            }
+        }
+        .filter(|v| !v.is_null());
+
+        value
+            .map(|value| {
+                T::deserialize(value)
+                    .map_err(|e| JsonRpcError::InvalidParameterType(format!("{field_name}: {e}")))
+            })
+            .transpose()
+    }
+
+    /// Extracts a required parameter, returning [`JsonRpcError::MissingParameter`] if absent.
     pub fn get_at<'de, T: Deserialize<'de>>(
         params: &'de Value,
         index: usize,
         field_name: &str,
     ) -> Result<T, JsonRpcError> {
-        if params.is_null() {
-            return Err(JsonRpcError::MissingParameter(field_name.to_string()));
-        }
-
-        let v = match (params.is_array(), params.is_object()) {
-            (true, false) => params.get(index),
-            (false, true) => params.get(field_name),
-            _ => {
-                return Err(JsonRpcError::InvalidParameterStructure(
-                    (*params).to_string(),
-                ));
-            }
-        };
-
-        let value = v.ok_or(JsonRpcError::MissingParameter(field_name.to_string()))?;
-
-        T::deserialize(value)
-            .map_err(|e| JsonRpcError::InvalidParameterType(format!("{field_name}: {e}")))
+        get_optional(params, index, field_name)?
+            .ok_or_else(|| JsonRpcError::MissingParameter(field_name.to_string()))
     }
 
-    /// Wraps a parameter extraction result so that a missing parameter yields `Ok(None)`
-    /// instead of an error. Other errors are propagated unchanged.
-    pub fn try_into_optional<T>(
-        result: Result<T, JsonRpcError>,
-    ) -> Result<Option<T>, JsonRpcError> {
-        match result {
-            Ok(t) => Ok(Some(t)),
-            Err(JsonRpcError::MissingParameter(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Like [`get_at`], but returns `default` when the parameter is missing instead of
-    /// an error. Type mismatches are still propagated as errors.
+    /// Like [`get_optional`], but substitutes `default` instead of returning `None`.
     pub fn get_with_default<'de, T: Deserialize<'de>>(
         v: &'de Value,
         index: usize,
         field_name: &str,
         default: T,
     ) -> Result<T, JsonRpcError> {
-        match get_at(v, index, field_name) {
-            Ok(t) => Ok(t),
-            Err(JsonRpcError::MissingParameter(_)) => Ok(default),
-            Err(e) => Err(e),
-        }
+        Ok(get_optional(v, index, field_name)?.unwrap_or(default))
     }
 }
