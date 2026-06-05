@@ -716,8 +716,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 proxy,
             }));
 
-        axum::serve(listener, router)
-            .await
-            .expect("failed to start rpc server");
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("failed to start rpc server");
     }
 }

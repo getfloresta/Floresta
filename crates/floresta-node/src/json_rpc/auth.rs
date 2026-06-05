@@ -20,8 +20,10 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -112,9 +114,13 @@ impl std::error::Error for BasicAuthHeaderError {}
 /// Axum middleware that gates each request on the configured [`Auth`].
 /// Missing, malformed, non-ASCII, or non-matching `Authorization: Basic`
 /// headers all return HTTP 401 with `WWW-Authenticate: Basic realm="jsonrpc"`
-/// per RFC 7235. Matching requests pass through to the handler.
+/// per RFC 7235. Matching requests pass through to the handler. Any
+/// present-but-invalid header (malformed or wrong credentials) triggers a
+/// 250 ms sleep before the 401 lands, matching Bitcoin Core; a fully absent
+/// header skips the sleep.
 pub(crate) async fn auth_middleware(
     axum::extract::State(creds): axum::extract::State<std::sync::Arc<Auth>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -122,26 +128,21 @@ pub(crate) async fn auth_middleware(
         tracing::debug!("rpc auth header missing; rejecting");
         return unauthorized();
     };
-    let value = match header.to_str() {
-        Ok(s) => s,
-        Err(_) => {
-            tracing::debug!("rpc auth header is not valid ascii; rejecting");
-            return unauthorized();
-        }
-    };
-    let (user, pass) = match parse_basic_auth_header(value) {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::debug!("rpc auth header parse failed: {e}; rejecting");
-            return unauthorized();
-        }
-    };
-    if !creds.matches(&user, &pass) {
-        tracing::debug!("rpc auth credentials mismatched for user {user}; rejecting");
-        return unauthorized();
+    match header.to_str() {
+        Err(_) => tracing::debug!("rpc auth header is not valid ascii; rejecting"),
+        Ok(value) => match parse_basic_auth_header(value) {
+            Err(e) => tracing::debug!("rpc auth header parse failed: {e}; rejecting"),
+            Ok((user, pass)) => {
+                if creds.matches(&user, &pass) {
+                    tracing::debug!("rpc auth ok for user {user}");
+                    return next.run(req).await;
+                }
+                tracing::warn!("incorrect password attempt from {peer}");
+            }
+        },
     }
-    tracing::debug!("rpc auth ok for user {user}");
-    next.run(req).await
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    unauthorized()
 }
 
 fn unauthorized() -> axum::response::Response {
