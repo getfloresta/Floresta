@@ -155,6 +155,9 @@ pub trait FlorestaRPC {
     fn ping(&self) -> Result<()>;
     /// Returns address manager statistics broken down by network.
     fn get_addrman_info(&self) -> Result<GetAddrManInfo>;
+
+    #[doc = include_str!("../../../doc/rpc/getnodeaddresses.md")]
+    fn get_node_addresses(&self, count: Option<u32>, network: Option<String>) -> Result<Value>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -378,5 +381,14 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
         self.call("getaddrmaninfo", &[])
+    }
+
+    fn get_node_addresses(&self, count: Option<u32>, network: Option<String>) -> Result<Value> {
+        let params = match (count, network) {
+            (None, _) => vec![],
+            (Some(c), None) => vec![Value::Number(Number::from(c))],
+            (Some(c), Some(n)) => vec![Value::Number(Number::from(c)), Value::String(n)],
+        };
+        self.call("getnodeaddresses", &params)
     }
 }

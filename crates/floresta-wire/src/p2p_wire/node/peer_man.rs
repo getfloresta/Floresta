@@ -31,10 +31,12 @@ use super::PeerStatus;
 use super::UtreexoNode;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
+use crate::address_man::ReachableNetworks;
 use crate::block_proof::Bitmap;
 use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
+use crate::node_interface::NodeAddress;
 use crate::node_interface::NodeResponse;
 use crate::node_interface::PeerInfo;
 use crate::node_interface::UserRequest;
@@ -852,6 +854,46 @@ where
             kind: peer.kind,
             transport_protocol: peer.transport_protocol,
         })
+    }
+
+    pub(crate) fn handle_get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> Vec<NodeAddress> {
+        let addresses = self.address_man.get_addresses_to_send();
+        // count=0 means return all known addresses, matching Bitcoin Core behavior
+        let count = if count == 0 {
+            addresses.len()
+        } else {
+            (count as usize).min(addresses.len())
+        };
+
+        addresses
+            .into_iter()
+            .filter(|(addr, _, _, _)| match &network {
+                None => true,
+                Some(ReachableNetworks::IPv4) => matches!(addr, AddrV2::Ipv4(_)),
+                Some(ReachableNetworks::IPv6) => matches!(addr, AddrV2::Ipv6(_)),
+                _ => false, // We dont support connections to other networks, in the future we should extend this as they land.
+            })
+            .take(count)
+            .filter_map(|(addr, time, services, port)| {
+                let (address, network) = match &addr {
+                    AddrV2::Ipv4(ip) => (ip.to_string(), ReachableNetworks::IPv4),
+                    AddrV2::Ipv6(ip) => (ip.to_string(), ReachableNetworks::IPv6),
+                    _ => return None, // We dont support connections to other networks, in the future we should extend this as they land.
+                };
+
+                Some(NodeAddress {
+                    time,
+                    services: services.to_u64(),
+                    address,
+                    port,
+                    network,
+                })
+            })
+            .collect()
     }
 
     // === ADDNODE ===

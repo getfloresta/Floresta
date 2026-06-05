@@ -166,6 +166,12 @@ where
                 return;
             }
 
+            UserRequest::GetNodeAddresses(count, network) => {
+                let addresses = self.handle_get_node_addresses(count, network);
+                try_and_log!(responder.send(NodeResponse::GetNodeAddresses(addresses)));
+                return;
+            }
+
             UserRequest::SendTransaction(transaction) => {
                 let txid = transaction.compute_txid();
                 let mut mempool = self.mempool.lock().await;

@@ -404,6 +404,14 @@ class BaseRPC(ABC):
             )
         return self.perform_request("disconnectnode", params=[node_address])
 
+    def get_node_addresses(self, count: int = 1, network: Optional[str] = None) -> list:
+        """
+        Get known peer addresses from the address manager.
+        network: optional filter — one of 'ipv4', 'ipv6', 'onion', 'i2p', 'cjdns'
+        """
+        params = [count] if network is None else [count, network]
+        return self.perform_request("getnodeaddresses", params)
+
     def list_descriptors(self):
         """
         List all loaded descriptors
