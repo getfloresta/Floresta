@@ -39,7 +39,7 @@ use super::chainparams::ChainParams;
 use super::consensus::Consensus;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
-use crate::extensions::median_time_past as calculate_median_time_past;
+use crate::extensions::HeaderMedianTimePastExt;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 
 #[doc(hidden)]
@@ -135,7 +135,7 @@ impl PartialChainStateInner {
             .ok_or(BlockchainError::BlockNotPresent)?;
         let mut current_height = height;
 
-        calculate_median_time_past(*header, |_| {
+        header.median_time_past_with(|_| {
             if current_height == 0 {
                 return Ok(None);
             }

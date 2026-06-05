@@ -119,23 +119,32 @@ impl Display for HeaderExtError {
     }
 }
 
-pub(crate) fn median_time_past<E>(
-    header: Header,
-    mut previous_header: impl FnMut(&Header) -> Result<Option<Header>, E>,
-) -> Result<u32, E> {
-    let mut block_timestamps = Vec::with_capacity(MEDIAN_TIME_PAST_BLOCK_COUNT);
-    let mut current_header = header;
+pub(crate) trait HeaderMedianTimePastExt {
+    fn median_time_past_with<E>(
+        &self,
+        previous_header: impl FnMut(&Header) -> Result<Option<Header>, E>,
+    ) -> Result<u32, E>;
+}
 
-    for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
-        block_timestamps.push(current_header.time);
-        let Some(prev_header) = previous_header(&current_header)? else {
-            break;
-        };
-        current_header = prev_header;
+impl HeaderMedianTimePastExt for Header {
+    fn median_time_past_with<E>(
+        &self,
+        mut previous_header: impl FnMut(&Self) -> Result<Option<Self>, E>,
+    ) -> Result<u32, E> {
+        let mut block_timestamps = Vec::with_capacity(MEDIAN_TIME_PAST_BLOCK_COUNT);
+        let mut current_header = *self;
+
+        for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
+            block_timestamps.push(current_header.time);
+            let Some(prev_header) = previous_header(&current_header)? else {
+                break;
+            };
+            current_header = prev_header;
+        }
+
+        block_timestamps.sort();
+        Ok(block_timestamps[block_timestamps.len() / 2])
     }
-
-    block_timestamps.sort();
-    Ok(block_timestamps[block_timestamps.len() / 2])
 }
 
 impl HeaderExt for Header {
@@ -143,7 +152,7 @@ impl HeaderExt for Header {
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<u32, HeaderExtError> {
-        median_time_past(*self, |current_header| {
+        self.median_time_past_with(|current_header| {
             if current_header.prev_blockhash == BlockHash::all_zeros() {
                 return Ok(None);
             }

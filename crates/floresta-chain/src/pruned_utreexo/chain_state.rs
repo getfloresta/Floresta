@@ -64,8 +64,8 @@ use super::partial_chain::PartialChainState;
 use super::partial_chain::PartialChainStateInner;
 use crate::BestChain;
 use crate::ChainStore;
+use crate::extensions::HeaderMedianTimePastExt;
 use crate::extensions::WorkExt;
-use crate::extensions::median_time_past as calculate_median_time_past;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
@@ -566,7 +566,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     }
 
     fn median_time_past(&self, header: BlockHeader) -> Result<u32, BlockchainError> {
-        calculate_median_time_past(header, |current_header| {
+        header.median_time_past_with(|current_header| {
             if current_header.prev_blockhash == BlockHash::all_zeros() {
                 return Ok(None);
             }
