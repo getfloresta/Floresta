@@ -29,6 +29,8 @@ use bitcoin::p2p::address::AddrV2;
 use rand::rng;
 use rand::seq::IndexedRandom;
 
+use crate::onion::OnionV3Addr;
+
 #[derive(Debug)]
 /// An error returned when trying to parse an address
 pub enum InvalidAddressError {
@@ -352,6 +354,29 @@ impl BitcoinSocketAddr {
         Ok(Self { address, port })
     }
 
+    fn parse_onion_v3(
+        address: &str,
+        network: Option<Network>,
+    ) -> Result<Self, InvalidAddressError> {
+        let mut split = address.split(":");
+        let address = split.next().ok_or(InvalidAddressError::InvalidAddress)?;
+        let port = split.next();
+
+        // Shouldn't have something like <host>:<port>:<something>
+        if split.next().is_some() {
+            return Err(InvalidAddressError::TrailingColon);
+        }
+
+        let port = Self::parse_port_if_present(port, network)?;
+
+        let decoded_address =
+            OnionV3Addr::from_str(address).map_err(|_| InvalidAddressError::InvalidAddress)?;
+        Ok(Self {
+            address: AddrV2::TorV3(decoded_address.into_bytes()),
+            port,
+        })
+    }
+
     /// Parses and address from a [`str`] into a new [`BitcoinSocketAddr`].
     ///
     /// This method implements a very robust parser that can detect and parse any supported address
@@ -379,6 +404,10 @@ impl BitcoinSocketAddr {
             return Self::parse_v6(address, network);
         }
 
+        if address.contains(".onion") {
+            return Self::parse_onion_v3(address, network);
+        }
+
         // This is an edge-case for some OS-specific behavior. Unix-systems define an empty host
         // as localhost, but windows doesn't. This forces empty strings to be localhost
         // independently for OS resolver.
@@ -400,7 +429,7 @@ impl BitcoinSocketAddr {
 impl Display for BitcoinSocketAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let address = match self.address {
-            AddrV2::TorV3(address) => address.to_lower_hex_string(),
+            AddrV2::TorV3(address) => OnionV3Addr::from(address).to_string(),
             AddrV2::I2p(address) => address.to_lower_hex_string(),
             AddrV2::Ipv4(address) => address.to_string(),
             AddrV2::Ipv6(address) => format!("[{}]", address),
