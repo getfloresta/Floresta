@@ -39,6 +39,7 @@ use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
+use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
@@ -122,10 +123,27 @@ where
     /// proofs, this means the last 100 blocks, and for assumeutreexo, this means however many
     /// blocks from the hard-coded value in the config file.
     pub async fn catch_up(self) -> Result<Self, WireError> {
-        let sync = UtreexoNode {
+        let swift_sync = UtreexoNode {
             common: self.common,
+            context: SwiftSync::default(),
+        };
+
+        let swift_sync = swift_sync.run(|_| {}).await;
+        let swift_sync_failed = swift_sync.was_aborted();
+
+        // Finish IBD with regular utreexo sync
+        let mut sync = UtreexoNode {
+            common: swift_sync.common,
             context: SyncNode::default(),
         };
+
+        // If SwiftSync couldn't complete, we need to validate all blocks from scratch
+        if swift_sync_failed {
+            // Clear the inflight requests and in-memory blocks to start from genesis
+            sync.inflight.clear();
+            sync.blocks.clear();
+            assert_eq!(sync.unprocessed_blocks(), 0);
+        }
 
         let sync = sync.run(|_| {}).await;
 
@@ -778,7 +796,7 @@ where
 
                             self.send_to_peer(
                                 peer,
-                                NodeRequest::GetBlock(vec![header.block_hash()]),
+                                NodeRequest::GetBlock(vec![header.block_hash()], false),
                             )?;
 
                             self.inflight.insert(
@@ -840,6 +858,10 @@ where
                         "Error: `handle_peer_msg_common` should have handled remaining PeerMessages"
                     ),
                 }
+            }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
         Ok(())

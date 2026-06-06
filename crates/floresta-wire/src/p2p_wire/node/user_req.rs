@@ -77,7 +77,7 @@ where
                 return;
             }
 
-            UserRequest::Block(block_hash) => NodeRequest::GetBlock(vec![block_hash]),
+            UserRequest::Block(block_hash) => NodeRequest::GetBlock(vec![block_hash], false),
 
             UserRequest::UtreexoProof(block_hash) => {
                 NodeRequest::GetBlockProof((block_hash, Bitmap::default(), Bitmap::default()))

@@ -9,6 +9,7 @@ pub mod chain_selector_ctx;
 mod conn;
 mod peer_man;
 pub mod running_ctx;
+pub mod swift_sync_ctx;
 pub mod sync_ctx;
 mod user_req;
 
@@ -21,13 +22,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use bitcoin::Amount;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin::Txid;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::address::AddrV2Message;
 pub(crate) use blocks::InflightBlock;
+use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
+use floresta_chain::swift_sync_agg::SwiftSyncAgg;
 use floresta_common::Ema;
 use floresta_common::try_and_log;
 use floresta_common::try_and_warn;
@@ -36,6 +40,7 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_mempool::Mempool;
 pub use peer_man::AddedPeerInfo;
 use running_ctx::RunningNode;
+use rustreexo::node_hash::BitcoinNodeHash;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -63,18 +68,23 @@ use crate::node_context::PeerId;
 /// As per BIP 155, limit the number of addresses to 1,000
 pub const MAX_ADDRV2_ADDRESSES: usize = 1_000;
 
+type WorkerResult = Result<(SwiftSyncAgg, Amount, Vec<BitcoinNodeHash>), BlockchainError>;
+
 #[derive(Debug)]
 pub enum NodeNotification {
     DnsSeedAddresses(Vec<LocalAddress>),
     FromPeer(u32, PeerMessages, Instant),
     FromUser(UserRequest, oneshot::Sender<NodeResponse>),
+    /// Returns the validation result with the delta SwiftSync aggregator and the total unspent
+    /// amount sum, together with the block hash and height.
+    FromWorker((WorkerResult, BlockHash, u32)),
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
 /// Sent from node to peers, usually to request something
 pub enum NodeRequest {
     /// Request the full block data for one or more blocks
-    GetBlock(Vec<BlockHash>),
+    GetBlock(Vec<BlockHash>, bool),
 
     /// Asks peer for headers
     GetHeaders(Vec<BlockHash>),
@@ -294,6 +304,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) datadir: PathBuf,
     pub(crate) network: Network,
     pub(crate) kill_signal: Arc<tokio::sync::RwLock<bool>>,
+    pub(crate) witnessless: bool,
 }
 
 /// The main node that operates while florestad is up.
@@ -396,6 +407,7 @@ where
                 config,
                 kill_signal,
                 added_peers: Vec::new(),
+                witnessless: false,
             },
             context: T::default(),
         })
