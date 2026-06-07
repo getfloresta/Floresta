@@ -181,6 +181,17 @@ pub struct Config {
     #[cfg(feature = "json-rpc")]
     pub rpc_auth: Vec<String>,
 
+    /// Override the path where florestad writes the cookie file. Absolute
+    /// paths are used as-is; relative paths are joined against the
+    /// net-specific data directory.
+    #[cfg(feature = "json-rpc")]
+    pub rpc_cookie_file: Option<PathBuf>,
+
+    /// Disable cookie auth entirely. Configured `-rpcuser`/`-rpcpassword` or
+    /// `-rpcauth` entries still work; no cookie file is written.
+    #[cfg(feature = "json-rpc")]
+    pub no_rpc_cookie_file: bool,
+
     /// Whether we should write logs to `stdout`.
     pub log_to_stdout: bool,
 
@@ -262,6 +273,10 @@ impl Config {
             rpc_password: None,
             #[cfg(feature = "json-rpc")]
             rpc_auth: Vec::new(),
+            #[cfg(feature = "json-rpc")]
+            rpc_cookie_file: None,
+            #[cfg(feature = "json-rpc")]
+            no_rpc_cookie_file: false,
             log_to_stdout: false,
             log_to_file: false,
             assume_utreexo: false,
@@ -328,7 +343,11 @@ impl Florestad {
 
         #[cfg(feature = "json-rpc")]
         {
-            let cookie_path = self.config.datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
+            let cookie_path = match self.get_rpc_cookie_file() {
+                Some(p) if p.is_absolute() => p,
+                Some(relative) => self.config.datadir.join(relative),
+                None => self.config.datadir.join(json_rpc::auth::COOKIE_FILE_NAME),
+            };
             try_and_log!(json_rpc::auth::delete_cookie(&cookie_path));
         }
     }
@@ -487,6 +506,12 @@ impl Florestad {
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
         {
+            if self.cookie_auth_disabled() {
+                if let Some(path) = self.config.rpc_cookie_file.clone() {
+                    return Err(FlorestadError::ConflictingCookieFlags(path));
+                }
+            }
+
             let mut entries: Vec<json_rpc::auth::RpcAuth> = Vec::new();
 
             if let Some(pass) = self.get_rpc_password() {
@@ -499,13 +524,20 @@ impl Florestad {
                         "--rpc-user is set but --rpc-password is not; falling back to cookie auth"
                     );
                 }
-                let cookie_path = datadir.join(json_rpc::auth::COOKIE_FILE_NAME);
-                let (cookie_user, cookie_pass) = json_rpc::auth::generate_cookie(&cookie_path)?;
-                info!("RPC cookie file written to {}", cookie_path.display());
-                entries.push(json_rpc::auth::RpcAuth::from_password(
-                    &cookie_user,
-                    &cookie_pass,
-                ));
+                if !self.cookie_auth_disabled() {
+                    let cookie_path = match self.get_rpc_cookie_file() {
+                        Some(p) if p.is_absolute() => p,
+                        Some(relative) => datadir.join(relative),
+                        None => datadir.join(json_rpc::auth::COOKIE_FILE_NAME),
+                    };
+                    let (cookie_user, cookie_pass) = json_rpc::auth::generate_cookie(&cookie_path)
+                        .map_err(|e| FlorestadError::CouldNotWriteFile(cookie_path.clone(), e))?;
+                    info!("RPC cookie file written to {}", cookie_path.display());
+                    entries.push(json_rpc::auth::RpcAuth::from_password(
+                        &cookie_user,
+                        &cookie_pass,
+                    ));
+                }
             }
 
             for line in self.get_rpc_auth() {
@@ -516,6 +548,13 @@ impl Florestad {
                         return Err(FlorestadError::InvalidRpcAuth(line));
                     }
                 }
+            }
+
+            if entries.is_empty() {
+                return Err(FlorestadError::NoAuthConfigured(
+                    "cookie auth disabled, no -rpcuser/-rpcpassword or -rpcauth entries"
+                        .to_string(),
+                ));
             }
 
             if entries.len() > 1 {
@@ -856,6 +895,21 @@ impl Florestad {
             .chain(self.get_config_file().rpc.auth.iter())
             .cloned()
             .collect()
+    }
+
+    /// Resolved cookie file path override; CLI wins over the config file.
+    #[cfg(feature = "json-rpc")]
+    fn get_rpc_cookie_file(&self) -> Option<PathBuf> {
+        self.config
+            .rpc_cookie_file
+            .clone()
+            .or_else(|| self.get_config_file().rpc.cookie_file.map(PathBuf::from))
+    }
+
+    /// CLI-only lever to disable cookie auth.
+    #[cfg(feature = "json-rpc")]
+    fn cookie_auth_disabled(&self) -> bool {
+        self.config.no_rpc_cookie_file
     }
 
     /// Get the wallet descriptors from the config file
