@@ -124,6 +124,12 @@ pub enum FlorestadError {
 
     /// A malformed `-rpcauth` entry was provided at startup.
     InvalidRpcAuth(String),
+
+    /// Both `--rpc-cookie-file` and `--no-rpc-cookie-file` were set on the CLI.
+    ConflictingCookieFlags(PathBuf),
+
+    /// No authentication method was configured at startup.
+    NoAuthConfigured(String),
 }
 
 impl Display for FlorestadError {
@@ -230,6 +236,16 @@ impl Display for FlorestadError {
             }
             Self::InvalidRpcAuth(line) => {
                 write!(f, "Invalid -rpcauth argument: {line}")
+            }
+            Self::ConflictingCookieFlags(path) => {
+                write!(
+                    f,
+                    "--rpc-cookie-file={} conflicts with --no-rpc-cookie-file; pick one",
+                    path.display(),
+                )
+            }
+            Self::NoAuthConfigured(detail) => {
+                write!(f, "no authentication method configured: {detail}")
             }
         }
     }
