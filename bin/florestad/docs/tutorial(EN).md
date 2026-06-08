@@ -30,7 +30,9 @@ cd Floresta/
 compile with:
 
 ```bash
-cargo build --release
+# Build florestad and floresta-cli separately
+cargo build --release -p florestad
+cargo build --release -p floresta-cli
 ```
 if everything is ok, it will compile the program and save the executable in `./target/release/`.
 
@@ -83,5 +85,3 @@ descriptors = [
 ### Screenshot of Program Running
 
 ![A screenshot of logs from a Floresta instance running in a terminal on a GNU/Linux distribution](./assets/Screenshot_ibd.jpg)
-
-

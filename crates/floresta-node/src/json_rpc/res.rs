@@ -21,13 +21,6 @@
 //! [`RpcError`]: jsonrpc_interface::RpcError
 //! [`JsonRpcError`]: jsonrpc_interface::JsonRpcError
 
-use core::fmt::Debug;
-
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-use serde::Deserialize;
-use serde::Serialize;
-
 /// Types and methods implementing the [JSON-RPC 2.0 spec](https://www.jsonrpc.org/specification),
 /// tailored for floresta's RPC server. Requests using JSON-RPC 1.0 (or omitting the version
 /// field) are also accepted, but responses always follow the 2.0 format.
@@ -256,6 +249,17 @@ pub mod jsonrpc_interface {
 
     impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
     impl_error_from!(JsonRpcError, InvalidAddressError, InvalidNetAddress);
+
+    impl Display for JsonRpcError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            let rpc_error = self.rpc_error();
+            let msg = match &rpc_error.data {
+                Some(data) => format!("{}: {}", rpc_error.message, data),
+                None => rpc_error.message.clone(),
+            };
+            write!(f, "{}", msg)
+        }
+    }
 
     impl JsonRpcError {
         pub fn http_code(&self) -> StatusCode {
@@ -508,138 +512,3 @@ pub mod jsonrpc_interface {
         }
     }
 }
-#[derive(Deserialize, Serialize)]
-pub struct GetBlockchainInfoRes {
-    pub best_block: String,
-    pub height: u32,
-    pub ibd: bool,
-    pub validated: u32,
-    pub latest_work: String,
-    pub latest_block_time: u32,
-    pub leaf_count: u32,
-    pub root_count: u32,
-    pub root_hashes: Vec<String>,
-    pub chain: String,
-    pub progress: f32,
-    pub difficulty: u64,
-}
-
-/// A confidence enum to auxiliate rescan timestamp values.
-///
-/// Serves to tell how much confidence you need in such a rescan request. That is, the need for a high confidence rescan
-/// will make the rescan to start in a block that have an lower timestamp than the given in order to be more secure
-/// about finding addresses and relevant transactions, a lower confidence will make the rescan to be closer to the given value.
-///
-/// This input is necessary to cover network variancy specially in testnet, for mainnet you can safely use low or medium confidences
-/// depending on how much sure you are about the given timestamp covering the addresses you need.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "lowercase")]
-pub enum RescanConfidence {
-    /// `high`: 99% confidence interval. Returning 46 minutes in seconds for `val`.
-    High,
-
-    /// `medium` (default): 95% confidence interval. Returning 30 minutes in seconds for `val`.
-    Medium,
-
-    /// `low`: 90% confidence interval. Returning 23 minutes in seconds for `val`.
-    Low,
-
-    /// `exact`: Removes any lookback addition. Returning 0 for `val`
-    Exact,
-}
-
-impl RescanConfidence {
-    /// In cases where `use_timestamp` is set, tells how much confidence the user wants for finding its addresses from this rescan request, a higher confidence will add more lookback seconds to the targeted timestamp and rescanning more blocks.
-    /// Under the hood this uses an [Exponential distribution](https://en.wikipedia.org/wiki/Exponential_distribution) [cumulative distribution function (CDF)](https:///en.wikipedia.org/wiki/Cumulative_distribution_function) where the parameter $\lambda$ (rate) is $\frac{1}{600}$ (1 block every 600 seconds, 10 minutes).
-    ///   The supplied string can be one of:
-    ///
-    ///   - `high`: 99% confidence interval. Returning 46 minutes in seconds for `val`.
-    ///   - `medium` (default): 95% confidence interval. Returning 30 minutes in seconds for `val`.
-    ///   - `low`: 90% confidence interval. Returning 23 minutes in seconds for `val`.
-    ///   - `exact`: Removes any lookback addition. Returning 0 for `val`
-    pub const fn as_secs(&self) -> u32 {
-        match self {
-            Self::Exact => 0,
-            Self::Low => 1_380,
-            Self::Medium => 1_800,
-            Self::High => 2_760,
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct RawTxJson {
-    pub in_active_chain: bool,
-    pub hex: String,
-    pub txid: String,
-    pub hash: String,
-    pub size: u32,
-    pub vsize: u32,
-    pub weight: u32,
-    pub version: u32,
-    pub locktime: u32,
-    pub vin: Vec<TxInJson>,
-    pub vout: Vec<TxOutJson>,
-    pub blockhash: String,
-    pub confirmations: u32,
-    pub blocktime: u32,
-    pub time: u32,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct TxOutJson {
-    pub value: u64,
-    pub n: u32,
-    pub script_pub_key: ScriptPubKeyJson,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ScriptPubKeyJson {
-    pub asm: String,
-    pub hex: String,
-    pub req_sigs: u32,
-    #[serde(rename = "type")]
-    pub type_: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct TxInJson {
-    pub txid: String,
-    pub vout: u32,
-    pub script_sig: ScriptSigJson,
-    pub sequence: u32,
-    pub witness: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct ScriptSigJson {
-    pub asm: String,
-    pub hex: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetBlockRes {
-    Zero(String),
-    One(Box<GetBlockVerboseOne>),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-/// The response for `getblockheader`, which can be either a raw hex-encoded block header or a verbose
-/// one with all the fields parsed and decoded.
-pub enum GetBlockHeaderRes {
-    /// The raw hex-encoded block header, as returned by `getblockheader` with verbosity false
-    Raw(String),
-
-    /// A verbose block header, as returned by `getblockheader` with verbosity true
-    Verbose(Box<GetBlockHeaderVerbose>),
-}
-
-/// Return type for the `gettxoutproof` rpc command, the internal is
-/// just the hex representation of the Merkle Block, which was defined
-/// by btc core.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct GetTxOutProof(pub Vec<u8>);

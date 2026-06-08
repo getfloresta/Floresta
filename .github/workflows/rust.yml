@@ -43,10 +43,16 @@ jobs:
       - name: Run cargo fmt
         run: cargo +nightly fmt --all --check
 
-      - name: Run cargo doc
+      - name: Run cargo doc (each crate)
         run: |
-          RUSTDOCFLAGS="--cfg docsrs -D warnings" \
-          cargo +nightly doc --workspace --no-deps --lib --all-features --document-private-items
+          #!/usr/bin/env bash
+          set -e
+          CRATES=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.source == null and (.targets | map(.kind | contains(["lib"])) | any)) | .name' | tr '\n' ' ')
+          echo "Building docs for crates: $CRATES"
+          for crate in $CRATES; do
+            echo "Running cargo doc for: $crate"
+            RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo +nightly doc -p "$crate" --no-deps --lib --all-features --document-private-items || exit 1
+          done
 
       - name: Run cargo clippy
         run: ./contrib/feature_matrix.sh clippy '-- -D warnings'
@@ -139,9 +145,11 @@ jobs:
             ${{ runner.os }}-cargo-${{ env.CACHE_VERSION }}-
             ${{ runner.os }}-cargo-
 
-      # Build only the binaries
+      # Build only the binaries (florestad and floresta-cli separately to avoid feature conflicts)
       - name: Build binaries
-        run: cargo build --release --bins --verbose
+        run: |
+          cargo build --release -p florestad --verbose
+          cargo build --release -p floresta-cli --verbose
 
       # Run the feature testing script
       - name: Run feature tests
