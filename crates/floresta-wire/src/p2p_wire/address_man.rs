@@ -34,6 +34,7 @@ use tracing::warn;
 
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::bitcoin_socket_addr::InvalidAddressError;
+use crate::onion::OnionV3Addr;
 
 /// How long we'll wait before trying to connect to a peer that failed
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
@@ -95,7 +96,7 @@ impl ReachableNetworks {
     pub const ALL: [Self; 5] = [Self::IPv4, Self::IPv6, Self::TorV3, Self::I2P, Self::Cjdns];
 
     /// Networks this implementation currently supports.
-    pub const SUPPORTED: [Self; 2] = [Self::IPv4, Self::IPv6];
+    pub const SUPPORTED: [Self; 3] = [Self::IPv4, Self::IPv6, Self::TorV3];
 }
 
 impl Display for ReachableNetworks {
@@ -271,6 +272,17 @@ impl LocalAddress {
 
         let port = self.get_port();
         Some(SocketAddr::new(ip, port))
+    }
+
+    /// Returns the inner [`OnionV3Addr`] if this is qn [`AddrV2::TorV3`].
+    ///
+    /// Returns [`None`] if this is another address kind.
+    pub fn get_onion_addr(&self) -> Option<OnionV3Addr> {
+        if let AddrV2::TorV3(addr) = self.as_addrv2() {
+            return Some(OnionV3Addr::from(*addr));
+        }
+
+        None
     }
 
     /// Return an IP address associated with this peer address, if any
