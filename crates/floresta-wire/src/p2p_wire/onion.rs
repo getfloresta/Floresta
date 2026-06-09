@@ -29,11 +29,14 @@ const ONION_SUFFIX: &str = ".onion";
 /// The current encoding version as defined by the onion protocol V3
 const ONION_ENCODING_VERSION: OnionVersion = OnionVersion(3);
 
-/// How many bytes are in a pubkey
+/// How many bytes are in a [`OnionPubkey`]
 const PUBKEY_LENGTH: usize = 32;
 
-/// How may bytes are in a checksum
+/// How many bytes are in a [`OnionChecksum`]
 const CHECKSUM_LENGTH: usize = 2;
+
+/// How many bytes are in a [`OnionVersion`]
+const VERSION_LENGTH: usize = 1;
 
 /// The length of a chunk in bytes
 const CHUNK_LENGTH_BYTES: usize = 5;
@@ -137,7 +140,7 @@ impl TryFrom<&[u8]> for OnionChecksum {
     type Error = InvalidLength;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        if value.len() != 2 {
+        if value.len() != CHECKSUM_LENGTH {
             return Err(InvalidLength);
         }
 
@@ -152,7 +155,7 @@ impl TryFrom<&[u8]> for OnionVersion {
     type Error = InvalidLength;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        if value.len() != u8::BITS as usize {
+        if value.len() != VERSION_LENGTH {
             return Err(InvalidLength);
         }
 
@@ -338,7 +341,10 @@ impl OnionV3Addr {
 
         for chunk in writer.chunks(CHUNK_LENGTH_BYTES) {
             // note: we can hard-code 40 here because we have 35 bytes, which is multiple of 5
-            final_str.push_str(&Self::b32_encode_chunk(chunk, 40));
+            final_str.push_str(&Self::b32_encode_chunk(
+                chunk,
+                (chunk.len() * u8::BITS as usize) as u8,
+            ));
         }
 
         final_str
@@ -373,8 +379,8 @@ impl OnionV3Addr {
             // This ugly predicate will extract a sequence of five bits from the u64
             let remainder = ((chunk_as_u64 & (MASK << offset)) >> (offset)) as u8;
 
-            offset = offset.saturating_sub(5);
-            total = total.saturating_sub(5);
+            offset = offset.saturating_sub(CHUNK_LENGTH_BYTES);
+            total = total.saturating_sub(CHUNK_LENGTH_BYTES as u8);
 
             let ch = BASE32_ALPHABET[remainder as usize];
             chunk_encoded.push(ch);
@@ -391,7 +397,7 @@ impl OnionV3Addr {
     /// Decode a chunk of 8 base32 characters
     fn b32_decode_chunk(chunk: &str) -> Result<[u8; 5], Base32DecodeError> {
         let mut acc = 0_u64;
-        let mut offset = 64 - 5;
+        let mut offset = u64::BITS - CHUNK_LENGTH_BYTES as u32;
         for ch in chunk.chars() {
             if !ch.is_ascii() {
                 return Err(Base32DecodeError::InvalidBase32Character {
@@ -405,19 +411,19 @@ impl OnionV3Addr {
                 })?;
 
             acc |= (val << offset) as u64;
-            offset -= 5;
+            offset -= CHUNK_LENGTH_BYTES as u32;
         }
 
-        let mut result = [0; 5];
+        let mut result = [0; CHUNK_LENGTH_BYTES];
         let acc_bytes = acc.to_be_bytes();
-        result.copy_from_slice(&acc_bytes[0..5]);
+        result.copy_from_slice(&acc_bytes[0..CHUNK_LENGTH_BYTES]);
 
         Ok(result)
     }
 
     /// Decodes a base32 payload, returning an array of bytes
     fn b32_decode(value: &str) -> Result<Vec<u8>, Base32DecodeError> {
-        const B32_STRING_CHUNK_SIZE: usize = 8;
+        const B32_STRING_CHUNK_SIZE: usize = u8::BITS as usize;
 
         if !value.is_ascii() {
             return Err(Base32DecodeError::NotAsciiString);
@@ -427,7 +433,7 @@ impl OnionV3Addr {
             return Err(Base32DecodeError::InvalidLength);
         }
 
-        let mut final_vec = Vec::new();
+        let mut final_vec = Vec::with_capacity(PUBKEY_LENGTH + CHUNK_LENGTH_BYTES + VERSION_LENGTH);
         let chunks = value.len() / B32_STRING_CHUNK_SIZE;
 
         for chunk in 0..chunks {
@@ -444,6 +450,9 @@ impl OnionV3Addr {
 
     /// Parses an onion address and returns [OnionV3Addr]
     fn onion_address_from_b32(address: &str) -> Result<Self, OnionAddressDecodeError> {
+        /// The expected length of a onion address after being b32 decoded.
+        const ONION_ADDRESS_STR_LENGTH: usize = 35;
+
         if !address.ends_with(".onion") {
             return Err(OnionAddressDecodeError::MissingDotOnion);
         }
@@ -452,7 +461,7 @@ impl OnionV3Addr {
         let address_part = address.replace(".onion", "");
         let decoded_bytes = Self::b32_decode(&address_part)?;
 
-        if decoded_bytes.len() != 35 {
+        if decoded_bytes.len() != ONION_ADDRESS_STR_LENGTH {
             return Err(OnionAddressDecodeError::InvalidLength);
         }
 
