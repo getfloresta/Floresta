@@ -108,6 +108,33 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Return information about manually added nodes, optionally filtered by address.
+    GetAddedNodeInfo(Option<BitcoinSocketAddr>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Information about a manually added node (via `addnode`).
+pub struct AddedNodeInfo {
+    /// The address of the added node in "ip:port" format.
+    pub addednode: String,
+
+    /// Whether we are currently connected to this node.
+    pub connected: bool,
+
+    /// Connection details. Only populated when `connected` is true.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<AddedNodeAddress>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// Address information for a connected added node.
+pub struct AddedNodeAddress {
+    /// The peer address in "ip:port" format.
+    pub address: String,
+
+    /// The connection direction: "outbound" (Floresta does not accept inbound).
+    pub connected: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +239,12 @@ pub trait NetworkMethods {
     /// This function will return a list of `PeerInfo` structs, each of which contains information
     /// about a single peer.
     fn get_peer_info(&self) -> impl Future<Output = Result<Vec<PeerInfo>, Self::Error>>;
+
+    /// Information about all manually added nodes possibly filtering by a given one.
+    fn get_added_node_info(
+        &self,
+        node: Option<BitcoinSocketAddr>,
+    ) -> impl Future<Output = Result<Vec<AddedNodeInfo>, Self::Error>>;
 
     /// Returns the number of peers currently connected to the node
     fn get_connection_count(&self) -> impl Future<Output = Result<usize, Self::Error>>;
