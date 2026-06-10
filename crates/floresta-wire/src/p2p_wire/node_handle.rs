@@ -20,6 +20,7 @@ use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::Txid;
+use bitcoin::p2p::message_filter::CFHeaders;
 use floresta_mempool::mempool::MempoolError;
 use rustreexo::proof::Proof;
 use tokio::sync::mpsc::UnboundedSender;
@@ -93,6 +94,18 @@ pub enum UserRequest {
 
     /// Return address manager statistics.
     GetAddrManInfo,
+
+    /// Request compact filter headers from a peer, starting from a given height, until a stop hash
+    /// is reached.
+    GetCFilterHeaders {
+        /// The first height we are requesting filters for.
+        start_height: u32,
+
+        /// The last block where we wish filters for.
+        ///
+        /// The remote node will send min(height(stop_hash), 2_000) headers on each request.
+        stop_hash: BlockHash,
+    },
 }
 
 #[derive(Debug)]
@@ -139,6 +152,9 @@ pub enum NodeResponse {
 
     /// Address manager statistics.
     GetAddrManInfo(ConnectionStats),
+
+    /// Received compact block filter headers.
+    CFilterHeaders(CFHeaders),
 }
 
 #[derive(Debug)]
@@ -187,6 +203,22 @@ impl ChainMethods for NodeHandle {
         let val = self.send_request(UserRequest::Block(block)).await?;
 
         extract_variant!(Block, val);
+    }
+
+    /// Returns a list of Compact Block Filters headers for the requested block range.
+    async fn get_cfilters_headers(
+        &self,
+        start_height: u32,
+        stop_hash: BlockHash,
+    ) -> Result<CFHeaders, oneshot::error::RecvError> {
+        let val = self
+            .send_request(UserRequest::GetCFilterHeaders {
+                start_height,
+                stop_hash,
+            })
+            .await?;
+
+        extract_variant!(CFilterHeaders, val)
     }
 }
 

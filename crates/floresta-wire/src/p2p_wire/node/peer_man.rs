@@ -441,6 +441,31 @@ where
                 self.increase_banscore(peer, 5)?;
                 Ok(None)
             }
+            PeerMessages::CFHeaders(cfheaders) => {
+                let req = self.inflight_user_requests.iter().find_map(|(req, _)| {
+                    if let UserRequest::GetCFilterHeaders { stop_hash, .. } = req {
+                        if *stop_hash == cfheaders.stop_hash {
+                            return Some(req.clone());
+                        }
+                    }
+
+                    None
+                });
+
+                match req {
+                    Some(req) => {
+                        let final_req = self.inflight_user_requests.remove(&req).unwrap();
+                        let _ = final_req.2.send(NodeResponse::CFilterHeaders(cfheaders));
+                    }
+
+                    None => {
+                        warn!("Peer {peer} sent us cfheaders, but we didn't request it");
+                        self.increase_banscore(peer, 5)?;
+                    }
+                }
+
+                Ok(None)
+            }
             _ => Ok(Some(msg)),
         }
     }

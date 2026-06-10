@@ -23,6 +23,8 @@ use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message::NetworkMessage;
 use bitcoin::p2p::message_blockdata::Inventory;
+use bitcoin::p2p::message_filter::CFHeaders;
+use bitcoin::p2p::message_filter::GetCFHeaders;
 use bitcoin::p2p::message_network::VersionMessage;
 use floresta_common::impl_error_from;
 use floresta_mempool::Mempool;
@@ -81,6 +83,12 @@ const INV_MESSAGE_INTERVAL: Duration = Duration::from_secs(30); // 30 seconds
 ///
 /// If a peer sends more than this, we disconnect it.
 const MAX_MSGS_PER_SEC: u64 = 10_000;
+
+/// The version for BIP158 basic filter type.
+const BASIC_FILTER_VERSION: u8 = 0;
+
+/// How many filter (or filter headers) are allowed in a single message.
+const MAX_FILTERS_PER_MESSAGE: usize = 2_000;
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -404,7 +412,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             }
             NodeRequest::GetFilter((stop_hash, start_height)) => {
                 let get_filter = bitcoin::p2p::message_filter::GetCFilters {
-                    filter_type: 0,
+                    filter_type: BASIC_FILTER_VERSION,
                     start_height,
                     stop_hash,
                 };
@@ -430,6 +438,20 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     payload: serialize(&get_block_proof),
                 })
                 .await?;
+            }
+
+            NodeRequest::GetCFHeaders {
+                start_height,
+                stop_hash,
+            } => {
+                let get_cfheaders = GetCFHeaders {
+                    filter_type: BASIC_FILTER_VERSION,
+                    start_height,
+                    stop_hash,
+                };
+
+                self.write(NetworkMessage::GetCFHeaders(get_cfheaders))
+                    .await?;
             }
         }
         Ok(())
@@ -571,6 +593,20 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                     }
                     _ => {}
                 },
+
+                NetworkMessage::CFHeaders(cfheaders) => {
+                    if cfheaders.filter_hashes.len() > MAX_FILTERS_PER_MESSAGE {
+                        return Err(PeerError::MessageTooBig);
+                    }
+
+                    if cfheaders.filter_type != BASIC_FILTER_VERSION {
+                        warn!("Unknown filter header type {}", cfheaders.filter_type);
+                        return Err(PeerError::UnexpectedMessage);
+                    }
+
+                    self.send_to_node(PeerMessages::CFHeaders(cfheaders), time);
+                }
+
                 // Explicitly ignore these messages, if something changes in the future
                 // this would cause a compile error.
                 NetworkMessage::Verack
@@ -580,7 +616,6 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 | NetworkMessage::Alert(_)
                 | NetworkMessage::BlockTxn(_)
                 | NetworkMessage::CFCheckpt(_)
-                | NetworkMessage::CFHeaders(_)
                 | NetworkMessage::CmpctBlock(_)
                 | NetworkMessage::FilterAdd(_)
                 | NetworkMessage::FilterClear
@@ -856,6 +891,9 @@ pub enum PeerMessages {
 
     /// Remote peer sent us a Utreexo proof,
     UtreexoProof(UtreexoProof),
+
+    /// Remote peer sent us compact block filter headers
+    CFHeaders(CFHeaders),
 }
 
 #[cfg(test)]
