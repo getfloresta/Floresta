@@ -21,6 +21,4 @@ def test_tls(add_node_with_tls):
     assert florestad.electrum.tls
 
     response = florestad.electrum.ping()
-    assert response["result"] is None
-    assert response["id"] == 0
-    assert response["jsonrpc"] == "2.0"
+    assert response is None

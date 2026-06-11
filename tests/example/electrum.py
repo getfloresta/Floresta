@@ -25,5 +25,5 @@ def test_electrum(florestad_node):
     """
     rpc_response = florestad_node.electrum.get_version()
 
-    assert rpc_response["result"][0] == EXPECTED_VERSION[0]
-    assert rpc_response["result"][1] == EXPECTED_VERSION[1]
+    assert rpc_response[0] == EXPECTED_VERSION[0]
+    assert rpc_response[1] == EXPECTED_VERSION[1]

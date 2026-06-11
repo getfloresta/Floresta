@@ -13,6 +13,9 @@ from OpenSSL import SSL
 
 from test_framework.electrum import ConfigElectrum
 
+# Read response until newline delimiter, using standard buffer size for efficiency
+BUFFER_SIZE = 4096
+
 
 # pylint: disable=too-few-public-methods
 class BaseClient:
@@ -107,17 +110,25 @@ class BaseClient:
         self.conn.sendall(request.encode("utf-8") + b"\n")
 
         response = b""
-        while True:
-            chunk = self.conn.recv(1)
+        while b"\n" not in response:
+            chunk = self.conn.recv(BUFFER_SIZE)
             if not chunk:
                 break
             response += chunk
-            if b"\n" in response:
-                break
         response = response.decode("utf-8").strip()
-        self.log.debug(response)
 
-        return json.loads(response)
+        self.log.debug(response)
+        result = json.loads(response)
+
+        # Check for JSON-RPC error response
+        if "error" in result and result["error"] is not None:
+            error = result["error"]
+            raise ValueError(
+                f"Electrum RPC error {error.get('code')}: {error.get('message')}"
+            )
+
+        # Return only the result, not the whole response
+        return result.get("result")
 
     def batch_request(self, calls: List[Tuple[str, List[Any]]]) -> object:
         """
