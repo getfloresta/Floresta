@@ -29,6 +29,7 @@ use crate::DatabaseError;
 use crate::DiskBlockHeader;
 use crate::prelude::Vec;
 use crate::pruned_utreexo::Box;
+use crate::pruned_utreexo::IBDState;
 
 #[derive(Debug)]
 /// Represents errors that can occur during the construction of a ChainState instance.
@@ -70,7 +71,7 @@ pub struct ChainStateBuilder<PersistedState: ChainStore> {
     chainstore: Option<PersistedState>,
 
     /// Indicates whether the builder is in initial block download mode.
-    ibd: bool,
+    ibd: IBDState,
 
     /// The chain parameters.
     chain_params: Option<ChainParams>,
@@ -91,7 +92,7 @@ impl<T: ChainStore> ChainStateBuilder<T> {
         Self {
             acc: None,
             chainstore: None,
-            ibd: true,
+            ibd: IBDState::HeadersSync,
             chain_params: None,
             assume_valid: None,
             tip: None,
@@ -129,8 +130,8 @@ impl<T: ChainStore> ChainStateBuilder<T> {
         self
     }
 
-    /// Enable or disable Initial Block Download (IBD) mode.
-    pub fn toggle_ibd(mut self, ibd: bool) -> Self {
+    /// Sets our internal [`IBDState`].
+    pub fn select_ibd(mut self, ibd: IBDState) -> Self {
         self.ibd = ibd;
         self
     }
@@ -174,11 +175,6 @@ impl<T: ChainStore> ChainStateBuilder<T> {
             .ok_or(BlockchainBuilderError::MissingChainstore)
     }
 
-    /// Returns whether Initial Block Download (IBD) mode is enabled.
-    pub(super) fn ibd(&self) -> bool {
-        self.ibd
-    }
-
     /// Get the chain parameters, returning an error if they haven't been set.
     pub(super) fn chain_params(&self) -> Result<ChainParams, BlockchainBuilderError> {
         self.chain_params
@@ -210,5 +206,10 @@ impl<T: ChainStore> ChainStateBuilder<T> {
     /// Returns the block hash of the assume-valid option, if enabled.
     pub(super) fn assume_valid(&self) -> Option<BlockHash> {
         self.assume_valid
+    }
+
+    /// Returns the inner [`IBDState`]
+    pub(super) fn ibd_state(&self) -> IBDState {
+        self.ibd
     }
 }

@@ -306,6 +306,7 @@ mod tests {
     use crate::BlockConsumer;
     use crate::BlockchainError;
     use crate::UtxoData;
+    use crate::pruned_utreexo::IBDState;
 
     #[derive(Debug)]
     pub enum MockBlockchainError {
@@ -451,6 +452,10 @@ mod tests {
         }
 
         fn acc(&self) -> Stump {
+            unimplemented!()
+        }
+
+        fn ibd_state(&self) -> IBDState {
             unimplemented!()
         }
     }

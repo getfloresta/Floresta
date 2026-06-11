@@ -8,6 +8,7 @@ use std::time::Instant;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ThreadSafeChain;
 use floresta_chain::proof_util;
+use floresta_chain::pruned_utreexo::IBDState;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
 use tokio::time;
@@ -242,7 +243,7 @@ where
 
         if validation_index == best_block {
             info!("IBD is finished, switching to normal operation mode");
-            self.chain.toggle_ibd(false);
+            self.chain.update_ibd(IBDState::Done);
             return LoopControl::Break;
         }
 
