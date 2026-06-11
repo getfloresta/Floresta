@@ -29,16 +29,22 @@ use crate::p2p_wire::transport::TransportError;
 pub struct Socks5StreamBuilder {
     pub address: SocketAddr,
 }
+
 /// The version of the SOCKS protocol we support, only SOCKS5 is supported.
 const SOCKS_VERSION: u8 = 5;
+
 /// The SOCKS authentication method we support, only no authentication is supported.
 const SOCKS_AUTH_METHOD_NONE: u8 = 0;
+
 /// The cmd value for a SOCKS5 connect request.
 const SOCKS_CMD_CONNECT: u8 = 1;
+
 /// Magic value to indicate an IPv4 address.
 const SOCKS_ADDR_TYPE_IPV4: u8 = 1;
+
 /// Magic value to indicate a domain address.
 const SOCKS_ADDR_TYPE_DOMAIN: u8 = 3;
+
 /// Magic value to indicate an IPv6 address.
 const SOCKS_ADDR_TYPE_IPV6: u8 = 4;
 
@@ -50,12 +56,17 @@ pub enum Socks5Addr {
     Domain(String),
 }
 
-impl From<Socks5Addr> for u8 {
-    fn from(val: Socks5Addr) -> Self {
-        match val {
-            Socks5Addr::Ipv4(_) => SOCKS_ADDR_TYPE_IPV4,
-            Socks5Addr::Ipv6(_) => SOCKS_ADDR_TYPE_IPV6,
-            Socks5Addr::Domain(_) => SOCKS_ADDR_TYPE_DOMAIN,
+impl Socks5Addr {
+    /// Returns the SOCKs addr type of this type of address.
+    ///
+    /// When sending a CONNECT command to a SOCKS proxy, you mush specify a numeric parameter
+    /// declaring the type of address you will connect to. This function returns this code,
+    /// depending on the inner address type.
+    pub(super) const fn to_addr_type(&self) -> u8 {
+        match self {
+            Self::Ipv4(_) => SOCKS_ADDR_TYPE_IPV4,
+            Self::Ipv6(_) => SOCKS_ADDR_TYPE_IPV6,
+            Self::Domain(_) => SOCKS_ADDR_TYPE_DOMAIN,
         }
     }
 }
@@ -71,7 +82,12 @@ impl TryFrom<&LocalAddress> for Socks5Addr {
                 IpAddr::V4(ipv4) => Self::Ipv4(ipv4),
                 IpAddr::V6(ipv6) => Self::Ipv6(ipv6),
             })
-            // TODO(davidson): Support Tor, I2P...
+            .or_else(|| {
+                // else, try an onion address (TODO: I2P)
+                address
+                    .get_onion_addr()
+                    .map(|onion| Self::Domain(onion.as_human_readable()))
+            })
             .ok_or(TransportError::InvalidAddress)
     }
 }
@@ -90,6 +106,7 @@ impl Socks5StreamBuilder {
             .write_all(&[SOCKS_VERSION, 1, SOCKS_AUTH_METHOD_NONE])
             .await?;
 
+        let address_type = address.to_addr_type();
         let address = match address {
             Socks5Addr::Ipv4(addr) => addr.octets().to_vec(),
             Socks5Addr::Ipv6(addr) => addr.octets().to_vec(),
@@ -112,7 +129,7 @@ impl Socks5StreamBuilder {
         }
 
         socket
-            .write_all(&[SOCKS_VERSION, SOCKS_CMD_CONNECT, 0, SOCKS_ADDR_TYPE_IPV4])
+            .write_all(&[SOCKS_VERSION, SOCKS_CMD_CONNECT, 0, address_type])
             .await?;
 
         socket.write_all(&address).await?;

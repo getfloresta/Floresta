@@ -96,6 +96,7 @@ pub mod node;
 pub mod node_context;
 pub mod node_handle;
 pub mod node_interface;
+pub mod onion;
 pub mod peer;
 pub mod socks;
 #[cfg(test)]

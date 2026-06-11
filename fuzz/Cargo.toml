@@ -83,5 +83,19 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "onion_address_rtt"
+path = "fuzz_targets/onion_address_rtt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "onion_address_str_parse"
+path = "fuzz_targets/onion_address_str_parse.rs"
+test = false
+doc = false
+bench = false
+
 [lints]
 workspace = true
