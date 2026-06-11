@@ -222,6 +222,89 @@ def florestad_bitcoind_utreexod_with_chain(
     return _create_nodes_with_chain
 
 
+@pytest.fixture(scope="class")
+def shared_florestad_bitcoind_utreexod_with_chain(
+    shared_florestad_node,
+    shared_bitcoind_node,
+    shared_utreexod_node,
+    shared_node_manager,
+) -> tuple[Node, Node, Node]:
+    """
+    Class-scoped variant of ``florestad_bitcoind_utreexod_with_chain``.
+
+    Returns a factory that initializes a three-node network shared across
+    every method in a test class.
+    """
+
+    def _create_nodes_with_chain(
+        blocks: int = 100,
+        floresta_descriptors: List[str] | None = None,
+    ) -> tuple[Node, Node, Node]:
+        if floresta_descriptors is None:
+            floresta_descriptors = [
+                WALLET_DESCRIPTOR_EXTERNAL,
+                WALLET_DESCRIPTOR_INTERNAL,
+            ]
+
+        for descriptor in floresta_descriptors:
+            shared_florestad_node.rpc.load_descriptor(descriptor)
+
+        shared_utreexod_node.rpc.generate(blocks)
+
+        shared_node_manager.connect_nodes(shared_florestad_node, shared_utreexod_node)
+        time.sleep(3)
+        shared_node_manager.connect_nodes(shared_bitcoind_node, shared_utreexod_node)
+        time.sleep(1)
+        shared_node_manager.connect_nodes(shared_florestad_node, shared_bitcoind_node)
+
+        return shared_florestad_node, shared_bitcoind_node, shared_utreexod_node
+
+    return _create_nodes_with_chain
+
+
+# TODO: remove this with a more sophisticated solution  # pylint: disable=fixme
+def _wait_for_sync(
+    nodes, target_height, log, timeout=120
+):  # pylint: disable=unused-argument
+    """Wait until all three nodes are synced to the target height."""
+    florestad, bitcoind, utreexod = nodes
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            floresta_info = florestad.rpc.get_blockchain_info()
+            utreexod_height = utreexod.rpc.get_block_count()
+            bitcoind_height = bitcoind.rpc.get_block_count()
+            if (
+                floresta_info["height"]
+                == utreexod_height
+                == bitcoind_height
+                == target_height
+                and not floresta_info["ibd"]
+            ):
+                return floresta_info
+        except (ConnectionError, OSError, ValueError):
+            pass
+
+        time.sleep(1)
+
+    pytest.fail(f"Nodes did not sync to height {target_height} within {timeout}s")
+    return None  # unreachable; satisfies pylint inconsistent-return-statements
+
+
+@pytest.fixture(scope="class")
+def shared_synced_nodes_10(
+    shared_setup_logging, shared_florestad_bitcoind_utreexod_with_chain
+):
+    """
+    Class-scoped fixture: three-node network synced to a default chain height (10 blocks).
+    """
+    blocks = 10
+    log = shared_setup_logging
+    nodes = shared_florestad_bitcoind_utreexod_with_chain(blocks)
+    _wait_for_sync(nodes, blocks, log)
+    return nodes
+
+
 @pytest.fixture
 def add_node_with_tls(node_manager):
     """Creates and starts a node with TLS enabled, based on the specified variant."""

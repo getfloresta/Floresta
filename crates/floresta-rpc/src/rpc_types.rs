@@ -14,9 +14,9 @@ use serde::Serialize;
 
 #[derive(Debug, Deserialize, Serialize)]
 /// Return type for the `gettxoutproof` rpc command, the internal is
-/// just the hex representation of the Merkle Block, which was defined
-/// by btc core.
-pub struct GetTxOutProof(pub Vec<u8>);
+/// the hex-encoded representation of the Merkle Block, as defined
+/// by Bitcoin Core.
+pub struct GetTxOutProof(pub String);
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetBlockchainInfoRes {

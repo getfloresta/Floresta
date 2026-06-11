@@ -2,7 +2,6 @@
 
 use core::fmt::Debug;
 use std::path::PathBuf;
-mod parsers;
 
 use anyhow::Ok;
 use bitcoin::BlockHash;
@@ -68,7 +67,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.get_tx_out(txid, vout)?)?
         }
         Methods::GetTxOutProof { txids, blockhash } => {
-            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash))?
+            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash)?)?
         }
         Methods::GetTransaction { txid, .. } => {
             serde_json::to_string_pretty(&client.get_transaction(txid, Some(true))?)?
@@ -216,11 +215,16 @@ pub enum Methods {
     )]
     GetDifficulty,
 
-    /// Returns the proof that one or more transactions were included in a block
-    #[command(name = "gettxoutproof")]
+    #[doc = include_str!("../../../doc/rpc/gettxoutproof.md")]
+    #[command(
+        name = "gettxoutproof",
+        about = "Returns a hex-encoded Merkle proof showing that one or more transactions were included in a block.",
+        long_about = Some(include_str!("../../../doc/rpc/gettxoutproof.md")),
+        disable_help_subcommand = true
+    )]
     GetTxOutProof {
         /// The transaction IDs to prove
-        #[arg(required = true, value_parser = crate::parsers::parse_json_array::<Txid>)]
+        #[arg(required = true, value_parser = |s: &str| serde_json::from_str::<Vec<Txid>>(s).map_err(|e| e.to_string()))]
         txids: std::vec::Vec<Txid>, // you need to specify the path of Vec https://github.com/clap-rs/clap/discussions/4695
 
         /// The block in which to look for the transactions

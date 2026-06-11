@@ -16,6 +16,7 @@ use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
 use corepc_types::ScriptPubkey;
 use corepc_types::v29::GetTxOut;
 use corepc_types::v30::DeploymentInfo;
@@ -678,7 +679,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         // Before building the merkle block we try to remove all txids
         // that aren't present in the block we found, meaning that
         // at least one of the txids doesn't belong to the block which
-        // in case needs to make the command fails.
+        // in case should make the command fail.
         //
         // this makes the use MerkleBlock::from_block_with_predicate useless.
         let targeted_txids: Vec<Txid> = block
@@ -703,7 +704,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         merkle_block
             .consensus_encode(&mut bytes)
             .expect("This will raise if a writer error happens");
-        Ok(GetTxOutProof(bytes))
+        Ok(GetTxOutProof(bytes.to_lower_hex_string()))
     }
 
     // gettxoutsetinfo
