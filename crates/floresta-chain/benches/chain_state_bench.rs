@@ -8,6 +8,7 @@ use std::io::Cursor;
 use bitcoin::Block;
 use bitcoin::Network;
 use bitcoin::OutPoint;
+use bitcoin::Transaction;
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::deserialize;
@@ -276,6 +277,23 @@ fn chainstore_checksum_benchmark(c: &mut Criterion) {
     });
 }
 
+fn check_transaction_context_free_benchmark(c: &mut Criterion) {
+    let block_file = File::open("./testdata/block_866342/raw.zst").unwrap();
+    let block_bytes = zstd::decode_all(block_file).unwrap();
+    let block: Block = deserialize(&block_bytes).unwrap();
+
+    // Collect all non-coinbase transactions from the block
+    let transactions: Vec<Transaction> = block.txdata.into_iter().skip(1).collect();
+
+    c.bench_function("check_transaction_context_free_block_866342", |b| {
+        b.iter(|| {
+            for tx in &transactions {
+                black_box(Consensus::check_transaction_context_free(tx)).ok();
+            }
+        })
+    });
+}
+
 criterion_group!(
     benches,
     initialize_chainstore_benchmark,
@@ -285,6 +303,7 @@ criterion_group!(
     connect_blocks_benchmark,
     validate_full_block_benchmark,
     validate_many_inputs_block_benchmark,
-    chainstore_checksum_benchmark
+    chainstore_checksum_benchmark,
+    check_transaction_context_free_benchmark
 );
 criterion_main!(benches);
