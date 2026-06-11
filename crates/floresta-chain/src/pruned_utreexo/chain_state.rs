@@ -64,6 +64,7 @@ use super::partial_chain::PartialChainState;
 use super::partial_chain::PartialChainStateInner;
 use crate::BestChain;
 use crate::ChainStore;
+use crate::extensions::HeaderMedianTimePastExt;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
@@ -564,6 +565,22 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
+    fn median_time_past(&self, header: BlockHeader) -> Result<u32, BlockchainError> {
+        header.median_time_past_with(|current_header| {
+            if current_header.prev_blockhash == BlockHash::all_zeros() {
+                return Ok(None);
+            }
+
+            self.get_disk_block_header(&current_header.prev_blockhash)
+                .map(|header| Some(*header))
+        })
+    }
+
+    fn previous_median_time_past(&self, height: u32) -> Result<u32, BlockchainError> {
+        let prev_header = self.get_header_by_height(height.saturating_sub(1))?;
+        self.median_time_past(*prev_header)
+    }
+
     fn notify(&self, block: &Block, height: u32, inputs: Option<&HashMap<OutPoint, UtxoData>>) {
         let inner = self.inner.read();
         for client in &inner.subscribers {
@@ -1005,7 +1022,14 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         read_lock!(self).consensus.check_block(block, height)?;
 
         // Validate block transactions
+        let params = self.chain_params();
         let subsidy = read_lock!(self).consensus.get_subsidy(height);
+        let lock_time_cutoff = Consensus::block_lock_time_cutoff(
+            height,
+            block.header.time,
+            params.csv_activation_height,
+            || self.previous_median_time_past(height),
+        )?;
         let verify_script = self.verify_script(height)?;
         #[cfg(feature = "bitcoinkernel")]
         let flags = self
@@ -1016,6 +1040,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         Consensus::verify_block_transactions(
             height,
+            lock_time_cutoff,
             inputs,
             &block.txdata,
             subsidy,
@@ -1521,16 +1546,30 @@ mod test {
     use std::io::Cursor;
     use std::vec::Vec;
 
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
     use bitcoin::OutPoint;
+    use bitcoin::ScriptBuf;
+    use bitcoin::Sequence;
+    use bitcoin::Transaction;
+    use bitcoin::TxIn;
+    use bitcoin::TxOut;
+    use bitcoin::Witness;
     use bitcoin::Work;
+    use bitcoin::absolute::LockTime;
     use bitcoin::block::Header as BlockHeader;
+    use bitcoin::block::Version as HeaderVersion;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::constants::genesis_block;
+    use bitcoin::opcodes::OP_TRUE;
+    use bitcoin::opcodes::all::OP_RETURN;
+    use bitcoin::script::Builder;
+    use bitcoin::transaction::Version as TransactionVersion;
     use floresta_common::assert_ok;
     use floresta_common::bhash;
     use rand::Rng;
@@ -1552,22 +1591,163 @@ mod test {
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::utxo_data::UtxoData;
 
+    const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
+    const VALIDATE_FULL_BLOCK_HEADERS_FILE_SIZE: usize = 1 << 20;
+    const VALIDATE_MANY_INPUTS_HEADERS_FILE_SIZE: usize = 1 << 19;
+    const TEST_FORK_FILE_SIZE: usize = 10_000;
+
     fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
     ) -> ChainState<FlatChainStore> {
+        setup_test_chain_with_header_capacity(
+            network,
+            assume_valid_arg,
+            DEFAULT_TEST_CHAINSTORE_SIZE,
+        )
+    }
+
+    fn setup_test_chain_with_header_capacity(
+        network: Network,
+        assume_valid_arg: AssumeValidArg,
+        headers_file_size: usize,
+    ) -> ChainState<FlatChainStore> {
         let test_id = rand::random::<u64>();
-        let config = crate::FlatChainStoreConfig {
-            block_index_size: Some(32_768),
-            headers_file_size: Some(32_768),
-            fork_file_size: Some(10_000), // Will be rounded up to 16,384
-            cache_size: Some(10),
-            file_permission: Some(0o660),
-            path: format!("./tmp-db/{test_id}/").into(),
-        };
+        let config = test_chain_config(format!("./tmp-db/{test_id}/"), headers_file_size);
 
         let chainstore = FlatChainStore::new(config).unwrap();
         ChainState::open(chainstore, network, assume_valid_arg).unwrap()
+    }
+
+    fn test_chain_config(path: String, headers_file_size: usize) -> FlatChainStoreConfig {
+        FlatChainStoreConfig {
+            block_index_size: Some(DEFAULT_TEST_CHAINSTORE_SIZE),
+            headers_file_size: Some(headers_file_size),
+            fork_file_size: Some(TEST_FORK_FILE_SIZE), // Will be rounded up to 16,384
+            cache_size: Some(10),
+            file_permission: Some(0o660),
+            path: path.into(),
+        }
+    }
+
+    fn op_return_script() -> ScriptBuf {
+        let mut script = ScriptBuf::new();
+        script.push_opcode(OP_RETURN);
+        script
+    }
+
+    fn anyone_can_spend_script() -> ScriptBuf {
+        let mut script = ScriptBuf::new();
+        script.push_opcode(OP_TRUE);
+        script
+    }
+
+    fn test_coinbase(height: u32, sequence: Sequence, lock_time: LockTime) -> Transaction {
+        let script_sig = Builder::new()
+            .push_int(i64::from(height))
+            .push_int(0)
+            .into_script();
+
+        Transaction {
+            version: TransactionVersion::TWO,
+            lock_time,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig,
+                sequence,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::ZERO,
+                script_pubkey: op_return_script(),
+            }],
+        }
+    }
+
+    fn block_with_transactions(height: u32, txdata: Vec<Transaction>) -> Block {
+        let mut block = Block {
+            header: BlockHeader {
+                version: HeaderVersion::from_consensus(0x2000_0000),
+                prev_blockhash: genesis_block(Network::Regtest).block_hash(),
+                merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+                time: 1_716_400_000 + height,
+                bits: CompactTarget::from_consensus(0x207f_ffff),
+                nonce: 0,
+            },
+            txdata,
+        };
+        block.header.merkle_root = block.compute_merkle_root().expect("block txs");
+        block
+    }
+
+    fn block_with_coinbase(height: u32, coinbase: Transaction) -> Block {
+        block_with_transactions(height, vec![coinbase])
+    }
+
+    fn test_outpoint(vout: u32) -> OutPoint {
+        OutPoint {
+            txid: genesis_block(Network::Regtest).txdata[0].compute_txid(),
+            vout,
+        }
+    }
+
+    fn test_spend(
+        lock_time: LockTime,
+        first_sequence: Sequence,
+        second_sequence: Sequence,
+    ) -> (Transaction, HashMap<OutPoint, UtxoData>) {
+        let first_prevout = test_outpoint(0);
+        let second_prevout = test_outpoint(1);
+        let transaction = Transaction {
+            version: TransactionVersion::TWO,
+            lock_time,
+            input: vec![
+                TxIn {
+                    previous_output: first_prevout,
+                    script_sig: ScriptBuf::new(),
+                    sequence: first_sequence,
+                    witness: Witness::new(),
+                },
+                TxIn {
+                    previous_output: second_prevout,
+                    script_sig: ScriptBuf::new(),
+                    sequence: second_sequence,
+                    witness: Witness::new(),
+                },
+            ],
+            output: vec![TxOut {
+                value: Amount::from_sat(1),
+                script_pubkey: op_return_script(),
+            }],
+        };
+        let inputs = HashMap::from([
+            (
+                first_prevout,
+                UtxoData {
+                    txout: TxOut {
+                        value: Amount::from_sat(1),
+                        script_pubkey: anyone_can_spend_script(),
+                    },
+                    is_coinbase: false,
+                    creation_height: 0,
+                    creation_time: 0,
+                },
+            ),
+            (
+                second_prevout,
+                UtxoData {
+                    txout: TxOut {
+                        value: Amount::from_sat(1),
+                        script_pubkey: anyone_can_spend_script(),
+                    },
+                    is_coinbase: false,
+                    creation_height: 0,
+                    creation_time: 0,
+                },
+            ),
+        ]);
+
+        (transaction, inputs)
     }
 
     fn decode_block_and_inputs(
@@ -1595,6 +1775,115 @@ mod test {
         (block, inputs)
     }
 
+    fn store_mtp_headers(
+        chain: &ChainState<FlatChainStore>,
+        network: Network,
+        tip_height: u32,
+        time: u32,
+    ) {
+        let genesis = genesis_block(network);
+        let mut prev_hash = genesis.block_hash();
+        let mut inner = write_lock!(chain);
+
+        for height in (tip_height - 10)..=tip_height {
+            let header = BlockHeader {
+                version: HeaderVersion::from_consensus(0x2000_0000),
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(0x1702_8c74),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            inner
+                .chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, height))
+                .unwrap();
+            inner
+                .chainstore
+                .update_block_index(height, prev_hash)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn reject_non_final_block_transaction() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let height = 1;
+
+        let invalid = block_with_coinbase(
+            height,
+            test_coinbase(
+                height,
+                Sequence::ENABLE_LOCKTIME_NO_RBF,
+                LockTime::from_height(height).unwrap(),
+            ),
+        );
+        let valid =
+            block_with_coinbase(height, test_coinbase(height, Sequence::MAX, LockTime::ZERO));
+
+        let invalid_result = chain.validate_block_no_acc(&invalid, height, HashMap::new());
+        assert!(
+            invalid_result.is_err(),
+            "accepted a block containing a non-final transaction"
+        );
+
+        let valid_result = chain.validate_block_no_acc(&valid, height, HashMap::new());
+        assert!(
+            valid_result.is_ok(),
+            "rejected a block containing only final transactions: {valid_result:?}"
+        );
+    }
+
+    #[test]
+    fn accept_future_lock_time_when_all_input_sequences_are_final() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let height = 1;
+        let future_lock_time = LockTime::from_height(height + 1).unwrap();
+        let (final_sequence_tx, final_sequence_inputs) =
+            test_spend(future_lock_time, Sequence::MAX, Sequence::MAX);
+        let final_sequence_block = block_with_transactions(
+            height,
+            vec![
+                test_coinbase(height, Sequence::MAX, LockTime::ZERO),
+                final_sequence_tx,
+            ],
+        );
+
+        let final_sequence_result =
+            chain.validate_block_no_acc(&final_sequence_block, height, final_sequence_inputs);
+        assert!(
+            final_sequence_result.is_ok(),
+            "rejected a block containing a future-lock-time transaction whose inputs all have final sequence: {final_sequence_result:?}"
+        );
+    }
+
+    #[test]
+    fn reject_future_lock_time_with_one_non_final_input_sequence() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let height = 1;
+        let future_lock_time = LockTime::from_height(height + 1).unwrap();
+        let (mixed_sequence_tx, mixed_sequence_inputs) = test_spend(
+            future_lock_time,
+            Sequence::MAX,
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let mixed_sequence_block = block_with_transactions(
+            height,
+            vec![
+                test_coinbase(height, Sequence::MAX, LockTime::ZERO),
+                mixed_sequence_tx,
+            ],
+        );
+
+        let mixed_sequence_result =
+            chain.validate_block_no_acc(&mixed_sequence_block, height, mixed_sequence_inputs);
+        assert!(
+            mixed_sequence_result.is_err(),
+            "accepted a block containing a transaction with a future lock time and one non-final input sequence"
+        );
+    }
+
     #[test]
     #[cfg_attr(debug_assertions, ignore = "this test is very slow in debug mode")]
     fn test_validate_many_inputs_block() {
@@ -1608,7 +1897,12 @@ mod test {
         );
 
         // Check whether the block validation passes or not
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+        let chain = setup_test_chain_with_header_capacity(
+            Network::Bitcoin,
+            AssumeValidArg::Disabled,
+            VALIDATE_MANY_INPUTS_HEADERS_FILE_SIZE,
+        );
+        store_mtp_headers(&chain, Network::Bitcoin, 367890, block.header.time);
         chain
             .validate_block_no_acc(&block, 367891, inputs)
             .expect("Block must be valid");
@@ -1626,10 +1920,100 @@ mod test {
         );
 
         // Check whether the block validation passes or not
-        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+        let chain = setup_test_chain_with_header_capacity(
+            Network::Bitcoin,
+            AssumeValidArg::Disabled,
+            VALIDATE_FULL_BLOCK_HEADERS_FILE_SIZE,
+        );
+        store_mtp_headers(&chain, Network::Bitcoin, 866341, block.header.time);
         chain
             .validate_block_no_acc(&block, 866342, inputs)
             .expect("Block must be valid");
+    }
+
+    fn store_linked_headers(chain: &ChainState<FlatChainStore>, times: &[u32]) -> Vec<BlockHeader> {
+        let genesis = genesis_block(Network::Regtest);
+        let mut prev_hash = genesis.block_hash();
+        let mut headers = Vec::with_capacity(times.len());
+        let mut inner = write_lock!(chain);
+
+        for (height, time) in (1u32..).zip(times) {
+            let header = BlockHeader {
+                version: HeaderVersion::from_consensus(0x2000_0000),
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time: *time,
+                bits: CompactTarget::from_consensus(0x207f_ffff),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            inner
+                .chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, height))
+                .unwrap();
+            inner
+                .chainstore
+                .update_block_index(height, prev_hash)
+                .unwrap();
+            headers.push(header);
+        }
+
+        headers
+    }
+
+    fn median_time(mut times: Vec<u32>) -> u32 {
+        times.sort_unstable();
+        times[times.len() / 2]
+    }
+
+    #[test]
+    fn chain_state_median_time_past_sorts_recent_headers() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let times = [111, 101, 109, 107, 103, 105, 110, 102, 108, 104, 106];
+        let headers = store_linked_headers(&chain, &times);
+
+        assert_eq!(
+            chain.median_time_past(headers[10]).unwrap(),
+            median_time(times.to_vec())
+        );
+    }
+
+    #[test]
+    fn chain_state_median_time_past_requires_connected_headers() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let missing_prev = BlockHeader {
+            version: HeaderVersion::from_consensus(0x2000_0000),
+            prev_blockhash: genesis_block(Network::Regtest).block_hash(),
+            merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+            time: 100,
+            bits: CompactTarget::from_consensus(0x207f_ffff),
+            nonce: 1,
+        };
+        let header = BlockHeader {
+            version: HeaderVersion::from_consensus(0x2000_0000),
+            prev_blockhash: missing_prev.block_hash(),
+            merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+            time: 200,
+            bits: CompactTarget::from_consensus(0x207f_ffff),
+            nonce: 2,
+        };
+
+        assert!(matches!(
+            chain.median_time_past(header),
+            Err(BlockchainError::BlockNotPresent)
+        ));
+    }
+
+    #[test]
+    fn chain_state_previous_median_time_past_uses_previous_height() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled);
+        let times = [211, 201, 209, 207, 203, 205, 210, 202, 208, 204, 206];
+        store_linked_headers(&chain, &times);
+
+        assert_eq!(
+            chain.previous_median_time_past(12).unwrap(),
+            median_time(times.to_vec())
+        );
     }
 
     #[test]

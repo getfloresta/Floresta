@@ -10,6 +10,7 @@ use bitcoin::BlockHash;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::hashes::Hash;
 use floresta_common::bhash;
 use floresta_common::prelude::Box;
 use floresta_common::prelude::String;
@@ -118,24 +119,46 @@ impl Display for HeaderExtError {
     }
 }
 
+pub(crate) trait HeaderMedianTimePastExt {
+    fn median_time_past_with<E>(
+        &self,
+        previous_header: impl FnMut(&Header) -> Result<Option<Header>, E>,
+    ) -> Result<u32, E>;
+}
+
+impl HeaderMedianTimePastExt for Header {
+    fn median_time_past_with<E>(
+        &self,
+        mut previous_header: impl FnMut(&Self) -> Result<Option<Self>, E>,
+    ) -> Result<u32, E> {
+        let mut block_timestamps = Vec::with_capacity(MEDIAN_TIME_PAST_BLOCK_COUNT);
+        let mut current_header = *self;
+
+        for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
+            block_timestamps.push(current_header.time);
+            let Some(prev_header) = previous_header(&current_header)? else {
+                break;
+            };
+            current_header = prev_header;
+        }
+
+        block_timestamps.sort();
+        Ok(block_timestamps[block_timestamps.len() / 2])
+    }
+}
+
 impl HeaderExt for Header {
     fn calculate_median_time_past(
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<u32, HeaderExtError> {
-        let mut block_timestamps = Vec::with_capacity(MEDIAN_TIME_PAST_BLOCK_COUNT);
-        let mut current_header = *self;
-        for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
-            block_timestamps.push(current_header.time);
-            let Ok(prev_header) = current_header.get_previous_block_header(chain) else {
-                break;
-            };
-            current_header = prev_header;
-        }
-        block_timestamps.sort();
-        let median_time_past = block_timestamps[block_timestamps.len() / 2];
+        self.median_time_past_with(|current_header| {
+            if current_header.prev_blockhash == BlockHash::all_zeros() {
+                return Ok(None);
+            }
 
-        Ok(median_time_past)
+            current_header.get_previous_block_header(chain).map(Some)
+        })
     }
 
     fn calculate_chain_work(
@@ -288,6 +311,7 @@ mod tests {
     use core::fmt::Display;
     use core::fmt::Formatter;
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use bitcoin::Block;
@@ -310,6 +334,7 @@ mod tests {
     #[derive(Debug)]
     pub enum MockBlockchainError {
         NotFound,
+        Storage,
     }
 
     impl Display for MockBlockchainError {
@@ -323,6 +348,7 @@ mod tests {
     pub struct MockBlockchainInterface {
         pub headers: HashMap<BlockHash, Header>,
         pub heights: HashMap<BlockHash, u32>,
+        pub storage_errors: HashSet<BlockHash>,
         pub chain_height: u32,
     }
 
@@ -331,6 +357,7 @@ mod tests {
             Self {
                 headers: HashMap::new(),
                 heights: HashMap::new(),
+                storage_errors: HashSet::new(),
                 chain_height: 0,
             }
         }
@@ -346,6 +373,10 @@ mod tests {
         type Error = MockBlockchainError;
 
         fn get_block_header(&self, hash: &BlockHash) -> Result<Header, Self::Error> {
+            if self.storage_errors.contains(hash) {
+                return Err(MockBlockchainError::Storage);
+            }
+
             self.headers
                 .get(hash)
                 .cloned()
@@ -535,6 +566,21 @@ mod tests {
         let expected_mtp = headers[0].time;
 
         assert_eq!(mtp, expected_mtp);
+    }
+
+    #[test]
+    fn test_calculate_median_time_past_propagates_storage_errors() {
+        let (mut mock_chain, headers) = get_chain_and_headers(12);
+        let median_header = headers[headers.len() - 1];
+        let missing_hash = headers[headers.len() - 2].block_hash();
+        mock_chain.storage_errors.insert(missing_hash);
+
+        let result = median_header.calculate_median_time_past(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "MTP lookup failure should be propagated, got {result:?}"
+        );
     }
 
     #[test]

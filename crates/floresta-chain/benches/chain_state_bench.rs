@@ -6,11 +6,14 @@ use std::hint::black_box;
 use std::io::Cursor;
 
 use bitcoin::Block;
+use bitcoin::CompactTarget;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::block::Header as BlockHeader;
+use bitcoin::block::Version as HeaderVersion;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::deserialize;
+use bitcoin::constants::genesis_block;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::SamplingMode;
@@ -24,6 +27,11 @@ use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_chain::pruned_utreexo::utxo_data::UtxoData;
 use rustreexo::proof::Proof;
+
+const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
+const VALIDATE_FULL_BLOCK_HEADERS_FILE_SIZE: usize = 1 << 20;
+const VALIDATE_MANY_INPUTS_HEADERS_FILE_SIZE: usize = 1 << 19;
+const TEST_FORK_FILE_SIZE: usize = 10_000;
 
 /// Reads the first 151 blocks (or 150 blocks on top of genesis) from `regtest_blocks.txt`
 fn read_blocks_txt() -> Vec<Block> {
@@ -65,11 +73,19 @@ fn setup_test_chain(
     network: Network,
     assume_valid_arg: AssumeValidArg,
 ) -> ChainState<FlatChainStore> {
+    setup_test_chain_with_header_capacity(network, assume_valid_arg, DEFAULT_TEST_CHAINSTORE_SIZE)
+}
+
+fn setup_test_chain_with_header_capacity(
+    network: Network,
+    assume_valid_arg: AssumeValidArg,
+    headers_file_size: usize,
+) -> ChainState<FlatChainStore> {
     let test_id = rand::random::<u64>();
     let config = FlatChainStoreConfig {
-        block_index_size: Some(32_768),
-        headers_file_size: Some(32_768),
-        fork_file_size: Some(10_000), // Will be rounded up to 16,384
+        block_index_size: Some(DEFAULT_TEST_CHAINSTORE_SIZE),
+        headers_file_size: Some(headers_file_size),
+        fork_file_size: Some(TEST_FORK_FILE_SIZE), // Will be rounded up to 16,384
         cache_size: Some(10),
         file_permission: Some(0o660),
         path: format!("./tmp-db/{test_id}/").into(),
@@ -102,6 +118,32 @@ fn decode_block_and_inputs(
     assert!(stxos.is_empty(), "Moved all stxos to the inputs map");
 
     (block, inputs)
+}
+
+fn store_mtp_headers(
+    chain: &ChainState<FlatChainStore>,
+    network: Network,
+    tip_height: u32,
+    time: u32,
+) {
+    let genesis = genesis_block(network);
+    let mut prev_hash = genesis.block_hash();
+    let headers: Vec<_> = ((tip_height - 10)..=tip_height)
+        .map(|height| {
+            let header = BlockHeader {
+                version: HeaderVersion::from_consensus(0x2000_0000),
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(0x1702_8c74),
+                nonce: height,
+            };
+            prev_hash = header.block_hash();
+            header
+        })
+        .collect();
+
+    chain.push_headers(headers, tip_height - 10).unwrap();
 }
 
 fn initialize_chainstore_benchmark(c: &mut Criterion) {
@@ -200,7 +242,12 @@ fn validate_full_block_benchmark(c: &mut Criterion) {
     let stxos_file = File::open("./testdata/block_866342/spent_utxos.zst").unwrap();
     let (block, inputs) = decode_block_and_inputs(block_file, stxos_file);
 
-    let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+    let chain = setup_test_chain_with_header_capacity(
+        Network::Bitcoin,
+        AssumeValidArg::Disabled,
+        VALIDATE_FULL_BLOCK_HEADERS_FILE_SIZE,
+    );
+    store_mtp_headers(&chain, Network::Bitcoin, 866341, block.header.time);
 
     c.bench_function("validate_block_866342", |b| {
         b.iter_batched(
@@ -225,7 +272,12 @@ fn validate_many_inputs_block_benchmark(c: &mut Criterion) {
     let stxos_file = File::open("./testdata/block_367891/spent_utxos.zst").unwrap();
     let (block, inputs) = decode_block_and_inputs(block_file, stxos_file);
 
-    let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
+    let chain = setup_test_chain_with_header_capacity(
+        Network::Bitcoin,
+        AssumeValidArg::Disabled,
+        VALIDATE_MANY_INPUTS_HEADERS_FILE_SIZE,
+    );
+    store_mtp_headers(&chain, Network::Bitcoin, 367890, block.header.time);
 
     // Create a group with the lowest possible sample size, as validating this block is very slow
     let mut group = c.benchmark_group("validate_block_367891");
