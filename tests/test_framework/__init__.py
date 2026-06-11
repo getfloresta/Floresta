@@ -16,7 +16,6 @@ import os
 import re
 import sys
 import copy
-import random
 import socket
 import shutil
 import signal
@@ -35,7 +34,15 @@ from test_framework.daemon import ConfigP2P
 from test_framework.rpc import ConfigRPC
 from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.node import Node, NodeType
-from test_framework.util import Utility
+from test_framework.util import Utility, wait_until
+from test_framework.p2p import P2P_SERVICES, P2PInterface, NetworkThread
+from test_framework.messages import (
+    NODE_P2P_V2,
+    CAddress,
+    msg_generic,
+    MAX_PROTOCOL_MESSAGE_LENGTH,
+    MAX_MSG_PER_SECOND,
+)
 
 
 # pylint: disable=too-many-public-methods
@@ -81,6 +88,7 @@ class FlorestaTestFramework:
         self._test_name = test_name
         self._nodes = []
         self._log = logger
+        self._p2p_interface = []
 
     @property
     def test_name(self) -> str:
@@ -256,6 +264,14 @@ class FlorestaTestFramework:
         for i in range(len(self._nodes)):
             self.stop_node(i)
 
+        if (
+            hasattr(self, "_network_thread")
+            and NetworkThread.network_event_loop is not None
+            and self._network_thread.is_alive()
+        ):
+            self._network_thread.close(timeout=10)
+            NetworkThread.network_event_loop = None
+
     def check_connection(self, peer_one: Node, peer_two: Node, is_connected: bool):
         """
         Check if two peers are connected/disconnected to each other.
@@ -273,6 +289,9 @@ class FlorestaTestFramework:
                 f"Cannot check connection state: Only one peer is running. "
                 f"Peer one running: {peer_one_running}, Peer two running: {peer_two_running}"
             )
+
+        # Send pings to both peers to trigger a peer state update
+        self._send_peer_pings(peer_one, peer_two)
 
         peer_two_in_peer_one = (
             peer_one.is_peer_connected(peer_two) if peer_one_running else False
@@ -293,41 +312,39 @@ class FlorestaTestFramework:
         Wait for two peers to connect/disconnect to each other.
         """
         attempts = 0
-        timeout = time.time() + 30
-        while time.time() < timeout:
-            if self.check_connection(peer_one, peer_two, is_connected):
-                self.log.debug(
-                    f"Peers {peer_one.variant} and {peer_two.variant} are in the expected "
-                    f"connection state."
-                )
-                return
 
-            if attempts < 10:
+        def check_peers_connection():
+            nonlocal attempts
+
+            if attempts > 10:
                 time.sleep(1)
-            else:
-                time.sleep(2)
 
             attempts += 1
 
-            # Send a ping to both peers to trigger a peer state update
-            if peer_one.daemon.is_running:
-                peer_one.rpc.ping()
-                self.log.debug(
-                    f"Peer one {peer_one.variant} is connected to peer two {peer_two.variant}: "
-                    f"{peer_one.is_peer_connected(peer_two)}"
-                )
+            return self.check_connection(peer_one, peer_two, is_connected)
 
-            if peer_two.daemon.is_running:
-                peer_two.rpc.ping()
-                self.log.debug(
-                    f"Peer two {peer_two.variant} is connected to peer one {peer_one.variant}: "
-                    f"{peer_two.is_peer_connected(peer_one)}"
-                )
+        wait_until(predicate=check_peers_connection)
 
-        raise AssertionError(
-            f"Peers {peer_one.variant} and {peer_two.variant} failed to reach the expected "
-            f"connection state within the timeout. Expected connected: {is_connected}."
+        self.log.debug(
+            f"Peers {peer_one.variant} and {peer_two.variant} are "
+            f"{'connected' if is_connected else 'disconnected'}"
         )
+
+    def _send_peer_pings(self, peer_one: Node, peer_two: Node):
+        """Send pings to both peers and log connection status."""
+        if peer_one.daemon.is_running:
+            peer_one.rpc.ping()
+            self.log.debug(
+                f"Peer one {peer_one.variant} is connected to peer two {peer_two.variant}: "
+                f"{peer_one.is_peer_connected(peer_two)}"
+            )
+
+        if peer_two.daemon.is_running:
+            peer_two.rpc.ping()
+            self.log.debug(
+                f"Peer two {peer_two.variant} is connected to peer one {peer_one.variant}: "
+                f"{peer_two.is_peer_connected(peer_one)}"
+            )
 
     def connect_nodes(
         self,
@@ -347,3 +364,178 @@ class FlorestaTestFramework:
         assert result is None
 
         self.wait_for_peers_connections(peer_one, peer_two)
+
+    def add_p2p_connection(
+        self,
+        node: Node,
+        p2p_conn,
+        *,
+        wait_for_verack=True,
+        wait_for_disconnect=False,
+        p2p_idx,
+        connection_type="outbound-full-relay",
+        supports_v2_p2p=True,
+        advertise_v2_p2p=True,
+        method="onetry",
+        **kwargs,
+    ):
+        """Add an outbound p2p connection from node.
+
+        An outbound connection is made from Node -------> P2PConnection
+        - if P2PConnection doesn't advertise_v2_p2p, Node sends version message and v1 P2P is
+          followed
+        - if P2PConnection both supports_v2_p2p and advertise_v2_p2p, Node sends ellswift bytes and
+          v2 P2P is followed
+
+        Parameters:
+            p2p_conn: The P2PConnection object
+            p2p_idx: Index for the connection (must be different for simultaneous peers)
+            supports_v2_p2p: whether p2p_conn supports v2 P2P
+            advertise_v2_p2p: whether p2p_conn is advertised to support v2 P2P
+            connection_type: Type of connection ("outbound-full-relay", "block-relay-only",
+             "addr-fetch", "feeler")
+        """
+        node_peers = len(node.rpc.get_peerinfo())
+
+        if NetworkThread.network_event_loop is None:
+            network_thread = NetworkThread()
+            network_thread.start()
+            # pylint: disable=attribute-defined-outside-init
+            self._network_thread = network_thread
+
+        def add_connection_callback(address, port):
+            self.log.debug(f"Connecting to {address}:{port} ({connection_type})")
+            node.connect_node_by_url(
+                url=f"{address}:{port}", method=method, v2transport=supports_v2_p2p
+            )
+
+        if supports_v2_p2p is None:
+            supports_v2_p2p = (
+                node.use_v2transport if hasattr(node, "use_v2transport") else False
+            )
+        if advertise_v2_p2p is None:
+            advertise_v2_p2p = (
+                node.use_v2transport if hasattr(node, "use_v2transport") else False
+            )
+
+        # Handle v2 P2P advertisement
+        if advertise_v2_p2p:
+            kwargs["services"] = kwargs.get("services", P2P_SERVICES) | NODE_P2P_V2
+
+        # If advertised v2 but doesn't support it, reconnection needed
+        reconnect = advertise_v2_p2p and not supports_v2_p2p
+        supports_v2_p2p = supports_v2_p2p and advertise_v2_p2p
+
+        p2p_conn.peer_accept_connection(
+            connect_cb=add_connection_callback,
+            connect_id=p2p_idx + 1,
+            net=node.chain if hasattr(node, "chain") else "regtest",
+            timeout_factor=1.0,
+            supports_v2_p2p=supports_v2_p2p,
+            reconnect=reconnect,
+            **kwargs,
+        )()
+
+        if reconnect:
+            p2p_conn.wait_for_reconnect()
+
+        if connection_type == "feeler" or wait_for_disconnect:
+            p2p_conn.wait_until(
+                lambda: p2p_conn.message_count.get("version", 0) == 1,
+                check_connected=False,
+            )
+            p2p_conn.wait_until(
+                lambda: not p2p_conn.is_connected, check_connected=False
+            )
+        else:
+            p2p_conn.wait_for_connect()
+            self._p2p_interface.append((node, p2p_conn))
+
+            if supports_v2_p2p:
+                p2p_conn.wait_until(lambda: p2p_conn.v2_state.tried_v2_handshake)
+            p2p_conn.wait_until(lambda: not p2p_conn.on_connection_send_msg)
+            if wait_for_verack:
+                p2p_conn.wait_for_verack()
+                p2p_conn.sync_with_ping()
+
+        wait_until(predicate=lambda: len(node.rpc.get_peerinfo()) == node_peers + 1)
+
+        return p2p_conn
+
+    def add_p2p_connection_default(
+        self,
+        node: Node,
+        *,
+        wait_for_verack=True,
+        p2p_idx,
+        connection_type="outbound-full-relay",
+        supports_v2_p2p=True,
+        advertise_v2_p2p=True,
+        method="onetry",
+        **kwargs,
+    ):
+        """Add an outbound p2p connection with a default P2PInterface.
+
+        This method creates a default P2PInterface and connects it to the first node.
+
+        Parameters:
+            p2p_idx: Index for the connection
+            connection_type: Type of connection
+            supports_v2_p2p: whether to support v2 P2P
+            advertise_v2_p2p: whether to advertise v2 P2P support
+
+        Returns:
+            The P2PInterface object
+        """
+        # Create default P2PInterface
+        p2p_interface = P2PInterface()
+
+        # Use the custom version to do the actual connection
+        return self.add_p2p_connection(
+            node=node,
+            p2p_conn=p2p_interface,
+            wait_for_verack=wait_for_verack,
+            p2p_idx=p2p_idx,
+            connection_type=connection_type,
+            supports_v2_p2p=supports_v2_p2p,
+            advertise_v2_p2p=advertise_v2_p2p,
+            method=method,
+            **kwargs,
+        )
+
+    def create_msg_random(self, msgtype, size: int):
+        """
+        Create a message of a given size.
+        """
+        oversized_payload = b"\x00" * size
+
+        # Create a generic message
+        return msg_generic(msgtype, oversized_payload)
+
+    def create_node_address(self, quantity: int):
+        """
+        Create a list of node addresses.
+        """
+
+        i2p_addr = "c4gfnttsuwqomiygupdqqqyy5y5emnk5c73hrfvatri67prd7vyq.b32.i2p"
+        onion_addr = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+
+        address_list = []
+        for i in range(quantity):
+            addr = CAddress()
+            addr.time = int(time.time()) + i
+            addr.port = 8333 + i
+            addr.nServices = P2P_SERVICES
+            # Add one I2P and one onion V3 address at an arbitrary position.
+            if i % 5 == 0:
+                addr.net = addr.NET_I2P
+                addr.ip = i2p_addr
+                addr.port = 0
+            elif i % 3 == 0:
+                addr.net = addr.NET_TORV3
+                addr.ip = onion_addr
+            else:
+                addr.ip = f"123.123.123.{i % 256}"
+            address_list.append(addr)
+
+        return address_list

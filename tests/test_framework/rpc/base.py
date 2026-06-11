@@ -39,7 +39,7 @@ class BaseRPC(ABC):
     Subclasses should use `perform_request` to implement RPC calls.
     """
 
-    TIMEOUT: int = 15  # seconds
+    TIMEOUT: int = 30  # seconds
 
     def __init__(self, config: ConfigRPC, log):
         self._config = config
@@ -393,7 +393,7 @@ class BaseRPC(ABC):
         """
         return self.perform_request("ping")
 
-    def disconnectnode(self, node_address: str, node_id: Optional[int] = None):
+    def disconnectnode(self, node_address: str = "", node_id: Optional[int] = None):
         """
         Disconnect from a peer by `node_address` or `node_id`
         """
