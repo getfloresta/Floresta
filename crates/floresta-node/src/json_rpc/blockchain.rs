@@ -17,7 +17,7 @@ use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
-use corepc_types::ScriptPubkey;
+use corepc_types::ScriptPubKey;
 use corepc_types::v29::GetTxOut;
 use corepc_types::v30::DeploymentInfo;
 use corepc_types::v30::GetBlockHeaderVerbose;
@@ -644,7 +644,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 };
 
                 let asm = Self::to_core_asm_string(&txout.script_pubkey)?;
-                let script_pubkey = ScriptPubkey {
+                let script_pubkey = ScriptPubKey {
                     asm,
                     hex: txout.script_pubkey.to_hex_string(),
                     descriptor,
