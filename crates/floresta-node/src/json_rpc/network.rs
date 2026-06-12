@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use corepc_types::v26::AddrManInfoNetwork;
+use corepc_types::v30::AddPeerAddress;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetNetworkInfo;
 use corepc_types::v30::GetNetworkInfoNetwork;
@@ -165,6 +166,29 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         );
 
         Ok(GetAddrManInfo(map))
+    }
+
+    pub(crate) async fn add_peer_address(
+        &self,
+        address: String,
+        port: Option<u16>,
+        tried: bool,
+    ) -> Result<AddPeerAddress> {
+        let address = if let Some(port) = port {
+            format!("{address}:{port}")
+        } else {
+            address
+        };
+
+        let addr = BitcoinSocketAddr::parse_address(&address, Some(self.network), SystemResolver)?;
+
+        let success = self
+            .node
+            .add_peer_address(addr, tried)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        Ok(AddPeerAddress { success })
     }
 
     pub(crate) async fn get_network_info(&self) -> Result<GetNetworkInfo> {
