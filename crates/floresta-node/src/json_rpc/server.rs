@@ -54,8 +54,8 @@ use super::res::TxOutJson;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
+use crate::json_rpc::request::arg_parser::get_optional;
 use crate::json_rpc::request::arg_parser::get_with_default;
-use crate::json_rpc::request::arg_parser::try_into_optional;
 use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::res::jsonrpc_interface::Response;
 
@@ -91,6 +91,7 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) start_time: Instant,
     pub(super) user_agent: String,
     pub(super) proxy: Option<SocketAddr>,
+    pub(super) default_connection_is_v2: bool,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -306,7 +307,7 @@ async fn handle_json_rpc_request(
         "addnode" => {
             let node = get_at(&params, 0, "node")?;
             let command = get_at(&params, 1, "command")?;
-            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
+            let v2transport = get_optional(&params, 2, "v2transport")?;
 
             state
                 .add_node(node, command, v2transport)
@@ -316,7 +317,7 @@ async fn handle_json_rpc_request(
 
         "disconnectnode" => {
             let node_address = get_at(&params, 0, "node_address")?;
-            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
+            let node_id = get_optional(&params, 1, "node_id")?;
 
             state
                 .disconnect_node(node_address, node_id)
@@ -329,7 +330,7 @@ async fn handle_json_rpc_request(
             let vout = get_at(&params, 1, "vout")?;
             let script: String = get_at(&params, 2, "script")?;
             let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_at(&params, 3, "height")?;
+            let height = get_with_default(&params, 3, "height", 0)?;
 
             state.clone().find_tx_out(txid, vout, script, height).await
         }
@@ -387,7 +388,7 @@ async fn handle_json_rpc_request(
         }
 
         "getdeploymentinfo" => {
-            let blockhash = try_into_optional(get_at(&params, 0, "blockhash"))?;
+            let blockhash = get_optional(&params, 0, "blockhash")?;
 
             state
                 .get_deployment_info(blockhash)
@@ -414,7 +415,7 @@ async fn handle_json_rpc_request(
 
         "gettxoutproof" => {
             let txids: Vec<Txid> = get_at(&params, 0, "txids")?;
-            let block_hash = try_into_optional(get_at(&params, 1, "block_hash"))?;
+            let block_hash = get_optional(&params, 1, "block_hash")?;
 
             state
                 .get_txout_proof(&txids, block_hash)
@@ -667,6 +668,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         log_path: impl AsRef<Path>,
         user_agent: String,
         proxy: Option<SocketAddr>,
+        default_connection_is_v2: bool,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -709,6 +711,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 start_time: Instant::now(),
                 user_agent,
                 proxy,
+                default_connection_is_v2,
             }));
 
         axum::serve(listener, router)
