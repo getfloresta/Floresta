@@ -337,6 +337,10 @@ impl BlockchainInterface for PartialChainState {
         self.inner().current_acc.clone()
     }
 
+    fn size_on_disk(&self) -> Result<u64, Self::Error> {
+        unimplemented!("partialChainState has no on-disk presence")
+    }
+
     fn get_height(&self) -> Result<u32, Self::Error> {
         Ok(self.inner().current_height)
     }
