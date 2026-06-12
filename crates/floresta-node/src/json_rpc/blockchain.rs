@@ -16,7 +16,7 @@ use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
-use corepc_types::ScriptPubkey;
+use corepc_types::ScriptPubKey;
 use corepc_types::v29::GetTxOut;
 use corepc_types::v30::DeploymentInfo;
 use corepc_types::v30::GetBlockHeaderVerbose;
@@ -40,6 +40,7 @@ use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::server::SERIALIZATION_EXPECT_MSG;
+use crate::json_rpc::server::to_core_asm_string;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn get_block_inner(&self, hash: BlockHash) -> Result<Block, JsonRpcError> {
@@ -455,7 +456,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     /// Returns a label about the scriptPubKey type
     /// (pubkey, pubkeyhash, multisig, nulldata, scripthash, witness_v0_keyhash, witness_v0_scripthash, witness_v1_taproot, anchor, nonstandard)
-    fn get_script_type_label(script: &Script) -> &'static str {
+    pub(super) fn get_script_type_label(script: &Script) -> &'static str {
         if script.is_p2pk() {
             return "pubkey";
         }
@@ -495,20 +496,15 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         "nonstandard"
     }
 
-    fn get_script_type_descriptor(script: &Script, address: &Option<Address>) -> String {
-        let get_addr_str = || {
-            address
-                .as_ref()
-                .expect("address should be Some")
-                .to_string()
-        };
-
-        if script.is_p2pk() {
-            let addr = get_addr_str();
-            return format!("pk({addr}");
-        }
-
+    /// TODO: This function is not compliant with Bitcoin Core.
+    /// See: <https://github.com/getfloresta/Floresta/issues/987>
+    pub(super) fn get_script_type_descriptor(script: &Script, address: &Option<Address>) -> String {
+        // Try script from the address
         if let Some(addr) = address {
+            if script.is_p2pk() {
+                return format!("pk({addr}");
+            }
+
             return format!("addr({addr})");
         }
 
@@ -517,83 +513,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return format!("raw({hex})");
         }
 
-        if Self::is_anchor_type(script) {
-            let addr = get_addr_str();
-            return format!("addr({addr})");
-        }
-
         let hex = script.to_hex_string();
         format!("raw({hex})")
-    }
-
-    /// Parses the serialized opcodes in a [ScriptBuf] as numbers and it's hashes.
-    /// This differs from `ScriptBuf::to_asm_string` in that, `rust-bitcoin` will
-    /// show the the human representation of the opcode. It does not omit the number representations of
-    /// `OP_PUSHDATA_<N>` and `OP_PUSHBYTE<N>`. This method do the opposite: it not show the human
-    /// representation and omit the last opcodes, so it can be compliant with bitcoin-core.
-    /// For reference see <https://en.bitcoin.it/wiki/Script#Opcodes>
-    fn to_core_asm_string(script: &ScriptBuf) -> Result<String, JsonRpcError> {
-        let mut asm = vec![];
-        let bytes = script.as_bytes();
-        let mut i = 0usize;
-
-        // little reused helper to hex string
-        let to_hex_string = |r: &[u8]| r.iter().map(|b| format!("{b:02x}")).collect::<String>();
-
-        while i < bytes.len() {
-            let byte = bytes[i];
-            i += 1;
-
-            match byte {
-                // OP_0
-                0x00 => asm.push(format!("{}", 0)),
-                // OP_PUSHDATA_<N>: The next N bytes is data to be pushed onto the stack
-                0x01..=0x4b => {
-                    let pushed_bytes = byte as usize;
-                    let hex = to_hex_string(&bytes[i..i + pushed_bytes]);
-                    asm.push(hex);
-                    i += pushed_bytes;
-                }
-                // OP_PUSHBYTE1: the next byte contains the number of bytes to be pushed onto the stack.
-                0x4c => {
-                    let pushed_bytes = bytes[i] as usize;
-                    i += 1;
-                    let hex = to_hex_string(&bytes[i..i + pushed_bytes]);
-                    asm.push(hex);
-                    i += pushed_bytes;
-                }
-                // OP_PUSHBYTE2: the next two bytes contain the number of bytes to be pushed onto the stack in little endian order.
-                0x4d => {
-                    let pushed_bytes = u16::from_le_bytes([bytes[i], bytes[i + 1]]) as usize;
-                    i += 2;
-                    let hex = to_hex_string(&bytes[i..i + pushed_bytes]);
-                    asm.push(hex);
-                    i += pushed_bytes;
-                }
-                // OP_PUSHBYTE4: the next four bytes contain the number of bytes to be pushed onto the stack in little endian order.
-                0x4e => {
-                    let pushed_bytes =
-                        u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
-                            as usize;
-                    i += 4;
-                    let hex = to_hex_string(&bytes[i..i + pushed_bytes]);
-                    asm.push(hex);
-                    i += pushed_bytes;
-                }
-                // OP_1 to OP_16
-                0x51..=0x60 => {
-                    // 0x50 is OP_RESERVED
-                    let reserved = 0x50;
-                    asm.push(format!("{}", byte - reserved));
-                }
-                // Any other opcode that should  be pushed
-                another_one => {
-                    asm.push(format!("{another_one:02x}"));
-                }
-            }
-        }
-
-        Ok(asm.join(" "))
     }
 
     /// gettxout: returns details about an unspent transaction output.
@@ -627,8 +548,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     Err(_) => None,
                 };
 
-                let asm = Self::to_core_asm_string(&txout.script_pubkey)?;
-                let script_pubkey = ScriptPubkey {
+                let asm = to_core_asm_string(&txout.script_pubkey, false);
+                let script_pubkey = ScriptPubKey {
                     asm,
                     hex: txout.script_pubkey.to_hex_string(),
                     descriptor,

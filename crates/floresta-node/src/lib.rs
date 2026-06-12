@@ -11,7 +11,7 @@ mod config_file;
 mod error;
 mod florestad;
 #[cfg(feature = "json-rpc")]
-#[deny(clippy::unwrap_used)]
+#[cfg_attr(not(test), deny(clippy::unwrap_used))]
 mod json_rpc;
 #[cfg(feature = "zmq-server")]
 mod zmq;
