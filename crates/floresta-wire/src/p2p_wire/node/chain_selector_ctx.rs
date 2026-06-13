@@ -52,7 +52,6 @@ use std::time::Instant;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::block::Header;
-use bitcoin::consensus::deserialize;
 use bitcoin::network::Network;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
@@ -203,19 +202,33 @@ where
         self.request_headers(last)
     }
 
-    /// Takes a serialized accumulator and parses it into a Stump
-    fn parse_acc(mut acc: Vec<u8>) -> Result<Stump, WireError> {
+    /// Parses a serialized Utreexo accumulator into a [`Stump`].
+    ///
+    /// An empty slice yields [`Stump::default`]. Otherwise the payload must contain
+    /// an 8-byte little-endian leaf count followed by `leaves.count_ones()` root
+    /// hashes of 32 bytes each. All other lengths are rejected.
+    fn parse_acc(acc: &[u8]) -> Result<Stump, WireError> {
         if acc.is_empty() {
             return Ok(Stump::default());
         }
-        let leaves = deserialize(acc.drain(0..8).as_slice()).unwrap_or(0);
-        let mut roots = Vec::new();
-        while !acc.is_empty() {
-            let slice = acc.drain(0..32);
+        let Some((leaf_count, roots_bytes)) = acc.split_first_chunk::<8>() else {
+            return Err(WireError::PeerMisbehaving);
+        };
+        let leaves = u64::from_le_bytes(*leaf_count);
+
+        let expected_roots = leaves.count_ones() as usize;
+        let expected_roots_len = expected_roots * 32;
+        if roots_bytes.len() != expected_roots_len {
+            return Err(WireError::PeerMisbehaving);
+        }
+
+        let mut roots = Vec::with_capacity(expected_roots);
+        for chunk in roots_bytes.chunks_exact(32) {
             let mut root = [0u8; 32];
-            root.copy_from_slice(&slice.collect::<Vec<u8>>());
+            root.copy_from_slice(chunk);
             roots.push(BitcoinNodeHash::from(root));
         }
+
         Ok(Stump { leaves, roots })
     }
 
@@ -381,9 +394,9 @@ where
             .await?;
 
         let agreed = match acc {
-            (Some(acc1), Some(_)) => Self::parse_acc(acc1)?,
-            (Some(acc1), None) => Self::parse_acc(acc1)?,
-            (None, Some(acc2)) => Self::parse_acc(acc2)?,
+            (Some(acc1), Some(_)) => Self::parse_acc(&acc1)?,
+            (Some(acc1), None) => Self::parse_acc(&acc1)?,
+            (None, Some(acc2)) => Self::parse_acc(&acc2)?,
             (None, None) => return Ok(PeerCheck::BothUnresponsivePeers),
         };
 
@@ -415,8 +428,8 @@ where
 
         let acc1 = self.update_acc(agreed, &inflight_block.block, proof, &leaf_data, fork + 1)?;
 
-        let peer1_acc = Self::parse_acc(peer1_acc)?;
-        let peer2_acc = Self::parse_acc(peer2_acc)?;
+        let peer1_acc = Self::parse_acc(&peer1_acc)?;
+        let peer2_acc = Self::parse_acc(&peer2_acc)?;
 
         if peer1_acc != acc1 && peer2_acc != acc1 {
             return Ok(PeerCheck::BothLying);
@@ -544,7 +557,7 @@ where
         match self.find_accumulator_for_block_step(hash, height).await {
             Ok(FindAccResult::Found(acc)) => {
                 // everyone agrees. Just parse the accumulator and finish-up
-                let acc = Self::parse_acc(acc)?;
+                let acc = Self::parse_acc(&acc)?;
                 return Ok(acc);
             }
             Ok(FindAccResult::KeepLooking(mut accs)) => {
@@ -594,7 +607,7 @@ where
         //we should have only one candidate left
         assert_eq!(candidate_accs.len(), 1);
 
-        Self::parse_acc(candidate_accs.pop().unwrap().1)
+        Self::parse_acc(&candidate_accs.pop().unwrap().1)
     }
 
     /// If we get an empty `headers` message, our next action depends on which state are
@@ -1034,5 +1047,118 @@ where
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use floresta_chain::ChainState;
+    use floresta_chain::FlatChainStore;
+    use rustreexo::node_hash::BitcoinNodeHash;
+
+    use super::*;
+
+    type TestNode = UtreexoNode<Arc<ChainState<FlatChainStore>>, ChainSelector>;
+
+    fn parse_acc(acc: &[u8]) -> Result<Stump, WireError> {
+        TestNode::parse_acc(acc)
+    }
+
+    fn serialize_acc(leaves: u64, root_count: usize) -> Vec<u8> {
+        let mut acc = leaves.to_le_bytes().to_vec();
+        acc.extend(std::iter::repeat_n(0u8, 32 * root_count));
+        acc
+    }
+
+    #[test]
+    fn test_parse_acc() {
+        let empty_wire = &[] as &[u8];
+        let empty_stump = parse_acc(empty_wire).expect("empty wire should parse");
+        assert_eq!(empty_stump, Stump::default());
+
+        let zero_leaves_wire = [0u8; 8];
+        let zero_leaves_stump =
+            parse_acc(&zero_leaves_wire).expect("zero-leaves wire should parse");
+        assert_eq!(zero_leaves_stump, Stump::default());
+
+        let header_truncated_min_wire = vec![0u8; 1];
+        let header_truncated_min = parse_acc(&header_truncated_min_wire);
+        assert!(matches!(
+            header_truncated_min,
+            Err(WireError::PeerMisbehaving)
+        ));
+
+        let header_truncated_max_wire = vec![0u8; 7];
+        let header_truncated_max = parse_acc(&header_truncated_max_wire);
+        assert!(matches!(
+            header_truncated_max,
+            Err(WireError::PeerMisbehaving)
+        ));
+
+        let roots_missing_wire = 1u64.to_le_bytes().to_vec();
+        let roots_missing = parse_acc(&roots_missing_wire);
+        assert!(matches!(roots_missing, Err(WireError::PeerMisbehaving)));
+
+        let mut roots_one_byte_short_wire = 1u64.to_le_bytes().to_vec();
+        roots_one_byte_short_wire.extend([0u8; 31]);
+        let roots_one_byte_short = parse_acc(&roots_one_byte_short_wire);
+        assert!(matches!(
+            roots_one_byte_short,
+            Err(WireError::PeerMisbehaving)
+        ));
+
+        let roots_excess_count_wire = serialize_acc(8, 2);
+        let roots_excess_count = parse_acc(&roots_excess_count_wire);
+        assert!(matches!(
+            roots_excess_count,
+            Err(WireError::PeerMisbehaving)
+        ));
+
+        let mut roots_trailing_byte_wire = serialize_acc(1, 1);
+        roots_trailing_byte_wire.push(0);
+        let roots_trailing_byte = parse_acc(&roots_trailing_byte_wire);
+        assert!(matches!(
+            roots_trailing_byte,
+            Err(WireError::PeerMisbehaving)
+        ));
+
+        let leaves_8_one_root_wire = serialize_acc(8, 1);
+        let leaves_8_one_root_stump =
+            parse_acc(&leaves_8_one_root_wire).expect("leaves=8 one-root wire should parse");
+        assert_eq!(
+            leaves_8_one_root_stump,
+            Stump {
+                leaves: 8,
+                roots: vec![BitcoinNodeHash::from([0u8; 32])],
+            },
+        );
+
+        let mut leaves_1_nonzero_root_wire = 1u64.to_le_bytes().to_vec();
+        leaves_1_nonzero_root_wire.extend([1u8; 32]);
+        let leaves_1_nonzero_root_stump = parse_acc(&leaves_1_nonzero_root_wire)
+            .expect("leaves=1 nonzero root wire should parse");
+        assert_eq!(
+            leaves_1_nonzero_root_stump,
+            Stump {
+                leaves: 1,
+                roots: vec![BitcoinNodeHash::from([1u8; 32])],
+            },
+        );
+
+        let leaves_3_two_roots_wire = serialize_acc(3, 2);
+        let leaves_3_two_roots_stump =
+            parse_acc(&leaves_3_two_roots_wire).expect("leaves=3 two-root wire should parse");
+        assert_eq!(
+            leaves_3_two_roots_stump,
+            Stump {
+                leaves: 3,
+                roots: vec![
+                    BitcoinNodeHash::from([0u8; 32]),
+                    BitcoinNodeHash::from([0u8; 32]),
+                ],
+            },
+        );
     }
 }
