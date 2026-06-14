@@ -44,6 +44,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+use tracing::warn;
 
 use crate::get_arg;
 use crate::json_rpc_res;
@@ -53,6 +54,11 @@ use crate::request::Request;
 ///
 /// One day, in seconds
 const REBROADCAST_INTERVAL: u64 = 24 * 3600;
+
+/// Max time to wait for a new plaintext client to send its first byte before
+/// dropping the connection. Bounds the TLS-on-plaintext sniff so a silent
+/// client cannot park the accept loop.
+const PEEK_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Type alias for u32 representing a ClientId
 type ClientId = u32;
@@ -107,7 +113,7 @@ impl<S: AsyncStream> TcpActor<S> {
                             break;
                         }
                         Err(e) => {
-                            error!("Error reading from client: {e:?}");
+                            warn!("Error reading from client: {e:?}");
                             self.message_transmitter
                                 .send(Message::Disconnect(self.client_id))
                                 .expect("Main loop is broken");
@@ -860,6 +866,32 @@ pub async fn client_accept_loop(
                     }
                 }
             } else {
+                // TLS ClientHello starts with 0x16. Peek doesn't consume bytes;
+                // the timeout prevents a silent client from parking the loop.
+                let mut first_byte = [0u8; 1];
+                match tokio::time::timeout(PEEK_TIMEOUT, stream.peek(&mut first_byte)).await {
+                    Ok(Ok(0)) => continue,
+                    Ok(Ok(n)) if n >= 1 && first_byte[0] == 0x16 => {
+                        warn!(
+                            "Client appears to be speaking TLS on the plaintext Electrum port. \
+                             Disable TLS in your wallet, or connect to the SSL Electrum port instead."
+                        );
+                        continue;
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        warn!("Error peeking from new client: {e:?}");
+                        continue;
+                    }
+                    Err(_) => {
+                        warn!(
+                            "New client sent no data within {}s; dropping connection",
+                            PEEK_TIMEOUT.as_secs()
+                        );
+                        continue;
+                    }
+                }
+
                 let client = Arc::new(Client::new(id_count, stream, message_transmitter.clone()));
                 message_transmitter
                     .send(Message::NewClient((client.client_id, client)))
@@ -986,6 +1018,7 @@ mod test {
     use tokio_rustls::rustls::pki_types::pem::PemObject;
 
     use super::ElectrumServer;
+    use super::PEEK_TIMEOUT;
     use super::client_accept_loop;
 
     /// A size used for mempool tests, no specific meaning just a randomly
@@ -1490,5 +1523,83 @@ mod test {
             batch_response[6]["result"][0],
             format!("Floresta {}", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    /// Spawn a bare `client_accept_loop` and return the port plus a `Message` receiver.
+    async fn spawn_bare_accept_loop() -> (u16, tokio::sync::mpsc::UnboundedReceiver<super::Message>)
+    {
+        let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        task::spawn(client_accept_loop(listener, tx, None));
+        (port, rx)
+    }
+
+    /// Upper bound for asserting a `Message` arrives on the happy path.
+    const RECV_TIMEOUT: Duration = Duration::from_secs(2);
+    /// Upper bound for asserting *no* `Message` arrives.
+    const NO_RECV_WINDOW: Duration = Duration::from_millis(500);
+    /// Slack added to `PEEK_TIMEOUT` for the silent-client test.
+    const PEEK_TIMEOUT_SLACK: Duration = Duration::from_secs(3);
+
+    /// Peek must not consume bytes from a real plaintext client.
+    #[tokio::test]
+    async fn accept_loop_passes_plaintext_through() {
+        let (port, mut rx) = spawn_bare_accept_loop().await;
+
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"server.version\",\"id\":1}\n")
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let new_client = timeout(RECV_TIMEOUT, rx.recv()).await.unwrap();
+        assert!(matches!(new_client, Some(super::Message::NewClient(_))));
+
+        let msg = timeout(RECV_TIMEOUT, rx.recv()).await.unwrap();
+        match msg {
+            Some(super::Message::Message((_, line))) => {
+                assert!(line.contains("server.version"));
+            }
+            _ => panic!("expected Message::Message"),
+        }
+    }
+
+    /// TLS ClientHello on the plaintext port must not register a client.
+    #[tokio::test]
+    async fn accept_loop_drops_tls_clienthello_on_plaintext_port() {
+        let (port, mut rx) = spawn_bare_accept_loop().await;
+
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(&[0x16, 0x03, 0x01, 0x00, 0x00])
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let res = timeout(NO_RECV_WINDOW, rx.recv()).await;
+        assert!(
+            res.is_err(),
+            "TLS prefix on plaintext port must not register a client"
+        );
+    }
+
+    /// A silent client must not park the loop; a follow-up plaintext client is still accepted.
+    #[tokio::test]
+    async fn accept_loop_survives_silent_client() {
+        let (port, mut rx) = spawn_bare_accept_loop().await;
+
+        let _idle = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        let mut good = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        good.write_all(b"{\"id\":1}\n").await.unwrap();
+        good.flush().await.unwrap();
+
+        // Peek timeout is 5s; allow slack.
+        let new_client = timeout(PEEK_TIMEOUT + PEEK_TIMEOUT_SLACK, rx.recv())
+            .await
+            .unwrap();
+        assert!(matches!(new_client, Some(super::Message::NewClient(_))));
     }
 }
