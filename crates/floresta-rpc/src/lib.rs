@@ -42,6 +42,7 @@ mod tests {
     use rcgen::generate_simple_self_signed;
 
     use crate::jsonrpc_client::Client;
+    use crate::jsonrpc_client::JsonRPCConfig;
     use crate::rpc::FlorestaRPC;
     use crate::rpc_types::GetBlockHeaderRes;
     use crate::rpc_types::GetBlockRes;
@@ -108,7 +109,16 @@ mod tests {
             .spawn()
             .unwrap_or_else(|e| panic!("Couldn't launch florestad at {florestad_path}: {e}"));
 
-        let client = Client::new(format!("http://127.0.0.1:{port}"));
+        // florestad writes the cookie file before binding the RPC port, so poll
+        // for it to appear and use it to authenticate the test client.
+        let cookie_path = format!("{dirname}/regtest/.cookie");
+        let (user, pass) = read_cookie(&cookie_path, &mut fld);
+
+        let client = Client::new_with_config(JsonRPCConfig {
+            url: format!("http://127.0.0.1:{port}"),
+            user: Some(user),
+            pass: Some(pass),
+        });
 
         let mut retries = 10;
         loop {
@@ -128,6 +138,25 @@ mod tests {
         }
 
         (Florestad { proc: fld }, client)
+    }
+
+    /// Poll for the RPC cookie file and split it into (user, pass) on the first
+    /// `:`. Kills `fld` and panics if the cookie does not appear within 30s.
+    fn read_cookie(path: &str, fld: &mut Child) -> (String, String) {
+        let mut retries = 30;
+        loop {
+            if let Ok(line) = fs::read_to_string(path) {
+                if let Some((user, pass)) = line.split_once(':') {
+                    return (user.to_string(), pass.to_string());
+                }
+            }
+            if retries == 0 {
+                fld.kill().unwrap();
+                panic!("Cookie file {path} did not appear within 30 seconds");
+            }
+            retries -= 1;
+            sleep(Duration::from_secs(1));
+        }
     }
 
     fn get_available_port() -> u16 {

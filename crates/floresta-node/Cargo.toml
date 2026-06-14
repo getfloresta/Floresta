@@ -10,10 +10,12 @@ authors = ["Floresta Developers <contact@getfloresta.org>"]
 [dependencies]
 # All dependencies MUST be pinned precisely with `X.Y.z`
 axum = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 bitcoin = { workspace = true }
 corepc-types = { workspace = true }
 dns-lookup = { workspace = true }
 miniscript = { workspace = true, features = ["std"] }
+rand = { workspace = true }
 rcgen = { workspace = true }
 rustreexo = { workspace = true }
 serde = { workspace = true }
@@ -48,7 +50,7 @@ libc = "=0.2.186"
 [features]
 compact-filters = ["dep:floresta-compact-filters"]
 zmq-server = ["dep:zmq"]
-json-rpc = ["dep:axum", "dep:tower-http", "compact-filters"]
+json-rpc = ["dep:axum", "dep:base64", "dep:tower-http", "compact-filters"]
 default = ["json-rpc"]
 metrics = ["dep:metrics", "floresta-wire/metrics", "floresta-chain/metrics"]
 
