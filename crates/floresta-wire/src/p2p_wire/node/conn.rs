@@ -13,7 +13,7 @@ use floresta_chain::ChainBackend;
 use floresta_common::Ema;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
-use floresta_mempool::Mempool;
+use floresta_domain::mempool::MempoolBase;
 use rand::Rng;
 use tokio::net::tcp::WriteHalf;
 use tokio::spawn;
@@ -269,7 +269,7 @@ where
         peer_address: LocalAddress,
         requests_rx: UnboundedReceiver<NodeRequest>,
         peer_id_count: u32,
-        mempool: Arc<Mutex<Mempool>>,
+        mempool: Arc<Mutex<dyn MempoolBase>>,
         network: Network,
         node_tx: UnboundedSender<NodeNotification>,
         our_user_agent: String,
@@ -317,7 +317,7 @@ where
     pub(crate) async fn open_proxy_connection(
         proxy: SocketAddr,
         kind: ConnectionKind,
-        mempool: Arc<Mutex<Mempool>>,
+        mempool: Arc<Mutex<dyn MempoolBase>>,
         network: Network,
         node_tx: UnboundedSender<NodeNotification>,
         peer_address: LocalAddress,

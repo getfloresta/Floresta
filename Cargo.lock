@@ -1096,6 +1096,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "floresta-domain"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "floresta-chain",
+ "rustreexo",
+]
+
+[[package]]
 name = "floresta-electrum"
 version = "0.5.0"
 dependencies = [
@@ -1138,6 +1147,7 @@ dependencies = [
  "bitcoin",
  "floresta-chain",
  "floresta-common",
+ "floresta-domain",
  "rand 0.9.4",
  "rustreexo",
  "tracing",
@@ -1154,6 +1164,7 @@ dependencies = [
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
+ "floresta-domain",
  "floresta-electrum",
  "floresta-mempool",
  "floresta-watch-only",
@@ -1215,6 +1226,7 @@ dependencies = [
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
+ "floresta-domain",
  "floresta-mempool",
  "metrics",
  "rand 0.9.4",
