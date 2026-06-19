@@ -52,13 +52,13 @@ class TestGetBlockheader:
         with pytest.raises(HTTPError):
             self.florestad.rpc.get_blockheader(invalid_hash, True)
 
-        self.bitcoind.rpc.generate_block(2017)
+        self.bitcoind.rpc.generate(2017)
         # Sleep is required to ensure blocks have different timestamps. In regtest, blocks are mined
         # almost instantaneously, so without this sleep, block timestamps would be nearly identical.
         # We need different timestamps to cause the median time of recent blocks to be different
         # from earlier blocks, which is necessary for proper testing.
         time.sleep(1)
-        self.bitcoind.rpc.generate_block(5)
+        self.bitcoind.rpc.generate(5)
 
         self.node_manager.connect_nodes(self.florestad, self.bitcoind)
 
