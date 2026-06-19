@@ -9,6 +9,7 @@ import random
 import socket
 import subprocess
 
+from test_framework.constants import FLORESTA_TEMP_DIR
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
@@ -26,12 +27,12 @@ class Utility:
         Get path for florestad used in integration tests, generally set on
         $FLORESTA_TEMP_DIR/binaries
         """
-        if os.getenv("FLORESTA_TEMP_DIR") is None:
+        if FLORESTA_TEMP_DIR is None:
             raise RuntimeError(
                 "FLORESTA_TEMP_DIR not set. "
                 + " Please set it to the path of the integration test directory."
             )
-        return os.getenv("FLORESTA_TEMP_DIR")
+        return FLORESTA_TEMP_DIR
 
     @staticmethod
     def get_git_describe():
@@ -48,6 +49,17 @@ class Utility:
             ) from exc
 
         return git_describe
+
+    @staticmethod
+    def get_log_path():
+        """
+        Get the path for the test log file,
+        """
+        log_dir = os.path.join(
+            Utility.get_integration_test_dir(), "logs", Utility.get_git_describe()
+        )
+        os.makedirs(log_dir, exist_ok=True)
+        return log_dir
 
     @staticmethod
     def get_available_random_port_by_range(start: int, end: int):
