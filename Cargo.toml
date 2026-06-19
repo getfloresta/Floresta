@@ -58,7 +58,7 @@ rand = "=0.9.4"
 rcgen = { version = "=0.14.7", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustreexo = "=0.5.0"
 serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.150"
+serde_json = { version = "=1.0.150", features = ["preserve_order"] }
 sha2 = { version = "=0.10.9", default-features = false }
 spin = { version = "=0.10.0", default-features = false, features = ["spin_mutex", "rwlock"] }
 tempfile = "=3.27.0"

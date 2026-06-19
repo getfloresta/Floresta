@@ -18,9 +18,6 @@
 #[cfg(feature = "with-jsonrpc")]
 pub mod jsonrpc_client;
 
-#[cfg(not(feature = "async"))]
-pub mod rpc;
-
 pub mod rpc_interfaces;
 pub mod rpc_types;
 

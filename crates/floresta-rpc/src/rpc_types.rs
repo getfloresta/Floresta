@@ -361,3 +361,21 @@ impl FromStr for AddNodeCommand {
 }
 
 impl error::Error for Error {}
+
+/// Parses a JSON array string into a `Vec<T>`.
+///
+/// Used as a clap `value_parser` for fields like `txids` that accept
+/// a JSON array on the command line, e.g.:
+///
+/// ```text
+/// '["txid1", "txid2"]'
+/// ```
+#[cfg(feature = "clap")]
+pub fn parse_json_array<T: FromStr>(s: &str) -> Result<Vec<T>, String> {
+    let strings: Vec<String> =
+        serde_json::from_str(s).map_err(|e| format!("invalid JSON array: {e}"))?;
+    strings
+        .into_iter()
+        .map(|s| T::from_str(&s).map_err(|_| format!("failed to parse item: {s}")))
+        .collect()
+}

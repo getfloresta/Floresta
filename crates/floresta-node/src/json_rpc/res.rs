@@ -161,15 +161,6 @@ pub mod jsonrpc_interface {
         /// Rescan requested with invalid values.
         InvalidRescanVal,
 
-        /// A required parameter is missing from the request.
-        MissingParameter(String),
-
-        /// A parameter have an unexpected type (e.g. number where string was expected).
-        InvalidParameterType(String),
-
-        /// A parameter is malformated, the parameter MUST be an array or an object
-        InvalidParameterStructure(String),
-
         /// The request contains a invalid jsonrpc version
         InvalidJsonRpcVersion,
 
@@ -191,11 +182,17 @@ pub mod jsonrpc_interface {
         /// Chain-level error (e.g. chain not synced or invalid).
         Chain,
 
-        /// The JSON-RPC request itself is malformed.
-        InvalidRequest,
+        /// A required parameter is missing from the request.
+        MissingParameter(String),
+
+        /// A parameter has an unexpected type (e.g. number where string was expected).
+        InvalidParameterType(String),
 
         /// The requested RPC method does not exist.
         MethodNotFound,
+
+        /// The JSON-RPC request itself is malformed.
+        InvalidRequest,
 
         /// Failed to decode the request payload.
         Decode(String),
@@ -223,9 +220,6 @@ pub mod jsonrpc_interface {
 
         /// Overflow when calculating cumulative chain work.
         ChainWorkOverflow,
-
-        /// Invalid `addnode` command or parameters.
-        InvalidAddnodeCommand,
 
         /// Invalid `disconnectnode` command (both address and node ID were provided).
         InvalidDisconnectNodeCommand,
@@ -274,13 +268,11 @@ pub mod jsonrpc_interface {
                 | Self::Decode(_)
                 | Self::MempoolAccept(_)
                 | Self::InvalidMemInfoMode
-                | Self::InvalidAddnodeCommand
                 | Self::InvalidDisconnectNodeCommand
                 | Self::InvalidTimestamp
                 | Self::InvalidRescanVal
                 | Self::NoAddressesToRescan
                 | Self::InvalidParameterType(_)
-                | Self::InvalidParameterStructure(_)
                 | Self::MissingParameter(_)
                 | Self::InvalidNetAddress(_)
                 | Self::Wallet(_) => StatusCode::BAD_REQUEST,
@@ -328,7 +320,19 @@ pub mod jsonrpc_interface {
                     data: None,
                 },
 
-                // Invalid params - invalid method parameters
+                // Invalid params
+                Self::MissingParameter(param) => RpcError {
+                    code: INVALID_METHOD_PARAMETERS,
+                    message: "Missing parameter".into(),
+                    data: Some(Value::String(param.clone())),
+                },
+                Self::InvalidParameterType(param) => RpcError {
+                    code: INVALID_METHOD_PARAMETERS,
+                    message: "Invalid parameter type".into(),
+                    data: Some(Value::String(param.clone())),
+                },
+
+                // Invalid method parameters (method-level)
                 Self::InvalidHex => RpcError {
                     code: INVALID_METHOD_PARAMETERS,
                     message: "Invalid hex encoding".into(),
@@ -359,11 +363,6 @@ pub mod jsonrpc_interface {
                     message: "Invalid meminfo mode".into(),
                     data: None,
                 },
-                Self::InvalidAddnodeCommand => RpcError {
-                    code: INVALID_METHOD_PARAMETERS,
-                    message: "Invalid addnode command".into(),
-                    data: None,
-                },
                 Self::InvalidDisconnectNodeCommand => RpcError {
                     code: INVALID_METHOD_PARAMETERS,
                     message: "Invalid disconnectnode command".into(),
@@ -374,27 +373,10 @@ pub mod jsonrpc_interface {
                     message: "Invalid rescan values".into(),
                     data: None,
                 },
-                Self::InvalidParameterType(param) => RpcError {
-                    code: INVALID_METHOD_PARAMETERS,
-                    message: "Invalid parameter type".into(),
-                    data: Some(Value::String(param.clone())),
-                },
-                Self::InvalidParameterStructure(param) => RpcError {
-                    code: INVALID_METHOD_PARAMETERS,
-                    message:
-                        "A parameter is malformated, the parameter MUST be an array or an object"
-                            .into(),
-                    data: Some(Value::String(param.clone())),
-                },
                 Self::InvalidJsonRpcVersion => RpcError {
                     code: INVALID_REQUEST,
                     message: "The request contains a invalid jsonrpc version".into(),
                     data: None,
-                },
-                Self::MissingParameter(param) => RpcError {
-                    code: INVALID_METHOD_PARAMETERS,
-                    message: "Missing parameter".into(),
-                    data: Some(Value::String(param.clone())),
                 },
                 Self::InvalidNetAddress(err) => RpcError {
                     code: INVALID_METHOD_PARAMETERS,
@@ -470,6 +452,56 @@ pub mod jsonrpc_interface {
                     message: "Filters error".into(),
                     data: Some(Value::String(msg.clone())),
                 },
+            }
+        }
+    }
+
+    impl From<floresta_rpc::rpc_interfaces::RpcCommandError> for JsonRpcError {
+        fn from(err: floresta_rpc::rpc_interfaces::RpcCommandError) -> Self {
+            use floresta_rpc::rpc_interfaces::RpcCommandError;
+            match err {
+                RpcCommandError::MethodNotFound(_) => Self::MethodNotFound,
+                RpcCommandError::MissingParameter { field, .. } => Self::MissingParameter(field),
+                RpcCommandError::InvalidParameterType { detail, .. } => {
+                    Self::InvalidParameterType(detail)
+                }
+                RpcCommandError::Other(_) => Self::InvalidRequest,
+            }
+        }
+    }
+
+    /// Converts a [`serde_json::Error`] from deserializing a [`JsonRpcEnvelope`] into the
+    /// appropriate [`JsonRpcError`].
+    ///
+    /// The [`JsonRpcEnvelope`] `Deserialize` impl passes [`RpcCommandError`] through
+    /// `D::Error::custom()`, which flattens it to a string. This impl classifies
+    /// those strings back into the correct JSON-RPC spec error variants.
+    ///
+    /// [`JsonRpcEnvelope`]: floresta_rpc::rpc_interfaces::JsonRpcEnvelope
+    /// [`RpcCommandError`]: floresta_rpc::rpc_interfaces::RpcCommandError
+    impl From<serde_json::Error> for JsonRpcError {
+        fn from(err: serde_json::Error) -> Self {
+            let msg = err.to_string();
+            if msg.contains("unknown method") {
+                Self::MethodNotFound
+            } else if msg.contains("missing parameter") {
+                let field = msg
+                    .split("missing parameter: ")
+                    .nth(1)
+                    .unwrap_or("unknown")
+                    .to_string();
+                Self::MissingParameter(field)
+            } else if msg.contains("invalid parameter type") {
+                let detail = msg
+                    .split("invalid parameter type: ")
+                    .nth(1)
+                    .unwrap_or(&msg)
+                    .to_string();
+                Self::InvalidParameterType(detail)
+            } else if msg.contains("missing field") {
+                Self::InvalidRequest
+            } else {
+                Self::Decode(msg)
             }
         }
     }

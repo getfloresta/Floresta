@@ -4,7 +4,6 @@ use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,17 +17,17 @@ use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
 use axum::routing::post;
 use bitcoin::Network;
-use bitcoin::Txid;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_rpc::rpc_interfaces::BlockchainRpc;
 use floresta_rpc::rpc_interfaces::ControlRpc;
+use floresta_rpc::rpc_interfaces::JsonRpcEnvelope;
+use floresta_rpc::rpc_interfaces::JsonRpcVersion;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
 use floresta_rpc::rpc_interfaces::RawTransactionRpc;
-use floresta_rpc::rpc_interfaces::RpcMethods;
+use floresta_rpc::rpc_interfaces::RpcCommand;
 use floresta_rpc::rpc_interfaces::WalletRpc;
-use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
@@ -41,11 +40,7 @@ use tracing::error;
 use tracing::info;
 
 use super::res::jsonrpc_interface::JsonRpcError;
-use crate::json_rpc::request::RpcRequest;
-use crate::json_rpc::request::arg_parser::get_at;
-use crate::json_rpc::request::arg_parser::get_with_default;
-use crate::json_rpc::request::arg_parser::try_into_optional;
-use crate::json_rpc::res::jsonrpc_interface::Response;
+use super::res::jsonrpc_interface::Response;
 
 /// Expect message for `serde_json` serialization of types that implement `Serialize`.
 pub(super) const SERIALIZATION_EXPECT_MSG: &str = "types used in RPC responses implement Serialize";
@@ -84,234 +79,110 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
 async fn handle_json_rpc_request(
-    req: RpcRequest,
+    command: RpcCommand,
     state: Arc<RpcImpl<impl RpcChain>>,
 ) -> Result<Value> {
-    let RpcRequest {
-        jsonrpc,
-        method,
-        params,
-        id,
-    } = req;
-
-    if let Some(version) = jsonrpc {
-        if !["1.0", "2.0"].contains(&version.as_str()) {
-            return Err(JsonRpcError::InvalidJsonRpcVersion);
-        }
+    /// Awaits an RPC call and serializes its result to a JSON [`Value`].
+    macro_rules! dispatch {
+        ($call:expr) => {
+            $call
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        };
     }
 
-    state.inflight.write().await.insert(
-        id.clone(),
-        InflightRpc {
-            method: method.clone(),
-            when: Instant::now(),
-        },
-    );
-    let method = RpcMethods::from_str(&method).map_err(|_| JsonRpcError::MethodNotFound)?;
-    let params = params.unwrap_or_default();
-
-    match method {
+    match command {
         // Blockchain
-        RpcMethods::FindTxOut => {
-            let txid = get_at(&params, 0, "txid")?;
-            let vout = get_at(&params, 1, "vout")?;
-            let script = get_at(&params, 2, "script")?;
-            let height = get_at(&params, 3, "height")?;
-
-            state
-                .clone()
-                .find_tx_out(txid, vout, script, height)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-        RpcMethods::GetBestBlockHash => state
-            .get_best_block_hash()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetBlock => {
-            let hash = get_at(&params, 0, "block_hash")?;
-            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
-
-            state
-                .get_block(hash, verbosity)
-                .await
-                .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
-        }
-        RpcMethods::GetBlockFromPeer => {
-            let hash = get_at(&params, 0, "block_hash")?;
-
-            state.get_block(hash, Some(0)).await?;
-
+        RpcCommand::FindTxOut {
+            txid,
+            vout,
+            script,
+            height,
+        } => dispatch!(state.find_tx_out(txid, vout, script, height)),
+        RpcCommand::GetBestBlockHash => dispatch!(state.get_best_block_hash()),
+        RpcCommand::GetBlock {
+            block_hash,
+            verbosity,
+        } => dispatch!(state.get_block(block_hash, verbosity)),
+        RpcCommand::GetBlockFromPeer { block_hash } => {
+            state.get_block(block_hash, Some(0)).await?;
             Ok(Value::Null)
         }
-        RpcMethods::GetBlockchainInfo => state
-            .get_blockchain_info()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetBlockCount => state
-            .get_block_count()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetBlockHash => {
-            let height = get_at(&params, 0, "block_height")?;
-            state
-                .get_block_hash(height)
-                .await
-                .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
+        RpcCommand::GetBlockchainInfo => dispatch!(state.get_blockchain_info()),
+        RpcCommand::GetBlockCount => dispatch!(state.get_block_count()),
+        RpcCommand::GetBlockHash { block_height } => {
+            dispatch!(state.get_block_hash(block_height))
         }
-
-        RpcMethods::GetBlockHeader => {
-            let hash = get_at(&params, 0, "block_hash")?;
-            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
-
-            state
-                .get_block_header(hash, verbosity)
-                .await
-                .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
+        RpcCommand::GetBlockHeader {
+            block_hash,
+            verbosity,
+        } => dispatch!(state.get_block_header(block_hash, verbosity)),
+        RpcCommand::GetDeploymentInfo { blockhash } => {
+            dispatch!(state.get_deployment_info(blockhash))
         }
-        RpcMethods::GetDeploymentInfo => {
-            let blockhash = try_into_optional(get_at(&params, 0, "blockhash"))?;
-
-            state
-                .get_deployment_info(blockhash)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        RpcCommand::GetDifficulty => dispatch!(state.get_difficulty()),
+        RpcCommand::GetTxOut {
+            txid,
+            vout,
+            include_mempool,
+        } => dispatch!(state.get_tx_out(txid, vout, include_mempool.unwrap_or(false))),
+        RpcCommand::GetTxOutProof { txids, block_hash } => {
+            dispatch!(state.get_txout_proof(&txids, block_hash))
         }
-        RpcMethods::GetDifficulty => state
-            .get_difficulty()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetTxOut => {
-            let txid = get_at(&params, 0, "txid")?;
-            let vout = get_at(&params, 1, "vout")?;
-            let include_mempool = get_with_default(&params, 2, "include_mempool", false)?;
-
-            state
-                .get_tx_out(txid, vout, include_mempool)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-        RpcMethods::GetTxOutProof => {
-            let txids: Vec<Txid> = get_at(&params, 0, "txids")?;
-            let block_hash = try_into_optional(get_at(&params, 1, "block_hash"))?;
-
-            state
-                .get_txout_proof(&txids, block_hash)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-        RpcMethods::GetRoots => state
-            .get_roots()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcCommand::GetRoots => dispatch!(state.get_roots()),
 
         // Wallet
-        RpcMethods::LoadDescriptor => {
-            let descriptor = get_at(&params, 0, "descriptor")?;
-
-            state
-                .load_descriptor(descriptor)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        RpcCommand::LoadDescriptor { descriptor } => {
+            dispatch!(state.load_descriptor(descriptor))
         }
-        RpcMethods::ListDescriptors => {
-            return state
-                .list_descriptors()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        RpcMethods::RescanBlockchain => {
-            let start_height = try_into_optional(get_at(&params, 0, "start_height"))?;
-            let stop_height = try_into_optional(get_at(&params, 1, "stop_height"))?;
-            let use_timestamp = get_with_default(&params, 2, "use_timestamp", false)?;
-            let confidence = try_into_optional(get_at(&params, 3, "confidence"))?;
-
-            state
-                .rescan_blockchain(start_height, stop_height, use_timestamp, confidence)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
+        RpcCommand::ListDescriptors => dispatch!(state.list_descriptors()),
+        RpcCommand::RescanBlockchain {
+            start_height,
+            stop_height,
+            use_timestamp,
+            confidence,
+        } => dispatch!(state.rescan_blockchain(
+            start_height,
+            stop_height,
+            use_timestamp.unwrap_or(false),
+            confidence,
+        )),
 
         // Network
-        RpcMethods::AddNode => {
-            let node = get_at(&params, 0, "node")?;
-            let command: String = get_at(&params, 1, "command")?;
-            let command = AddNodeCommand::from_str(&command)
-                .map_err(|_| JsonRpcError::InvalidAddnodeCommand)?;
-            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
-
-            state
-                .add_node(node, command, v2transport)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-        RpcMethods::DisconnectNode => {
-            let node_address = get_at(&params, 0, "node_address")?;
-            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
-
-            state
-                .disconnect_node(node_address, node_id)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-        RpcMethods::GetAddrManInfo => state
-            .get_addrman_info()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetConnectionCount => state
-            .get_connection_count()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetNetworkInfo => state
-            .get_network_info()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::GetPeerInfo => state
-            .get_peer_info()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::Ping => {
+        RpcCommand::AddNode {
+            node,
+            command,
+            v2transport,
+        } => dispatch!(state.add_node(node, command, v2transport.unwrap_or(false))),
+        RpcCommand::DisconnectNode {
+            node_address,
+            node_id,
+        } => dispatch!(state.disconnect_node(node_address, node_id)),
+        RpcCommand::GetAddrManInfo => dispatch!(state.get_addrman_info()),
+        RpcCommand::GetConnectionCount => dispatch!(state.get_connection_count()),
+        RpcCommand::GetNetworkInfo => dispatch!(state.get_network_info()),
+        RpcCommand::GetPeerInfo => dispatch!(state.get_peer_info()),
+        RpcCommand::Ping => {
             state.ping().await?;
-            Ok(serde_json::json!(null))
+            Ok(Value::Null)
         }
 
-        // RawTransactions
-        RpcMethods::SendRawTransaction => {
-            let tx = get_at(&params, 0, "hex")?;
-            state
-                .send_raw_transaction(tx)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        // RawTransaction
+        RpcCommand::SendRawTransaction { hex } => {
+            dispatch!(state.send_raw_transaction(hex))
         }
-        RpcMethods::GetRawTransaction => {
-            let txid = get_at(&params, 0, "txid")?;
-            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
-
-            state
-                .get_raw_transaction(txid, verbosity)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        RpcCommand::GetRawTransaction { txid, verbosity } => {
+            dispatch!(state.get_raw_transaction(txid, verbosity))
         }
 
         // Control
-        RpcMethods::Stop => state
-            .stop()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        RpcMethods::Uptime => {
-            Ok(serde_json::to_value(state.uptime().await?).expect(SERIALIZATION_EXPECT_MSG))
+        RpcCommand::Stop => dispatch!(state.stop()),
+        RpcCommand::Uptime => dispatch!(state.uptime()),
+        RpcCommand::GetMemoryInfo { mode } => {
+            let mode = mode.unwrap_or_else(|| "stats".to_string());
+            dispatch!(state.get_memory_info(mode))
         }
-        RpcMethods::GetMemoryInfo => {
-            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
-
-            let memory_info = state.get_memory_info(mode).await?;
-
-            Ok(serde_json::to_value(memory_info).expect(SERIALIZATION_EXPECT_MSG))
-        }
-        RpcMethods::GetRpcInfo => state
-            .get_rpc_info()
-            .await
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcCommand::GetRpcInfo => dispatch!(state.get_rpc_info()),
     }
 }
 
@@ -319,9 +190,32 @@ async fn json_rpc_request(
     State(state): State<Arc<RpcImpl<impl RpcChain>>>,
     body: Bytes,
 ) -> HttpResponse<Body> {
-    let Ok(req): std::result::Result<RpcRequest, _> = serde_json::from_slice(&body) else {
-        let error = JsonRpcError::InvalidRequest;
-        let body = Response::error(error.rpc_error(), Value::Null);
+    let JsonRpcEnvelope {
+        command,
+        jsonrpc,
+        id,
+    } = match serde_json::from_slice(&body) {
+        Ok(env) => env,
+        Err(err) => {
+            let error: JsonRpcError = err.into();
+            let id = serde_json::from_slice::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("id").cloned())
+                .unwrap_or(Value::Null);
+            let body = Response::error(error.rpc_error(), id);
+            return HttpResponse::builder()
+                .status(error.http_code())
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&body).expect(SERIALIZATION_EXPECT_MSG),
+                ))
+                .expect(HTTP_RESPONSE_EXPECT);
+        }
+    };
+
+    if let Some(JsonRpcVersion::Unknown(_)) = jsonrpc {
+        let error = JsonRpcError::InvalidJsonRpcVersion;
+        let body = Response::error(error.rpc_error(), id);
         return HttpResponse::builder()
             .status(error.http_code())
             .header("Content-Type", "application/json")
@@ -329,12 +223,20 @@ async fn json_rpc_request(
                 serde_json::to_vec(&body).expect(SERIALIZATION_EXPECT_MSG),
             ))
             .expect(HTTP_RESPONSE_EXPECT);
-    };
+    }
 
-    debug!("Received JSON-RPC request: {req:?}");
+    let method_name = command.method_name();
+    debug!("Received JSON-RPC request: method={method_name} id={id}");
 
-    let id = req.id.clone();
-    let method_res = handle_json_rpc_request(req, state.clone()).await;
+    state.inflight.write().await.insert(
+        id.clone(),
+        InflightRpc {
+            method: method_name,
+            when: Instant::now(),
+        },
+    );
+
+    let method_res = handle_json_rpc_request(command, state.clone()).await;
 
     state.inflight.write().await.remove(&id);
 
