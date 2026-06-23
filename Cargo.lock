@@ -1144,6 +1144,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "floresta-proc-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "floresta-rpc"
 version = "0.5.0"
 dependencies = [
