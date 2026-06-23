@@ -12,13 +12,161 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
+use quote::quote;
 use syn::Error;
 use syn::ItemEnum;
+use syn::ItemFn;
+use syn::ItemTrait;
+use syn::ReturnType;
 use syn::parse_macro_input;
 
 use crate::enum_str_map::FormattedEnumOptions;
 
 mod enum_str_map;
+
+/// A procedural macro attribute that makes a trait sync or async based on the 'async' feature flag.
+///
+/// When the 'async' feature is enabled, method return types are transformed to return
+/// `impl Future<Output = T>` instead of just `T`.
+///
+/// # Example
+///
+/// ```ignore
+/// use maybe_async::maybe_async;
+///
+/// #[maybe_async]
+/// trait Foo {
+///     fn method(&self, a: String) -> Result<(), String>;
+/// }
+/// ```
+///
+/// With the 'async' feature enabled, this will expand to:
+///
+/// ```ignore
+/// use std::future::Future;
+///
+/// trait Foo {
+///     fn method(&self, a: String) -> impl Future<Output = Result<(), String>>;
+/// }
+/// ```
+///
+/// Without the 'async' feature, the trait will be unchanged.
+#[proc_macro_attribute]
+pub fn maybe_async(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse the input token stream into a trait item
+    let input = parse_macro_input!(item as ItemTrait);
+
+    // If the async feature is enabled, transform the trait methods
+    #[cfg(feature = "async")]
+    {
+        let mut modified_items = Vec::new();
+
+        for item in input.items {
+            if let syn::TraitItem::Fn(mut method) = item {
+                // Transform the return type to wrap it in `impl Future<Output = ...>`
+                if let syn::ReturnType::Type(arrow, return_type) = method.sig.output {
+                    let new_return_type = quote! {
+                        impl ::core::future::Future<Output = #return_type>
+                    };
+
+                    method.sig.output = syn::ReturnType::Type(
+                        arrow,
+                        Box::new(syn::parse2(new_return_type).unwrap()),
+                    );
+                }
+                modified_items.push(syn::TraitItem::Fn(method));
+            } else {
+                modified_items.push(item);
+            }
+        }
+
+        let input = ItemTrait {
+            items: modified_items,
+            ..input
+        };
+
+        let output = quote! {
+            #input
+        };
+
+        output.into()
+    }
+    #[cfg(not(feature = "async"))]
+    {
+        // Without the async feature, just return the original trait
+        let output = quote! {
+            #input
+        };
+
+        output.into()
+    }
+}
+
+/// A helper procedural macro that transforms an async function into a sync function
+/// that returns `impl Future<Output = T>`.
+///
+/// This is useful when implementing traits transformed by `maybe_async` in async mode.
+/// Instead of writing the implementation with explicit future returns, you can write
+/// it with the `async` keyword and this macro will handle the transformation.
+///
+/// # Example
+///
+/// ```ignore
+/// #[to_future]
+/// async fn my_function(arg: String) -> Result<String, Error> {
+///     // Async code here...
+///     Ok("result".to_string())
+/// }
+/// ```
+///
+/// Will be transformed into:
+///
+/// ```ignore
+/// fn my_function(arg: String) -> impl Future<Output = Result<String, Error>> {
+///     async move {
+///         // Async code here...
+///         Ok("result".to_string())
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn to_future(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+
+    // Extract function information
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let block = &input.block;
+    let attrs = &input.attrs;
+
+    // Check if the function is already async, error if not
+    if sig.asyncness.is_none() {
+        let error = quote! {
+            compile_error!("The #[to_future] attribute can only be used on async functions");
+        };
+        return TokenStream::from(error);
+    }
+
+    // Extract output type
+    let return_type = match &sig.output {
+        ReturnType::Default => quote! { () },
+        ReturnType::Type(_, ty) => quote! { #ty },
+    };
+
+    // Create a new function signature without the async keyword
+    let fn_name = &sig.ident;
+    let generics = &sig.generics;
+    let inputs = &sig.inputs;
+
+    let output = quote! {
+        #(#attrs)*
+        #vis fn #fn_name #generics(#inputs) -> impl ::core::future::Future<Output = #return_type> {
+            async move #block
+        }
+    };
+
+    output.into()
+}
 
 /// Generates a bidirectional mapping between enum variants and strings.
 ///
