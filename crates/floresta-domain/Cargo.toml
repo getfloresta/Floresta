@@ -23,8 +23,9 @@ bitcoin = { workspace = true, features = ["serde", "std"] }
 floresta-chain = { workspace = true }
 
 [features]
-default = ["mempool"]
+default = ["mempool", "wallet"]
 mempool = []
+wallet = []
 
 [lints]
 workspace = true

@@ -13,6 +13,7 @@ use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use floresta_common::impl_error_from;
 use floresta_common::prelude::*;
+use floresta_domain::wallet::error::WatchOnlyError;
 use kv::Bucket;
 use kv::Config;
 use kv::Store;
@@ -21,7 +22,6 @@ use super::AddressCacheDatabase;
 use super::CachedAddress;
 use super::CachedTransaction;
 use super::Stats;
-use crate::WatchOnlyError;
 
 /// A key-value database for the watch-only wallet.
 pub struct KvDatabase(Store, Bucket<'static, String, Vec<u8>>);
