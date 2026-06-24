@@ -1090,6 +1090,7 @@ dependencies = [
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
+ "floresta-domain",
  "floresta-mempool",
  "floresta-watch-only",
  "floresta-wire",
