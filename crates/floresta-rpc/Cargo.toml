@@ -23,6 +23,7 @@ corepc-types = { workspace = true }
 jsonrpc = { version = "=0.19.0", features = ["bitreq_http"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+maybe_async = { git = "https://github.com/Davidson-Souza/maybe-async2.git", branch = "master" }
 
 [dev-dependencies]
 rand = { workspace = true }
@@ -31,6 +32,7 @@ rcgen = { workspace = true }
 [features]
 default = ["with-jsonrpc"]
 with-jsonrpc = ["dep:jsonrpc"]
+async = ["maybe_async/async"]
 clap = ["dep:clap"]
 
 [lints]

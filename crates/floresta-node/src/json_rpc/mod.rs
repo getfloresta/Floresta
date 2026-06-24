@@ -9,7 +9,6 @@
 //! Version acceptance is validated in [`server`] and covered by integration
 //! tests in `tests/florestad/rpcserver_request_parsing.py`.
 
-pub mod request;
 pub mod res;
 pub mod server;
 
@@ -17,3 +16,5 @@ pub mod server;
 mod blockchain;
 mod control;
 mod network;
+mod raw_transaction;
+mod wallet;
