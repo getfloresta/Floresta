@@ -7,6 +7,19 @@
 //! It also defines two important types for our storage format:
 //! - [DiskBlockHeader]: A block header linked to its validation-state metadata
 //! - [BestChain]: Tracks the current best chain, last valid block, and fork tips
+//!
+//! # Error types
+//!
+//! This module centralises the error types used by chainstore implementations:
+//! - [ChainstoreError]: The public-facing error enum for [ChainStore] operations
+
+extern crate std;
+
+use core::error;
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
+use std::io;
 
 use bitcoin::BlockHash;
 use bitcoin::block::Header as BlockHeader;
@@ -17,6 +30,97 @@ use bitcoin::consensus::encode;
 use crate::BlockchainError;
 use crate::DatabaseError;
 use crate::prelude::*;
+
+/// The maximum theoretical size of the Utreexo accumulator
+///
+/// In the worst case that all leaves are filled:
+/// * The accumulator can have up to 64 roots
+/// * Each root is 32 bytes
+/// * The number of leaves is expressed as a [`u64`]
+///
+/// 64 (MAX_ROOTS) * 32 bytes (ROOT_SIZE) + 8 bytes (LEAF_COUNT) = 2056 bytes
+///
+/// Re-exported here so callers do not need to import from `flat_chain_store`
+pub const MAX_ACCUMULATOR_SIZE: usize = 2056;
+
+#[derive(Debug)]
+/// Errors that can happen whilst interacting with a [`ChainStore`] implementation
+///
+/// Variants that carry domain meaning ([`HeaderNotFound`], [`OversizedAccumulator`],
+/// [`CorruptedDatabase`], [`InvalidValidationIndex`]) allow callers to react
+/// programmatically. Unrecoverable implementation-level failures are wrapped inside
+/// [`Other`] as a plain diagnostic string.
+///
+/// [`HeaderNotFound`]: ChainstoreError::HeaderNotFound
+/// [`OversizedAccumulator`]: ChainstoreError::OversizedAccumulator
+/// [`CorruptedDatabase`]: ChainstoreError::CorruptedDatabase
+/// [`InvalidValidationIndex`]: ChainstoreError::InvalidValidationIndex
+/// [`Other`]: ChainstoreError::Other
+pub enum ChainstoreError {
+    /// The requested block header was not found in the store
+    HeaderNotFound,
+
+    /// The accumulator data exceeds the maximum allowed size of
+    /// [`MAX_ACCUMULATOR_SIZE`] bytes
+    OversizedAccumulator,
+
+    /// The database integrity check failed; data is corrupted
+    ///
+    /// can be remedied by a full reindex
+    CorruptedDatabase,
+
+    /// The validation index references a block without a known height
+    ///
+    /// usually indicates the block is orphaned or on an invalid chain;
+    /// can be remedied by a full reindex
+    InvalidValidationIndex,
+
+    /// an unrecoverable error with a plain diagnostic message
+    ///
+    /// covers implementation details such as I/O failures, lock poisoning,
+    /// capacity exhaustion, schema mismatches, and other non-actionable
+    /// conditions. Consumers should treat this as fatal and surface the
+    /// message for diagnostic purposes only.
+    Other(String),
+}
+
+impl Display for ChainstoreError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HeaderNotFound => {
+                write!(f, "the requested block header was not found")
+            }
+            Self::OversizedAccumulator => write!(
+                f,
+                "accumulator exceeds the maximum size of {} bytes",
+                MAX_ACCUMULATOR_SIZE
+            ),
+            Self::CorruptedDatabase => write!(
+                f,
+                "database integrity check failed; can be remedied by a full reindex"
+            ),
+            Self::InvalidValidationIndex => {
+                write!(
+                    f,
+                    "validation index has no known height; can be remedied by a full reindex"
+                )
+            }
+            Self::Other(msg) => write!(f, "other error: {msg}"),
+        }
+    }
+}
+
+impl error::Error for ChainstoreError {}
+
+/// allows [`ChainstoreError`] to be used as the associated `Error` type of [`ChainStore`]
+impl DatabaseError for ChainstoreError {}
+
+/// converts a standard I/O error into a [`ChainstoreError::Other`]
+impl From<io::Error> for ChainstoreError {
+    fn from(e: io::Error) -> Self {
+        Self::Other(e.to_string())
+    }
+}
 
 /// A trait defining methods for interacting with our chain database. These methods will be used by
 /// the [ChainState](super::chain_state::ChainState) to save and retrieve data about the blockchain,
