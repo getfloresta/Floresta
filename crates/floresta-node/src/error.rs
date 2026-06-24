@@ -12,8 +12,7 @@ use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::IterableFilterStoreError;
-use floresta_watch_only::WatchOnlyError;
-use floresta_watch_only::descriptor::DescriptorError;
+use floresta_domain::wallet::error::WatchOnlyError;
 use floresta_watch_only::kv_database::KvDatabaseError;
 use tokio_rustls::rustls::pki_types;
 
@@ -45,9 +44,6 @@ pub enum FlorestadError {
 
     /// TOML parsing error.
     TomlParsing(toml::de::Error),
-
-    /// Parsing registered HD version bytes from slip132.
-    WalletInput(DescriptorError),
 
     /// Parsing a bitcoin address.
     AddressParsing(bitcoin::address::ParseError),
@@ -137,7 +133,6 @@ impl Display for FlorestadError {
                 write!(f, "Error with our blockchain backend: {err:?}")
             }
             Self::SerdeJson(err) => write!(f, "Error serializing object {err}"),
-            Self::WalletInput(err) => write!(f, "Error while parsing user input {err:?}"),
             Self::TomlParsing(err) => write!(f, "Error deserializing toml file {err}"),
             Self::AddressParsing(err) => write!(f, "Invalid address {err}"),
             Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
@@ -248,7 +243,6 @@ impl_from_error!(Io, std::io::Error);
 impl_from_error!(ScriptValidation, bitcoin::blockdata::script::Error);
 impl_from_error!(Blockchain, BlockchainError);
 impl_from_error!(SerdeJson, serde_json::Error);
-impl_from_error!(WalletInput, DescriptorError);
 impl_from_error!(TomlParsing, toml::de::Error);
 impl_from_error!(BlockValidation, BlockValidationErrors);
 impl_from_error!(AddressParsing, bitcoin::address::ParseError);
