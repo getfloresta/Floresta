@@ -753,7 +753,7 @@ impl Florestad {
         }
 
         for address in self.get_addresses()? {
-            wallet.cache_address(address);
+            wallet.cache_address(address)?;
         }
 
         info!("Wallet setup completed!");
