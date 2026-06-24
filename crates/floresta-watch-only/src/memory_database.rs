@@ -13,12 +13,12 @@ use bitcoin::Txid;
 use bitcoin::hashes::sha256;
 use floresta_common::prelude::sync::RwLock;
 use floresta_common::prelude::*;
+use floresta_domain::wallet::error::WatchOnlyError;
 
 use super::AddressCacheDatabase;
 use super::CachedAddress;
 use super::CachedTransaction;
 use super::Stats;
-use crate::WatchOnlyError;
 
 #[derive(Debug, Default)]
 struct Inner {
