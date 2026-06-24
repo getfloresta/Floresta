@@ -1184,6 +1184,7 @@ dependencies = [
  "bitcoin",
  "floresta-chain",
  "floresta-common",
+ "floresta-domain",
  "kv",
  "miniscript",
  "rand 0.10.1",

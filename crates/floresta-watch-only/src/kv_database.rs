@@ -13,11 +13,10 @@ use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use floresta_common::impl_error_from;
 use floresta_common::prelude::*;
+use floresta_domain::wallet::error::WatchOnlyError;
 use kv::Bucket;
 use kv::Config;
 use kv::Store;
-
-use crate::WatchOnlyError;
 
 use super::AddressCacheDatabase;
 use super::CachedAddress;

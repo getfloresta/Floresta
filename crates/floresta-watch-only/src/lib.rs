@@ -9,11 +9,7 @@
 #![allow(clippy::manual_is_multiple_of)]
 
 use core::cmp::Ordering;
-use core::error::Error;
-use core::fmt;
 use core::fmt::Debug;
-use core::fmt::Display;
-use core::fmt::Formatter;
 
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
@@ -39,13 +35,13 @@ use bitcoin::hashes::Hash as HashTrait;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256::Hash;
 use floresta_common::prelude::*;
+use floresta_domain::wallet::error::WatchOnlyError;
 use merkle::MerkleProof;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::RwLock;
 use tracing::error;
 
-use crate::descriptor::DescriptorError;
 use crate::descriptor::derive_addresses_from_descriptor;
 use crate::descriptor::derive_addresses_from_list_descriptors;
 use crate::descriptor::parse_xpub;
@@ -55,39 +51,6 @@ const DERIVATION_COUNT: u32 = 100;
 
 /// Initial index for address derivation.
 const INDEX_INITIAL: u32 = 0;
-
-#[derive(Debug)]
-pub enum WatchOnlyError {
-    WalletNotInitialized,
-    TransactionNotFound,
-    DatabaseError(String),
-    DuplicateDescriptor(String),
-    InvalidDescriptor(DescriptorError),
-}
-
-impl Display for WatchOnlyError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::WalletNotInitialized => {
-                write!(f, "Wallet isn't initialized")
-            }
-            Self::TransactionNotFound => {
-                write!(f, "Transaction not found")
-            }
-            Self::DatabaseError(e) => {
-                write!(f, "Database error: {e}")
-            }
-            Self::DuplicateDescriptor(desc) => {
-                write!(f, "Descriptor is already cached: {desc}")
-            }
-            Self::InvalidDescriptor(e) => {
-                write!(f, "Invalid descriptor: {e:?}")
-            }
-        }
-    }
-}
-
-impl Error for WatchOnlyError {}
 
 /// Every address contains zero or more associated transactions, this struct defines what
 /// data we store for those.
@@ -372,8 +335,7 @@ where
             &descriptors,
             stats.derivation_index,
             DERIVATION_COUNT,
-        )
-        .map_err(WatchOnlyError::InvalidDescriptor)?;
+        )?;
 
         addresses.iter().for_each(|address| {
             self.cache_address(address.clone());
@@ -673,8 +635,7 @@ where
         }
 
         let address_descriptors =
-            derive_addresses_from_descriptor(descriptor, INDEX_INITIAL, DERIVATION_COUNT)
-                .map_err(WatchOnlyError::InvalidDescriptor)?;
+            derive_addresses_from_descriptor(descriptor, INDEX_INITIAL, DERIVATION_COUNT)?;
 
         for address in address_descriptors.clone() {
             self.cache_address(address);
@@ -689,7 +650,7 @@ where
     /// Adds an XPUB to the wallet, derives descriptors from it, saves these descriptors persistently,
     /// derives addresses, and caches them if they're not cached already.
     pub fn push_xpub(&self, xpub: &str, network: Network) -> Result<(), WatchOnlyError> {
-        let descriptors = parse_xpub(xpub, network).map_err(WatchOnlyError::InvalidDescriptor)?;
+        let descriptors = parse_xpub(xpub, network)?;
 
         for descriptor in descriptors {
             self.push_descriptor(&descriptor)?;

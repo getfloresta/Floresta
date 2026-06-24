@@ -14,3 +14,6 @@
 
 #[cfg(feature = "mempool")]
 pub mod mempool;
+
+#[cfg(feature = "wallet")]
+pub mod wallet;
