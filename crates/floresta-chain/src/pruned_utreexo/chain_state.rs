@@ -1933,7 +1933,7 @@ mod test {
 
     #[test]
     fn test_calculate_chain_work() {
-        let mut chainstore = FlatChainStore::new(FlatChainStoreConfig::new(
+        let mut chainstore = FlatChainStore::new(FlatChainStoreConfig::new_with_path(
             "../../testdata/signet_headers.zst",
         ))
         .unwrap();
