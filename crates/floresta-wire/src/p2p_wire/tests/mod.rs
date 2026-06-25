@@ -3,3 +3,5 @@
 mod chain_selector;
 mod sync_node;
 mod utils;
+
+pub(crate) use utils::signet_headers;
