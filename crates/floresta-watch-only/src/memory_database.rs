@@ -18,6 +18,7 @@ use super::AddressCacheDatabase;
 use super::CachedAddress;
 use super::CachedTransaction;
 use super::Stats;
+use crate::WatchOnlyError;
 
 #[derive(Debug, Default)]
 struct Inner {
@@ -48,6 +49,12 @@ impl Display for MemoryDatabaseError {
         match self {
             Self::PoisonedLock => write!(f, "Poisoned lock"),
         }
+    }
+}
+
+impl From<MemoryDatabaseError> for WatchOnlyError {
+    fn from(e: MemoryDatabaseError) -> Self {
+        Self::DatabaseError(e.to_string())
     }
 }
 
