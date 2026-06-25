@@ -36,6 +36,7 @@ use crate::node::InflightRequests;
 use crate::node::MAX_ADDRV2_ADDRESSES;
 use crate::node::NodeNotification;
 use crate::node::NodeRequest;
+use crate::node::PeerStatus;
 use crate::node::UtreexoNode;
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
@@ -108,7 +109,12 @@ where
             .take(MAX_ADDRV2_ADDRESSES)
             .collect();
 
-        self.send_to_random_peer(NodeRequest::SendAddresses(addresses), ServiceFlags::NONE)?;
+        self.send_to_random_peer_with_predicate(
+            NodeRequest::SendAddresses(addresses),
+            ServiceFlags::NONE,
+            |peer| peer.state == PeerStatus::Ready && peer.kind.is_full_relay(),
+        )?;
+
         Ok(())
     }
 
@@ -161,7 +167,7 @@ where
             if self.connected_peers() >= RunningNode::MAX_OUTGOING_PEERS {
                 self.peers
                     .values()
-                    .filter(|peer| peer.is_regular_peer())
+                    .filter(|peer| peer.kind.is_regular())
                     .choose(&mut rng())
                     .and_then(|p| p.channel.send(NodeRequest::Shutdown).ok());
             }
@@ -177,7 +183,7 @@ where
             if self.connected_peers() >= RunningNode::MAX_OUTGOING_PEERS {
                 self.peers
                     .values()
-                    .filter(|peer| peer.is_regular_peer())
+                    .filter(|peer| peer.kind.is_regular())
                     .choose(&mut rng())
                     .and_then(|p| p.channel.send(NodeRequest::Shutdown).ok());
             }
@@ -720,24 +726,34 @@ where
                             }
 
                             // this peer got us a new block, we should disconnect one of our regular peers
-                            // and keep this one.
+                            // and keep this one as block-relay-only.
                             let peer_to_disconnect = self
                                 .peers
                                 .iter()
                                 // Don't disconnect manual connections
-                                .filter(|(_, info)| info.is_regular_peer())
+                                .filter(|(_, info)| info.kind.is_regular())
                                 .min_by_key(|(k, _)| self.get_peer_score(**k))
                                 .map(|(peer, _)| *peer);
 
                             // disconnect the peer with the lowest score
-                            if let Some(peer) = peer_to_disconnect {
-                                self.send_to_peer(peer, NodeRequest::Shutdown)?;
+                            if let Some(peer_to_disconnect) = peer_to_disconnect {
+                                debug!(
+                                    "Disconnecting peer {peer_to_disconnect} after extra peer promotion"
+                                );
+                                self.send_to_peer(peer_to_disconnect, NodeRequest::Shutdown)?;
                             }
 
                             // update the peer info
+                            debug!(
+                                "Extra peer {peer} returned useful headers; keeping it as block-relay-only"
+                            );
                             self.peers.entry(peer).and_modify(|info| {
-                                info.kind = ConnectionKind::Regular(peer_info.services);
+                                info.kind = ConnectionKind::BlockRelayOnly(peer_info.services);
                             });
+
+                            if !self.peer_ids.contains(&peer) {
+                                self.peer_ids.push(peer);
+                            }
                         }
 
                         for header in headers.iter() {
