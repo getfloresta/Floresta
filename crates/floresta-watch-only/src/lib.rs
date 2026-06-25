@@ -34,8 +34,10 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::sha256::Hash;
 use floresta_common::prelude::*;
 use floresta_domain::wallet::error::WatchOnlyError;
+use floresta_domain::wallet::model::AddressUtxos;
 use floresta_domain::wallet::model::CachedTransaction;
 use floresta_domain::wallet::model::MerkleProof;
+use floresta_domain::wallet::model::Stats;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::RwLock;
@@ -60,19 +62,6 @@ pub struct CachedAddress {
     script: ScriptBuf,
     transactions: Vec<Txid>,
     utxos: Vec<OutPoint>,
-}
-
-/// Holds some useful data about our wallet, like how many addresses we have, how many
-/// transactions we have, etc.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Stats {
-    pub address_count: usize,
-    pub transaction_count: usize,
-    pub utxo_count: usize,
-    pub cache_height: u32,
-    pub txo_count: usize,
-    pub balance: u64,
-    pub derivation_index: u32,
 }
 
 /// Public trait defining a common interface for databases to be used with our cache
@@ -545,7 +534,6 @@ pub fn new_wallet_default(
     Ok(AddressCache::new(database))
 }
 
-pub type AddressUtxos = Vec<(TxOut, OutPoint)>;
 impl<D: AddressCacheDatabase> AddressCache<D>
 where
     WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,

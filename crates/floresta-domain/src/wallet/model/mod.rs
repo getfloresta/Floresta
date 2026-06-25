@@ -1,7 +1,9 @@
 use core::cmp::Ordering;
 use core::fmt::Debug;
 
+use bitcoin::OutPoint;
 use bitcoin::Transaction;
+use bitcoin::TxOut;
 use bitcoin::consensus::deserialize;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash as HashTrait;
@@ -55,3 +57,19 @@ impl Default for CachedTransaction {
         }
     }
 }
+
+/// Holds some useful data about our wallet, like how many addresses we have, how many
+/// transactions we have, etc.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Stats {
+    pub address_count: usize,
+    pub transaction_count: usize,
+    pub utxo_count: usize,
+    pub cache_height: u32,
+    pub txo_count: usize,
+    pub balance: u64,
+    pub derivation_index: u32,
+}
+
+/// Type alias for UTXO information
+pub type AddressUtxos = Vec<(TxOut, OutPoint)>;
