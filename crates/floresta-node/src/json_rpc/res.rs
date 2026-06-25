@@ -493,8 +493,8 @@ pub mod jsonrpc_interface {
     }
 
     impl_error_from!(JsonRpcError, miniscript::Error, InvalidDescriptor);
-    impl<T: fmt::Debug> From<WatchOnlyError<T>> for JsonRpcError {
-        fn from(e: WatchOnlyError<T>) -> Self {
+    impl From<WatchOnlyError> for JsonRpcError {
+        fn from(e: WatchOnlyError) -> Self {
             Self::Wallet(e.to_string())
         }
     }
