@@ -34,8 +34,6 @@ use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::wallet::model::CachedTransaction;
 use floresta_domain::wallet::wallet_base::WalletBase;
-use floresta_watch_only::AddressCache;
-use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
 use floresta_wire::node_interface::ChainMethods;
 use floresta_wire::node_interface::MempoolMethods;
@@ -84,7 +82,7 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
     pub(super) network: Network,
     pub(super) chain: Blockchain,
-    pub(super) wallet: Arc<AddressCache<KvDatabase>>,
+    pub(super) wallet: Arc<dyn WalletBase>,
     pub(super) node: NodeHandle,
     pub(super) kill_signal: Arc<RwLock<bool>>,
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
@@ -503,7 +501,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn rescan_with_block_filters(
         addresses: Vec<ScriptBuf>,
         chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
+        wallet: Arc<dyn WalletBase>,
         cfilters: Arc<NetworkFilters<FlatFiltersStore>>,
         node: NodeHandle,
         start_height: Option<u32>,
@@ -659,7 +657,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
+        wallet: Arc<dyn WalletBase>,
         node: NodeHandle,
         kill_signal: Arc<RwLock<bool>>,
         network: Network,

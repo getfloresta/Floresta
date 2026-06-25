@@ -1096,7 +1096,6 @@ dependencies = [
  "floresta-compact-filters",
  "floresta-domain",
  "floresta-mempool",
- "floresta-watch-only",
  "floresta-wire",
  "rand 0.10.1",
  "rcgen",
