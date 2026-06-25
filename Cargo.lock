@@ -1080,6 +1080,9 @@ version = "0.1.0"
 dependencies = [
  "bitcoin",
  "floresta-chain",
+ "floresta-common",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

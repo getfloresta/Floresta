@@ -978,10 +978,10 @@ mod test {
     use floresta_chain::FlatChainStoreConfig;
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
+    use floresta_domain::wallet::model::MerkleProof;
     use floresta_mempool::Mempool;
     use floresta_watch_only::AddressCache;
     use floresta_watch_only::kv_database::KvDatabase;
-    use floresta_watch_only::merkle::MerkleProof;
     use floresta_wire::UtreexoNodeConfig;
     use floresta_wire::address_man::AddressMan;
     use floresta_wire::address_man::ReachableNetworks;
