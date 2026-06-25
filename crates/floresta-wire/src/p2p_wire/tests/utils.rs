@@ -93,7 +93,7 @@ impl SimulatedPeer {
             address_id: rand::random::<u64>() as usize,
             services: simulated_peer_services(),
             time_offset: 0,
-            kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
+            kind: ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
             transport_protocol: TransportProtocol::V2,
         };
 
@@ -196,7 +196,7 @@ pub fn spawn_peer(
         time_offset: 0,
         state: PeerStatus::Ready,
         channel: sender,
-        kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
+        kind: ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
         banscore: 0,
         _last_message: Instant::now(),
         transport_protocol: TransportProtocol::V2,
@@ -611,7 +611,7 @@ mod tests {
                 time_offset: 0,
                 state,
                 channel: sender,
-                kind: ConnectionKind::Regular(services),
+                kind: ConnectionKind::OutboundFullRelay(services),
                 banscore: 0,
                 _last_message: Instant::now(),
                 transport_protocol: TransportProtocol::V2,
