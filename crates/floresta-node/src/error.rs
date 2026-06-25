@@ -83,7 +83,7 @@ pub enum FlorestadError {
     CouldNotOpenKvDatabase(KvDatabaseError),
 
     /// Initializing the watch-only wallet.
-    CouldNotInitializeWallet(WatchOnlyError<KvDatabaseError>),
+    CouldNotInitializeWallet(WatchOnlyError),
 
     /// Setting up the watch-only wallet.
     CouldNotSetupWallet(String),
@@ -105,7 +105,7 @@ pub enum FlorestadError {
     CouldNotCreateTLSDataDir(PathBuf, std::io::Error),
 
     /// Failed to obtain the wallet cache.
-    CouldNotObtainWalletCache(WatchOnlyError<KvDatabaseError>),
+    CouldNotObtainWalletCache(WatchOnlyError),
 
     /// Failed to push a descriptor to the wallet.
     CouldNotPushDescriptor(String),
@@ -253,6 +253,6 @@ impl_from_error!(TomlParsing, toml::de::Error);
 impl_from_error!(BlockValidation, BlockValidationErrors);
 impl_from_error!(AddressParsing, bitcoin::address::ParseError);
 impl_from_error!(Miniscript, miniscript::Error);
-impl_from_error!(CouldNotObtainWalletCache, WatchOnlyError<KvDatabaseError>);
+impl_from_error!(CouldNotObtainWalletCache, WatchOnlyError);
 
 impl error::Error for FlorestadError {}

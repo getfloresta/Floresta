@@ -57,28 +57,20 @@ const DERIVATION_COUNT: u32 = 100;
 const INDEX_INITIAL: u32 = 0;
 
 #[derive(Debug)]
-pub enum WatchOnlyError<DatabaseError: Debug> {
-    WalletNotInitialized,
-    TransactionNotFound,
-    DatabaseError(DatabaseError),
-    DuplicateDescriptor(String),
+pub enum WatchOnlyError {
+    DatabaseError(String),
+    DuplicateDescriptor { descriptor: String },
     InvalidDescriptor(DescriptorError),
 }
 
-impl<DatabaseError: Debug> Display for WatchOnlyError<DatabaseError> {
+impl Display for WatchOnlyError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WalletNotInitialized => {
-                write!(f, "Wallet isn't initialized")
-            }
-            Self::TransactionNotFound => {
-                write!(f, "Transaction not found")
-            }
             Self::DatabaseError(e) => {
-                write!(f, "Database error: {e:?}")
+                write!(f, "Database error: {e}")
             }
-            Self::DuplicateDescriptor(desc) => {
-                write!(f, "Descriptor is already cached: {desc}")
+            Self::DuplicateDescriptor { descriptor } => {
+                write!(f, "Descriptor is already cached: {descriptor}")
             }
             Self::InvalidDescriptor(e) => {
                 write!(f, "Invalid descriptor: {e:?}")
@@ -87,13 +79,7 @@ impl<DatabaseError: Debug> Display for WatchOnlyError<DatabaseError> {
     }
 }
 
-impl<DatabaseError: Debug> From<DatabaseError> for WatchOnlyError<DatabaseError> {
-    fn from(e: DatabaseError) -> Self {
-        Self::DatabaseError(e)
-    }
-}
-
-impl<T: Debug> Error for WatchOnlyError<T> {}
+impl Error for WatchOnlyError {}
 
 /// Every address contains zero or more associated transactions, this struct defines what
 /// data we store for those.
@@ -205,7 +191,10 @@ struct AddressCacheInner<D: AddressCacheDatabase> {
     utxo_index: HashMap<OutPoint, Hash>,
 }
 
-impl<D: AddressCacheDatabase> AddressCacheInner<D> {
+impl<D: AddressCacheDatabase> AddressCacheInner<D>
+where
+    WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,
+{
     /// Iterates through a block, finds transactions destined to ourselves.
     /// Returns all transactions we found.
     fn block_process(&mut self, block: &Block, height: u32) -> Vec<(Transaction, TxOut)> {
@@ -360,14 +349,14 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
 
     /// Setup is the first command that should be executed. In a new cache. It sets our wallet's
     /// state, like the height we should start scanning and the wallet's descriptor.
-    fn setup(&self) -> Result<(), WatchOnlyError<D::Error>> {
+    fn setup(&self) -> Result<(), WatchOnlyError> {
         if self.database.get_descriptors().is_err() {
             self.database.set_cache_height(0)?;
         }
         Ok(())
     }
 
-    fn derive_addresses(&mut self) -> Result<(), WatchOnlyError<D::Error>> {
+    fn derive_addresses(&mut self) -> Result<(), WatchOnlyError> {
         let mut stats = self.database.get_stats()?;
         let descriptors = self.database.get_descriptors()?;
 
@@ -396,7 +385,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
         }
     }
 
-    fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError<D::Error>> {
+    fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError> {
         let transactions = self.database.list_transactions()?;
         let mut unconfirmed = Vec::new();
 
@@ -585,7 +574,10 @@ pub struct AddressCache<D: AddressCacheDatabase> {
     inner: RwLock<AddressCacheInner<D>>,
 }
 
-impl<D: AddressCacheDatabase + Sync + Send + 'static> BlockConsumer for AddressCache<D> {
+impl<D: AddressCacheDatabase + Sync + Send + 'static> BlockConsumer for AddressCache<D>
+where
+    WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,
+{
     fn wants_spent_utxos(&self) -> bool {
         false
     }
@@ -600,7 +592,10 @@ impl<D: AddressCacheDatabase + Sync + Send + 'static> BlockConsumer for AddressC
     }
 }
 
-impl<D: AddressCacheDatabase> AddressCache<D> {
+impl<D: AddressCacheDatabase> AddressCache<D>
+where
+    WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,
+{
     pub fn new(database: D) -> Self {
         Self {
             inner: RwLock::new(AddressCacheInner::new(database)),
@@ -651,7 +646,7 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
     }
 
     /// Tells whether or not a descriptor is already cached
-    pub fn is_cached(&self, desc: &str) -> Result<bool, WatchOnlyError<D::Error>> {
+    pub fn is_cached(&self, desc: &str) -> Result<bool, WatchOnlyError> {
         let inner = self.inner.read().expect("poisoned lock");
         let known_descs = inner.database.get_descriptors()?;
         Ok(known_descs.iter().any(|s| s == desc))
@@ -664,12 +659,11 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
     }
 
     /// Push a descriptor into the wallet checking whether it is already cached, returning an error if so
-    pub fn push_descriptor(
-        &self,
-        descriptor: &str,
-    ) -> Result<Vec<ScriptBuf>, WatchOnlyError<D::Error>> {
+    pub fn push_descriptor(&self, descriptor: &str) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
         if self.is_cached(descriptor)? {
-            return Err(WatchOnlyError::DuplicateDescriptor(descriptor.to_string()));
+            return Err(WatchOnlyError::DuplicateDescriptor {
+                descriptor: descriptor.to_string(),
+            });
         }
 
         let address_descriptors =
@@ -688,7 +682,7 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
 
     /// Adds an XPUB to the wallet, derives descriptors from it, saves these descriptors persistently,
     /// derives addresses, and caches them if they're not cached already.
-    pub fn push_xpub(&self, xpub: &str, network: Network) -> Result<(), WatchOnlyError<D::Error>> {
+    pub fn push_xpub(&self, xpub: &str, network: Network) -> Result<(), WatchOnlyError> {
         let descriptors = parse_xpub(xpub, network).map_err(WatchOnlyError::InvalidDescriptor)?;
 
         for descriptor in descriptors {
@@ -714,7 +708,7 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         Some(serialize_hex(&tx.tx))
     }
 
-    pub fn setup(&self) -> Result<(), WatchOnlyError<D::Error>> {
+    pub fn setup(&self) -> Result<(), WatchOnlyError> {
         let inner = self.inner.read().expect("poisoned lock");
         inner.setup()
     }
@@ -747,17 +741,14 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         inner.get_merkle_proof(txid)
     }
 
-    pub fn derive_addresses(&self) -> Result<(), WatchOnlyError<D::Error>> {
+    pub fn derive_addresses(&self) -> Result<(), WatchOnlyError> {
         let mut inner = self.inner.write().expect("poisoned lock");
         inner.derive_addresses()
     }
 
-    pub fn get_stats(&self) -> Result<Stats, WatchOnlyError<D::Error>> {
+    pub fn get_stats(&self) -> Result<Stats, WatchOnlyError> {
         let inner = self.inner.read().expect("poisoned lock");
-        inner
-            .database
-            .get_stats()
-            .map_err(WatchOnlyError::DatabaseError)
+        Ok(inner.database.get_stats()?)
     }
 
     pub fn maybe_derive_addresses(&self) {
@@ -765,7 +756,7 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         inner.maybe_derive_addresses()
     }
 
-    pub fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError<D::Error>> {
+    pub fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError> {
         let inner = self.inner.read().expect("poisoned lock");
         inner.find_unconfirmed()
     }
@@ -805,12 +796,9 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
         )
     }
 
-    pub fn get_descriptors(&self) -> Result<Vec<String>, WatchOnlyError<D::Error>> {
+    pub fn get_descriptors(&self) -> Result<Vec<String>, WatchOnlyError> {
         let inner = self.inner.read().expect("poisoned lock");
-        inner
-            .database
-            .get_descriptors()
-            .map_err(WatchOnlyError::DatabaseError)
+        Ok(inner.database.get_descriptors()?)
     }
 
     #[allow(clippy::too_many_arguments)]

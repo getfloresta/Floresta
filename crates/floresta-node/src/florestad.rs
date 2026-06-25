@@ -731,7 +731,7 @@ impl Florestad {
         for descriptor in self.get_descriptors() {
             match wallet.push_descriptor(&descriptor) {
                 Ok(_) => info!("Added descriptor to wallet: {descriptor}"),
-                Err(WatchOnlyError::DuplicateDescriptor(_)) => {
+                Err(WatchOnlyError::DuplicateDescriptor { descriptor: _ }) => {
                     warn!("Descriptor already exists in wallet, skipping: {descriptor}");
                 }
                 Err(e) => {
@@ -743,7 +743,7 @@ impl Florestad {
         for xpub in self.get_xpubs() {
             match wallet.push_xpub(&xpub, self.config.network) {
                 Ok(()) => info!("Added xpubs to wallet: {xpub}"),
-                Err(WatchOnlyError::DuplicateDescriptor(_)) => warn!(
+                Err(WatchOnlyError::DuplicateDescriptor { descriptor: _ }) => warn!(
                     "Descriptor for the provided XPUB already exists in the wallet. Skipping: {xpub}"
                 ),
                 Err(e) => return Err(FlorestadError::from(e)),
