@@ -14,13 +14,13 @@ use bitcoin::hashes::Hash;
 use floresta_common::impl_error_from;
 use floresta_common::prelude::*;
 use floresta_domain::wallet::error::WatchOnlyError;
+use floresta_domain::wallet::model::CachedTransaction;
 use kv::Bucket;
 use kv::Config;
 use kv::Store;
 
 use super::AddressCacheDatabase;
 use super::CachedAddress;
-use super::CachedTransaction;
 use super::Stats;
 
 /// A key-value database for the watch-only wallet.
