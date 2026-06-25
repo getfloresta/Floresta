@@ -13,7 +13,6 @@ use floresta_chain::BlockchainError;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::IterableFilterStoreError;
 use floresta_domain::wallet::error::WatchOnlyError;
-use floresta_watch_only::kv_database::KvDatabaseError;
 use tokio_rustls::rustls::pki_types;
 
 #[derive(Debug)]
@@ -74,9 +73,6 @@ pub enum FlorestadError {
 
     /// Data directory doesn't exist or is not writable.
     InvalidDataDir(PathBuf),
-
-    /// Obtaining a lock on the data directory.
-    CouldNotOpenKvDatabase(KvDatabaseError),
 
     /// Initializing the watch-only wallet.
     CouldNotInitializeWallet(WatchOnlyError),
@@ -170,9 +166,6 @@ impl Display for FlorestadError {
                     "Data directory at path={} doesn't exist or is not writable",
                     path.display()
                 )
-            }
-            Self::CouldNotOpenKvDatabase(err) => {
-                write!(f, "Cannot open a key-value database: {err}")
             }
             Self::CouldNotInitializeWallet(err) => {
                 write!(f, "Could not initialize wallet: {err}")

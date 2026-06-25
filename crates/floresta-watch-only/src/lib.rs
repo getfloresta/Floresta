@@ -10,6 +10,7 @@
 
 use core::cmp::Ordering;
 use core::fmt::Debug;
+use std::path::Path;
 use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
 
@@ -47,6 +48,7 @@ use tracing::error;
 use crate::descriptor::derive_addresses_from_descriptor;
 use crate::descriptor::derive_addresses_from_list_descriptors;
 use crate::descriptor::parse_xpub;
+use crate::kv_database::KvDatabase;
 
 /// How much descriptors to derive each time.
 const DERIVATION_COUNT: u32 = 100;
@@ -580,6 +582,14 @@ where
             error!("Error processing block: {err:?}");
         }
     }
+}
+
+pub fn new_wallet_default(
+    datadir: impl AsRef<Path>,
+) -> Result<AddressCache<KvDatabase>, WatchOnlyError> {
+    let database = KvDatabase::new(&datadir)?;
+
+    Ok(AddressCache::new(database))
 }
 
 pub type AddressUtxos = Vec<(TxOut, OutPoint)>;

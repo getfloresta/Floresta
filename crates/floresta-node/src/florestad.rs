@@ -36,6 +36,7 @@ use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_mempool::Mempool;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::kv_database::KvDatabase;
+use floresta_watch_only::new_wallet_default;
 use floresta_wire::UtreexoNodeConfig;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::address_man::ReachableNetworks;
@@ -718,10 +719,7 @@ impl Florestad {
 
     /// Setup the wallet by initializing the database and adding descriptors, xpubs, and addresses.
     fn setup_wallet(&self) -> Result<AddressCache<KvDatabase>, FlorestadError> {
-        let database = KvDatabase::new(&self.config.datadir)
-            .map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-
-        let wallet = AddressCache::new(database);
+        let wallet = new_wallet_default(&self.config.datadir)?;
 
         wallet
             .setup()
