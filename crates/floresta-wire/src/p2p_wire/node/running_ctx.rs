@@ -861,3 +861,258 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use bitcoin::Network;
+    use bitcoin::p2p::ServiceFlags;
+    use floresta_chain::AssumeValidArg;
+    use floresta_chain::ChainState;
+    use floresta_chain::FlatChainStore;
+    use floresta_chain::FlatChainStoreConfig;
+    use floresta_chain::pruned_utreexo::UpdatableChainstate;
+    use floresta_common::Ema;
+    use floresta_mempool::Mempool;
+    use tokio::sync::Mutex;
+    use tokio::sync::RwLock;
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use crate::TransportProtocol;
+    use crate::UtreexoNodeConfig;
+    use crate::address_man::AddressMan;
+    use crate::address_man::AddressState;
+    use crate::address_man::LocalAddress;
+    use crate::node::ConnectionKind;
+    use crate::node::InflightRequests;
+    use crate::node::LocalPeerView;
+    use crate::node::NodeNotification;
+    use crate::node::NodeRequest;
+    use crate::node::PeerStatus;
+    use crate::node::UtreexoNode;
+    use crate::node::running_ctx::RunningNode;
+    use crate::p2p_wire::peer::PeerMessages;
+    use crate::p2p_wire::peer::Version;
+    use crate::p2p_wire::tests::signet_headers;
+
+    type TestChain = Arc<ChainState<FlatChainStore>>;
+    type TestNode = UtreexoNode<TestChain, RunningNode>;
+
+    fn temp_datadir(test_name: &str) -> PathBuf {
+        let test_id = rand::random::<u64>();
+
+        PathBuf::from(format!("./tmp-db/floresta-wire-{test_name}-{test_id}"))
+    }
+
+    fn peer_services() -> ServiceFlags {
+        ServiceFlags::NETWORK | ServiceFlags::WITNESS | ServiceFlags::NETWORK_LIMITED
+    }
+
+    fn test_node(datadir: PathBuf) -> TestNode {
+        fs::create_dir_all(&datadir).expect("test datadir should be created");
+
+        let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(&datadir))
+            .expect("chain store should be created");
+        let chain = Arc::new(
+            ChainState::open(chainstore, Network::Signet, AssumeValidArg::Disabled)
+                .expect("chain state should open"),
+        );
+
+        let mut headers = signet_headers();
+        headers.remove(0);
+        chain
+            .accept_header(headers[0])
+            .expect("test chain should accept first signet header");
+
+        let config = UtreexoNodeConfig {
+            network: Network::Signet,
+            datadir,
+            ..Default::default()
+        };
+
+        UtreexoNode::<TestChain, RunningNode>::new(
+            config,
+            chain,
+            Arc::new(Mutex::new(Mempool::new(1000))),
+            None,
+            Arc::new(RwLock::new(false)),
+            AddressMan::new(None, &[]),
+        )
+        .expect("test node should be created")
+    }
+
+    fn local_address(peer_id: u32) -> LocalAddress {
+        LocalAddress::new(
+            format!("192.0.2.{}:38333", peer_id + 1)
+                .parse()
+                .expect("test address should parse"),
+            0,
+            AddressState::NeverTried,
+            peer_services(),
+            peer_id as usize,
+        )
+    }
+
+    fn insert_peer(
+        node: &mut TestNode,
+        peer_id: u32,
+        kind: ConnectionKind,
+    ) -> UnboundedReceiver<NodeRequest> {
+        let (sender, receiver) = unbounded_channel();
+
+        node.peers.insert(
+            peer_id,
+            LocalPeerView {
+                message_times: Ema::with_half_life_50(),
+                state: PeerStatus::Ready,
+                channel: sender,
+                services: peer_services(),
+                user_agent: "/test:0.0.0/".to_string(),
+                address: local_address(peer_id),
+                _last_message: Instant::now(),
+                kind,
+                height: 1,
+                banscore: 0,
+                transport_protocol: TransportProtocol::V2,
+            },
+        );
+
+        receiver
+    }
+
+    fn peer_version(peer_id: u32, kind: ConnectionKind) -> Version {
+        Version {
+            user_agent: "/test:0.0.0/".to_string(),
+            protocol_version: 70016,
+            blocks: 1,
+            id: peer_id,
+            address_id: peer_id as usize,
+            services: peer_services(),
+            kind,
+            transport_protocol: TransportProtocol::V2,
+        }
+    }
+
+    #[test]
+    fn feeler_peer_disconnects_after_handshake_without_requesting_addresses() {
+        let datadir = temp_datadir("feeler-disconnects-without-addresses");
+        let mut node = test_node(datadir.clone());
+        let peer = 0;
+        let mut receiver = insert_peer(&mut node, peer, ConnectionKind::Feeler);
+
+        node.handle_peer_ready(peer, peer_version(peer, ConnectionKind::Feeler))
+            .expect("feeler peer should become ready");
+
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("feeler peer should be disconnected"),
+            NodeRequest::Shutdown
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "feeler peer should not receive address requests"
+        );
+
+        drop(node);
+        let _ = fs::remove_dir_all(datadir);
+    }
+
+    #[tokio::test]
+    async fn addr_fetch_peer_requests_addresses_then_disconnects() {
+        let datadir = temp_datadir("addr-fetch-requests-addresses");
+        let mut node = test_node(datadir.clone());
+        let peer = 0;
+        let mut receiver = insert_peer(&mut node, peer, ConnectionKind::AddrFetch);
+
+        node.handle_peer_ready(peer, peer_version(peer, ConnectionKind::AddrFetch))
+            .expect("addr-fetch peer should become ready");
+
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("addr-fetch peer should request addresses"),
+            NodeRequest::GetAddresses
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "addr-fetch peer should wait for addresses before disconnecting"
+        );
+
+        node.handle_notification(NodeNotification::FromPeer(
+            peer,
+            PeerMessages::Addr(Vec::new()),
+            Instant::now(),
+        ))
+        .await
+        .expect("addr-fetch address response should be handled");
+
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("addr-fetch peer should disconnect after addresses"),
+            NodeRequest::Shutdown
+        );
+
+        drop(node);
+        let _ = fs::remove_dir_all(datadir);
+    }
+
+    #[tokio::test]
+    async fn extra_peer_with_useful_headers_replaces_regular_peer_as_block_relay_only() {
+        let datadir = temp_datadir("extra-promotes-to-block-relay-only");
+        let mut node = test_node(datadir.clone());
+
+        let regular_peer = 0;
+        let extra_peer = 1;
+        let mut regular_peer_receiver = insert_peer(
+            &mut node,
+            regular_peer,
+            ConnectionKind::OutboundFullRelay(ServiceFlags::NONE),
+        );
+        let mut extra_peer_receiver = insert_peer(&mut node, extra_peer, ConnectionKind::Extra);
+
+        node.peer_ids.push(regular_peer);
+        node.inflight
+            .insert(InflightRequests::Headers, (extra_peer, Instant::now()));
+
+        let headers = signet_headers();
+        let useful_header = headers[2];
+        node.handle_notification(NodeNotification::FromPeer(
+            extra_peer,
+            PeerMessages::Headers(vec![useful_header]),
+            Instant::now(),
+        ))
+        .await
+        .expect("extra peer headers should be handled");
+
+        assert_eq!(
+            regular_peer_receiver
+                .try_recv()
+                .expect("regular peer should be disconnected"),
+            NodeRequest::Shutdown
+        );
+        assert!(matches!(
+            node.peers
+                .get(&extra_peer)
+                .expect("extra peer should still exist")
+                .kind,
+            ConnectionKind::BlockRelayOnly(services) if services == peer_services()
+        ));
+        assert!(node.peer_ids.contains(&extra_peer));
+        assert_eq!(
+            extra_peer_receiver
+                .try_recv()
+                .expect("block-relay-only peer should be asked for the new block"),
+            NodeRequest::GetBlock(vec![useful_header.block_hash()])
+        );
+
+        drop(node);
+        let _ = fs::remove_dir_all(datadir);
+    }
+}
