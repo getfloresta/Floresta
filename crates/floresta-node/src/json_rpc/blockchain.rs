@@ -27,6 +27,7 @@ use corepc_types::v30::GetDeploymentInfo;
 use floresta_chain::buried_deployments_for;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_wire::node_interface::ChainMethods;
 use miniscript::descriptor::checksum;
 use serde_json::Value;

@@ -38,6 +38,7 @@ use floresta_domain::wallet::model::AddressUtxos;
 use floresta_domain::wallet::model::CachedTransaction;
 use floresta_domain::wallet::model::MerkleProof;
 use floresta_domain::wallet::model::Stats;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::RwLock;
@@ -65,7 +66,7 @@ pub struct CachedAddress {
 }
 
 /// Public trait defining a common interface for databases to be used with our cache
-pub trait AddressCacheDatabase {
+pub trait AddressCacheDatabase: Sync + Send + 'static {
     type Error: Debug + Send + Sync + 'static;
     /// Saves a new address to the database. If the address already exists, `update` should
     /// be used instead
@@ -490,7 +491,16 @@ pub struct AddressCache<D: AddressCacheDatabase> {
     inner: RwLock<AddressCacheInner<D>>,
 }
 
-impl<D: AddressCacheDatabase> AddressCache<D> {
+impl<D: AddressCacheDatabase> AddressCache<D>
+where
+    WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,
+{
+    pub fn new(database: D) -> Self {
+        Self {
+            inner: RwLock::new(AddressCacheInner::new(database)),
+        }
+    }
+
     fn get_inner(&self) -> Result<RwLockReadGuard<'_, AddressCacheInner<D>>, WatchOnlyError> {
         self.inner
             .read()
@@ -534,17 +544,11 @@ pub fn new_wallet_default(
     Ok(AddressCache::new(database))
 }
 
-impl<D: AddressCacheDatabase> AddressCache<D>
+impl<D: AddressCacheDatabase> WalletBase for AddressCache<D>
 where
     WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,
 {
-    pub fn new(database: D) -> Self {
-        Self {
-            inner: RwLock::new(AddressCacheInner::new(database)),
-        }
-    }
-
-    pub fn get_utxo(&self, outpoint: &OutPoint) -> Result<Option<TxOut>, WatchOnlyError> {
+    fn get_utxo(&self, outpoint: &OutPoint) -> Result<Option<TxOut>, WatchOnlyError> {
         let inner = self.get_inner()?;
         // a dirty way to check if the utxo is still unspent
         if !inner.utxo_index.contains_key(outpoint) {
@@ -558,18 +562,18 @@ where
         }
     }
 
-    pub fn n_cached_addresses(&self) -> Result<usize, WatchOnlyError> {
+    fn n_cached_addresses(&self) -> Result<usize, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.address_map.len())
     }
 
     /// Returns the balance of this address, debts (spends) are taken in account
-    pub fn get_address_balance(&self, script_hash: &Hash) -> Result<Option<u64>, WatchOnlyError> {
+    fn get_address_balance(&self, script_hash: &Hash) -> Result<Option<u64>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.address_map.get(script_hash).map(|a| a.balance))
     }
 
-    pub fn get_cached_addresses(&self) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
+    fn get_cached_addresses(&self) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner
             .address_map
@@ -578,32 +582,32 @@ where
             .collect())
     }
 
-    pub fn bump_height(&self, height: u32) -> Result<(), WatchOnlyError> {
+    fn bump_height(&self, height: u32) -> Result<(), WatchOnlyError> {
         let inner = self.get_inner()?;
         inner.database.set_cache_height(height)?;
         Ok(())
     }
 
-    pub fn get_cache_height(&self) -> Result<u32, WatchOnlyError> {
+    fn get_cache_height(&self) -> Result<u32, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.database.get_cache_height().unwrap_or(0))
     }
 
     /// Tells whether or not a descriptor is already cached
-    pub fn is_cached(&self, desc: &str) -> Result<bool, WatchOnlyError> {
+    fn is_cached(&self, desc: &str) -> Result<bool, WatchOnlyError> {
         let inner = self.get_inner()?;
         let known_descs = inner.database.get_descriptors()?;
         Ok(known_descs.iter().any(|s| s == desc))
     }
 
     /// Tells whether an address is already cached
-    pub fn is_address_cached(&self, script_hash: &Hash) -> Result<bool, WatchOnlyError> {
+    fn is_address_cached(&self, script_hash: &Hash) -> Result<bool, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.address_map.contains_key(script_hash))
     }
 
     /// Push a descriptor into the wallet checking whether it is already cached, returning an error if so
-    pub fn push_descriptor(&self, descriptor: &str) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
+    fn push_descriptor(&self, descriptor: &str) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
         if self.is_cached(descriptor)? {
             return Err(WatchOnlyError::DuplicateDescriptor(descriptor.to_string()));
         }
@@ -626,7 +630,7 @@ where
 
     /// Adds an XPUB to the wallet, derives descriptors from it, saves these descriptors persistently,
     /// derives addresses, and caches them if they're not cached already.
-    pub fn push_xpub(&self, xpub: &str, network: Network) -> Result<(), WatchOnlyError> {
+    fn push_xpub(&self, xpub: &str, network: Network) -> Result<(), WatchOnlyError> {
         let descriptors = parse_xpub(xpub, network)?;
 
         for descriptor in descriptors {
@@ -636,27 +640,27 @@ where
         Ok(())
     }
 
-    pub fn get_position(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError> {
+    fn get_position(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.get_transaction(txid).map(|tx| tx.position))
     }
 
-    pub fn get_height(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError> {
+    fn get_height(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.get_transaction(txid).map(|tx| tx.height))
     }
 
-    pub fn get_cached_transaction(&self, txid: &Txid) -> Result<Option<String>, WatchOnlyError> {
+    fn get_cached_transaction(&self, txid: &Txid) -> Result<Option<String>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.get_transaction(txid).map(|tx| serialize_hex(&tx.tx)))
     }
 
-    pub fn setup(&self) -> Result<(), WatchOnlyError> {
+    fn setup(&self) -> Result<(), WatchOnlyError> {
         let inner = self.get_inner()?;
         inner.setup()
     }
 
-    pub fn block_process(
+    fn block_process(
         &self,
         block: &Block,
         height: u32,
@@ -665,7 +669,7 @@ where
         Ok(inner.block_process(block, height))
     }
 
-    pub fn get_address_utxos(
+    fn get_address_utxos(
         &self,
         script_hash: &Hash,
     ) -> Result<Option<AddressUtxos>, WatchOnlyError> {
@@ -673,15 +677,12 @@ where
         Ok(inner.get_address_utxos(script_hash))
     }
 
-    pub fn get_transaction(
-        &self,
-        txid: &Txid,
-    ) -> Result<Option<CachedTransaction>, WatchOnlyError> {
+    fn get_transaction(&self, txid: &Txid) -> Result<Option<CachedTransaction>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.get_transaction(txid))
     }
 
-    pub fn get_address_history(
+    fn get_address_history(
         &self,
         script_hash: &Hash,
     ) -> Result<Option<Vec<CachedTransaction>>, WatchOnlyError> {
@@ -692,39 +693,39 @@ where
     /// Returns the Merkle Proof for a given txid.
     ///
     /// Fails if a given Txid is an unconfirmed transaction.
-    pub fn get_merkle_proof(&self, txid: &Txid) -> Result<Option<MerkleProof>, WatchOnlyError> {
+    fn get_merkle_proof(&self, txid: &Txid) -> Result<Option<MerkleProof>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.get_merkle_proof(txid))
     }
 
-    pub fn derive_addresses(&self) -> Result<(), WatchOnlyError> {
+    fn derive_addresses(&self) -> Result<(), WatchOnlyError> {
         let mut inner = self.get_inner_write()?;
         inner.derive_addresses()
     }
 
-    pub fn get_stats(&self) -> Result<Stats, WatchOnlyError> {
+    fn get_stats(&self) -> Result<Stats, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.database.get_stats()?)
     }
 
-    pub fn maybe_derive_addresses(&self) -> Result<(), WatchOnlyError> {
+    fn maybe_derive_addresses(&self) -> Result<(), WatchOnlyError> {
         let mut inner = self.get_inner_write()?;
         inner.maybe_derive_addresses();
         Ok(())
     }
 
-    pub fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError> {
+    fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError> {
         let inner = self.get_inner()?;
         inner.find_unconfirmed()
     }
 
-    pub fn cache_address(&self, script_pk: ScriptBuf) -> Result<(), WatchOnlyError> {
+    fn cache_address(&self, script_pk: ScriptBuf) -> Result<(), WatchOnlyError> {
         let mut inner = self.get_inner_write()?;
         inner.cache_address(script_pk);
         Ok(())
     }
 
-    pub fn cache_mempool_transaction(
+    fn cache_mempool_transaction(
         &self,
         transaction: &Transaction,
     ) -> Result<Vec<TxOut>, WatchOnlyError> {
@@ -732,7 +733,7 @@ where
         Ok(inner.cache_mempool_transaction(transaction))
     }
 
-    pub fn save_mempool_tx(
+    fn save_mempool_tx(
         &self,
         hash: Hash,
         transaction_to_cache: CachedTransaction,
@@ -742,7 +743,7 @@ where
         Ok(())
     }
 
-    pub fn save_non_mempool_tx(
+    fn save_non_mempool_tx(
         &self,
         transaction: &Transaction,
         is_spend: bool,
@@ -763,13 +764,13 @@ where
         Ok(())
     }
 
-    pub fn get_descriptors(&self) -> Result<Vec<String>, WatchOnlyError> {
+    fn get_descriptors(&self) -> Result<Vec<String>, WatchOnlyError> {
         let inner = self.get_inner()?;
         Ok(inner.database.get_descriptors()?)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn cache_transaction(
+    fn cache_transaction(
         &self,
         transaction: &Transaction,
         height: u32,
@@ -811,6 +812,7 @@ mod test {
     use floresta_common::get_spk_hash;
     use floresta_common::prelude::*;
     use floresta_domain::wallet::model::MerkleProof;
+    use floresta_domain::wallet::wallet_base::WalletBase;
 
     use super::AddressCache;
     use super::memory_database::MemoryDatabase;

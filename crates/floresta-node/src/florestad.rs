@@ -31,6 +31,7 @@ use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::wallet::error::WatchOnlyError;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_mempool::Mempool;

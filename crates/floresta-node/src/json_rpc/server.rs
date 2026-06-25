@@ -33,6 +33,7 @@ use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::wallet::model::CachedTransaction;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;

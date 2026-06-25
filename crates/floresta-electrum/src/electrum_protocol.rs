@@ -23,6 +23,7 @@ use floresta_common::try_and_log;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::wallet::model::CachedTransaction;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
@@ -979,6 +980,7 @@ mod test {
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
     use floresta_domain::wallet::model::MerkleProof;
+    use floresta_domain::wallet::wallet_base::WalletBase;
     use floresta_mempool::Mempool;
     use floresta_watch_only::AddressCache;
     use floresta_watch_only::kv_database::KvDatabase;

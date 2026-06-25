@@ -1011,6 +1011,7 @@ dependencies = [
  "floresta",
  "floresta-chain",
  "floresta-common",
+ "floresta-domain",
  "floresta-electrum",
  "floresta-mempool",
  "floresta-watch-only",
