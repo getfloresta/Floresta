@@ -120,6 +120,13 @@ pub enum NodeRequest {
     },
 }
 
+impl NodeRequest {
+    /// Whether this request broadcasts one of our mempool transactions.
+    pub(crate) const fn is_broadcast_transaction(&self) -> bool {
+        matches!(self, Self::BroadcastTransaction(_))
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub(crate) enum InflightRequests {
     /// Requests the peer to send us the next block headers in their main chain
@@ -144,44 +151,83 @@ pub(crate) enum InflightRequests {
     GetAddresses,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
 /// The kind of connection we see this peer as.
 ///
 /// Core's counterpart: <https://github.com/bitcoin/bitcoin/blob/bf9ef4f0433551e850a11c2da8baae0ec6439a99/src/node/connection_types.h#L18>.
 pub enum ConnectionKind {
-    /// A feeler connection is a short-lived connection used to check whether this peer is alive.
-    ///
-    /// After handshake, we ask for addresses and when we receive an answer we just disconnect,
-    /// marking this peer as alive in our address manager.
-    Feeler,
-
-    /// A regular peer, used to send requests to and learn about transactions and blocks.
-    Regular(ServiceFlags),
-
-    /// An extra peer specially created if our tip hasn't moved for too long.
-    ///
-    /// If more than [`NodeContext::ASSUME_STALE`] seconds have passed since the
-    /// last processed block, we use this to make sure we are not in a partitioned subnet,
-    /// unable to learn about new blocks.
-    Extra,
+    /// A regular outbound peer, used to relay transactions, addresses, and blocks.
+    OutboundFullRelay(#[serde(skip)] ServiceFlags),
 
     /// A connection that was manually requested by our user. This type of peer won't be banned on
     /// misbehaving, and won't respect the [`ServiceFlags`] requirements when creating a
     /// connection.
     Manual,
+
+    /// A short-lived connection used to check whether a known peer is reachable.
+    ///
+    /// A feeler updates the address state for the peer it connects to, but it
+    /// does not solicit new addresses.
+    Feeler,
+
+    /// A short-lived automatic connection for soliciting addresses.
+    ///
+    /// An addr-fetch peer asks for addresses, stores the response in our
+    /// address manager, and then disconnects.
+    AddrFetch,
+
+    /// A peer that is only used to relay blocks, not transactions or addresses.
+    BlockRelayOnly(#[serde(skip)] ServiceFlags),
+
+    /// A temporary extra peer created if our tip hasn't moved for too long.
+    ///
+    /// If more than [`NodeContext::ASSUME_STALE`] seconds have passed since the
+    /// last processed block, we use this to make sure we are not in a partitioned
+    /// subnet, unable to learn about new blocks. If this peer returns useful
+    /// headers, we keep it as a [`ConnectionKind::BlockRelayOnly`] peer.
+    #[serde(rename = "block-relay-only")]
+    Extra,
 }
 
-impl Serialize for ConnectionKind {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
+impl ConnectionKind {
+    /// The service flags required to open this kind of connection.
+    pub(crate) const fn required_services(&self) -> ServiceFlags {
         match self {
-            Self::Feeler => serializer.serialize_str("feeler"),
-            Self::Regular(_) => serializer.serialize_str("regular"),
-            Self::Extra => serializer.serialize_str("extra"),
-            Self::Manual => serializer.serialize_str("manual"),
+            Self::OutboundFullRelay(services) | Self::BlockRelayOnly(services) => *services,
+            Self::Manual | Self::Feeler | Self::AddrFetch | Self::Extra => ServiceFlags::NONE,
         }
+    }
+
+    /// Whether this connection kind was manually requested by the user.
+    pub(crate) const fn is_manual(&self) -> bool {
+        matches!(self, Self::Manual)
+    }
+
+    /// Whether this connection kind relays transactions and addresses.
+    pub(crate) const fn is_full_relay(&self) -> bool {
+        matches!(self, Self::OutboundFullRelay(_) | Self::Manual)
+    }
+
+    /// Whether this connection kind is a long-lived outbound kind managed by our connection logic.
+    pub(crate) const fn is_regular(&self) -> bool {
+        matches!(self, Self::OutboundFullRelay(_) | Self::BlockRelayOnly(_))
+    }
+
+    /// Whether this connection kind is expected to remain open if the peer doesn't die.
+    pub(crate) const fn is_long_lived(&self) -> bool {
+        self.is_manual() || self.is_regular()
+    }
+
+    /// Whether this connection kind is short-lived and disconnected after a
+    /// reachability check or address request.
+    pub(crate) const fn is_short_lived(&self) -> bool {
+        matches!(self, Self::Feeler | Self::AddrFetch)
+    }
+
+    /// Whether this connection kind is block-relay-only.
+    pub(crate) const fn is_block_relay_only(&self) -> bool {
+        matches!(self, Self::BlockRelayOnly(_))
     }
 }
 
@@ -214,8 +260,9 @@ pub struct LocalPeerView {
 
     /// The kind of connection we have with this peer
     ///
-    /// We use different connections with different goals, e.g., feeler connections,
-    /// regular connections, extra connections to find about new tips, etc.
+    /// We use different connections with different goals, e.g. full-relay peers,
+    /// block-relay-only peers, feeler connections, addr-fetch connections, and
+    /// extra connections to learn about new tips.
     pub(crate) kind: ConnectionKind,
 
     /// The latest height this peer has announced to us
@@ -236,21 +283,6 @@ impl LocalPeerView {
     /// Whether this peer advertises any service in `services`.
     pub(crate) fn has_any_service(&self, services: &[ServiceFlags]) -> bool {
         services.iter().any(|service| self.services.has(*service))
-    }
-
-    /// Whether this is a manually added peer
-    pub(crate) const fn is_manual_peer(&self) -> bool {
-        matches!(self.kind, ConnectionKind::Manual)
-    }
-
-    /// Whether this is a regular peer
-    pub(crate) const fn is_regular_peer(&self) -> bool {
-        matches!(self.kind, ConnectionKind::Regular(_))
-    }
-
-    // Connections expected to remain open if the peer doesn't die
-    pub(crate) const fn is_long_lived(&self) -> bool {
-        self.is_manual_peer() || self.is_regular_peer()
     }
 }
 

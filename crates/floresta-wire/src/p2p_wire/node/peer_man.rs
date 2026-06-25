@@ -112,7 +112,7 @@ where
     pub(crate) fn connected_peers(&self) -> usize {
         self.peers
             .values()
-            .filter(|p| p.state == PeerStatus::Ready && p.is_long_lived())
+            .filter(|p| p.state == PeerStatus::Ready && p.kind.is_long_lived())
             .count()
     }
 
@@ -170,6 +170,37 @@ where
         Ok(*peer)
     }
 
+    #[inline]
+    pub(crate) fn send_to_random_peer_with_predicate(
+        &mut self,
+        req: NodeRequest,
+        required_service: ServiceFlags,
+        predicate: impl Fn(&LocalPeerView) -> bool,
+    ) -> Result<u32, WireError> {
+        if self.peers.is_empty() {
+            return Err(WireError::NoPeersAvailable);
+        }
+
+        let peers = match required_service {
+            ServiceFlags::NONE => &self.peer_ids,
+            _ => self
+                .peer_by_service
+                .get(&required_service)
+                .ok_or(WireError::NoPeersAvailable)?,
+        };
+
+        let (peer_id, peer) = peers
+            .iter()
+            .filter_map(|peer_id| self.peers.get(peer_id).map(|peer| (peer_id, peer)))
+            .filter(|(_, peer)| predicate(peer))
+            .choose(&mut rand::rng())
+            .ok_or(WireError::NoPeersAvailable)?;
+
+        peer.channel.send(req).map_err(WireError::ChannelSend)?;
+
+        Ok(*peer_id)
+    }
+
     pub(crate) fn send_to_peer(&self, peer_id: u32, req: NodeRequest) -> Result<(), WireError> {
         if let Some(peer) = &self.peers.get(&peer_id) {
             if peer.state == PeerStatus::Awaiting {
@@ -193,6 +224,10 @@ where
                 continue;
             }
 
+            if request.is_broadcast_transaction() && !peer.kind.is_full_relay() {
+                continue;
+            }
+
             if let Err(err) = peer.channel.send(request.clone()) {
                 warn!("Failed to send request to peer {}: {err}", peer.address);
             }
@@ -200,7 +235,12 @@ where
     }
 
     pub(crate) fn ask_for_addresses(&mut self) -> Result<(), WireError> {
-        let _ = self.send_to_random_peer(NodeRequest::GetAddresses, ServiceFlags::NONE)?;
+        self.send_to_random_peer_with_predicate(
+            NodeRequest::GetAddresses,
+            ServiceFlags::NONE,
+            |peer| peer.state == PeerStatus::Ready && peer.kind.is_full_relay(),
+        )?;
+
         Ok(())
     }
 
@@ -226,32 +266,27 @@ where
             p.state = PeerStatus::Ready;
         });
 
-        // Ask for new addresses to populate our address manager
-        self.send_to_peer(peer, NodeRequest::GetAddresses)?;
-        self.inflight
-            .insert(InflightRequests::GetAddresses, (peer, Instant::now()));
-
         let good_peers_count = self.connected_peers();
         if good_peers_count > T::MAX_OUTGOING_PEERS {
             // We allow utreexo, extra and manual peers to bypass our connection limits
-            let is_utreexo_peer = matches!(version.kind, ConnectionKind::Regular(services) if services.has(service_flags::UTREEXO.into()));
-            let is_manual_peer = version.kind == ConnectionKind::Manual;
+            let is_utreexo_peer = matches!(version.kind, ConnectionKind::OutboundFullRelay(services) if services.has(service_flags::UTREEXO.into()));
+            let is_manual_peer = version.kind.is_manual();
             let is_extra = version.kind == ConnectionKind::Extra;
 
             if !(is_utreexo_peer || is_manual_peer || is_extra) {
                 debug!(
-                    "Already have {} peers, disconnecting peer to avoid blowing up our max of {}",
+                    "Already have {} peers, treating peer {peer} as addr-fetch before disconnecting to avoid blowing up our max of {}",
                     good_peers_count,
                     T::MAX_OUTGOING_PEERS
                 );
 
-                // If a peer exceeds our max, just turn them into a feeler so we can receive their
-                // AddrV2 message and then disconnect.
+                // If a peer exceeds our max, just turn them into an addr-fetch
+                // so we can receive their AddrV2 message and then disconnect.
                 self.peers.entry(peer).and_modify(|p| {
-                    p.kind = ConnectionKind::Feeler;
+                    p.kind = ConnectionKind::AddrFetch;
                 });
 
-                version.kind = ConnectionKind::Feeler;
+                version.kind = ConnectionKind::AddrFetch;
             }
         }
 
@@ -265,17 +300,57 @@ where
                 .update_set_service_flag(version.address_id, version.services)
                 .update_set_state(version.address_id, AddressState::Tried(now));
 
+            debug!(
+                "Feeler peer {peer} completed handshake; marking address tried and disconnecting"
+            );
+            self.send_to_peer(peer, NodeRequest::Shutdown)?;
+            return Ok(());
+        }
+
+        if version.kind == ConnectionKind::AddrFetch {
+            debug!("Addr-fetch peer {peer} completed handshake; requesting addresses");
+            self.send_to_peer(peer, NodeRequest::GetAddresses)?;
+            self.inflight
+                .insert(InflightRequests::GetAddresses, (peer, Instant::now()));
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            self.address_man
+                .update_set_service_flag(version.address_id, version.services)
+                .update_set_state(version.address_id, AddressState::Tried(now));
+
             return Ok(());
         }
 
         if version.kind == ConnectionKind::Extra {
+            if let Some(peer_data) = self.common.peers.get_mut(&peer) {
+                peer_data.services = version.services;
+                peer_data.user_agent.clone_from(&version.user_agent);
+                peer_data.height = version.blocks;
+                peer_data.transport_protocol = version.transport_protocol;
+            }
+
             let locator = self.chain.get_block_locator()?;
+            debug!("Extra peer {peer} completed handshake; requesting headers");
             self.send_to_peer(peer, NodeRequest::GetHeaders(locator))?;
 
             self.inflight
                 .insert(InflightRequests::Headers, (peer, Instant::now()));
 
             return Ok(());
+        }
+
+        if !version.kind.is_block_relay_only() {
+            debug!(
+                "Requesting addresses from peer {peer} kind={:?}",
+                version.kind
+            );
+            self.send_to_peer(peer, NodeRequest::GetAddresses)?;
+            self.inflight
+                .insert(InflightRequests::GetAddresses, (peer, Instant::now()));
         }
 
         info!(
@@ -290,7 +365,9 @@ where
             peer_data.transport_protocol = version.transport_protocol;
 
             // If this peer doesn't have basic services, we disconnect it
-            if let ConnectionKind::Regular(needs) = version.kind {
+            if let ConnectionKind::OutboundFullRelay(needs)
+            | ConnectionKind::BlockRelayOnly(needs) = version.kind
+            {
                 if !Self::is_peer_good(peer_data, needs) {
                     info!(
                         "Disconnecting peer {peer} for not having the required services. has={} needs={}",
@@ -355,6 +432,14 @@ where
                 .update_set_service_flag(version.address_id, version.services);
 
             self.peer_ids.push(peer);
+
+            if version.kind.is_block_relay_only() {
+                let locator = self.chain.get_block_locator()?;
+                self.send_to_peer(peer, NodeRequest::GetHeaders(locator))?;
+
+                self.inflight
+                    .insert(InflightRequests::Headers, (peer, Instant::now()));
+            }
         }
 
         #[cfg(feature = "metrics")]
@@ -472,7 +557,7 @@ where
 
     pub(crate) fn handle_disconnection(&mut self, peer: u32, idx: usize) -> Result<(), WireError> {
         if let Some(p) = self.peers.remove(&peer) {
-            if p.is_long_lived() && p.state == PeerStatus::Ready {
+            if p.kind.is_long_lived() && p.state == PeerStatus::Ready {
                 info!("Peer disconnected: {peer}");
             }
 
@@ -539,7 +624,7 @@ where
         };
 
         // Manual connections are exempt from being punished
-        if peer.is_manual_peer() {
+        if peer.kind.is_manual() {
             return Ok(());
         }
 
@@ -565,7 +650,7 @@ where
     pub(crate) fn disconnect_and_ban(&mut self, peer: PeerId) -> Result<(), WireError> {
         if let Some(peer) = self.peers.get_mut(&peer) {
             // Manual connections are exempt from being punished
-            if peer.is_manual_peer() {
+            if peer.kind.is_manual() {
                 return Ok(());
             }
 
@@ -584,7 +669,7 @@ where
         let peers = self
             .peers
             .values()
-            .filter(|peer| peer.is_regular_peer() && !peer.has_any_service(protected_services))
+            .filter(|peer| peer.kind.is_regular() && !peer.has_any_service(protected_services))
             .sample(&mut rng, n);
 
         for peer in peers {
@@ -623,10 +708,11 @@ where
                 continue;
             };
 
-            // If a feeler connection times out, we ban them at the first message
+            // Short-lived connections don't get retried through the normal
+            // inflight request path.
             if let Some(peer_data) = self.peers.get(&peer) {
-                if peer_data.kind == ConnectionKind::Feeler {
-                    debug!("Feeler peer {peer} timed out request");
+                if peer_data.kind.is_short_lived() {
+                    debug!("Short-lived peer {peer} timed out request");
                     self.send_to_peer(peer, NodeRequest::Shutdown)?;
                     self.peers.remove(&peer);
                     continue;
@@ -664,13 +750,14 @@ where
         let addresses: Vec<_> = addresses.into_iter().map(|addr| addr.into()).collect();
         self.address_man.push_addresses(&addresses);
 
-        // For feeler peers, we ask for addresses to populate our address manager,
-        // then disconnect them
+        // Addr-fetch peers are short-lived: after we receive their addresses,
+        // we disconnect them.
         let Some(peer_data) = self.peers.get(&peer) else {
             return Ok(());
         };
 
-        if matches!(peer_data.kind, ConnectionKind::Feeler) {
+        if matches!(peer_data.kind, ConnectionKind::AddrFetch) {
+            debug!("Addr-fetch peer {peer} returned addresses; disconnecting");
             self.send_to_peer(peer, NodeRequest::Shutdown)?;
         }
 
