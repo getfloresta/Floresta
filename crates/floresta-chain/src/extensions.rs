@@ -133,6 +133,11 @@ impl HeaderExt for Header {
             current_header = prev_header;
         }
         block_timestamps.sort();
+
+        #[allow(
+            clippy::indexing_slicing,
+            reason = "INVARIANT: the loop always pushes at least one timestamp (self.time) before any possible break, so block_timestamps is never empty and len() / 2 is always a valid index"
+        )]
         let median_time_past = block_timestamps[block_timestamps.len() / 2];
 
         Ok(median_time_past)
@@ -215,6 +220,14 @@ impl From<ChainWorkOverflow> for HeaderExtError {
 
 #[derive(Debug, PartialEq)]
 pub struct ChainWorkOverflow;
+
+impl Display for ChainWorkOverflow {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "chain work calculation overflowed")
+    }
+}
+
+impl Error for ChainWorkOverflow {}
 
 pub trait WorkExt {
     /// Multiplies the Work by a u32 factor, returning an error if overflow occurs.
