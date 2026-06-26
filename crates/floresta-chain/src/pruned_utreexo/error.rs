@@ -70,6 +70,19 @@ pub enum BlockchainError {
 
     /// A [`ChainState`](crate::ChainState) operation overflowed.
     OperationOverflow(ChainWorkOverflow),
+
+    /// An arithmetic overflow that is not related to chain work.
+    ///
+    /// Used for height additions, usize→u32 conversions, and other
+    /// integer operations that should never overflow in practice.
+    Overflow(&'static str),
+
+    /// the requested operation is not supported by this backend
+    ///
+    /// some [`ChainState`](crate::ChainState) implementations are pruned and
+    /// do not hold full blocks or transactions; callers should handle this
+    /// variant gracefully
+    Unsupported(&'static str),
 }
 
 impl_error_from!(BlockchainError, ChainWorkOverflow, OperationOverflow);
@@ -97,6 +110,8 @@ impl Display for BlockchainError {
             Self::InvalidTip(e) => write!(f, "The ChainState's tip is invalid: {e}"),
             Self::BadValidationIndex => write!(f, "The ChainState's validation index is invalid"),
             Self::OperationOverflow(_) => write!(f, "A ChainState operation overflowed"),
+            Self::Overflow(msg) => write!(f, "arithmetic overflow: {msg}"),
+            Self::Unsupported(op) => write!(f, "operation not supported: {op}"),
         }
     }
 }
