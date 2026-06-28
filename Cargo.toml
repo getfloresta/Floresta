@@ -66,7 +66,7 @@ spin = { version = "=0.10.0", default-features = false, features = ["spin_mutex"
 tempfile = { version = "=3.27.0" }
 tokio = { version = "=1.52.3", features = ["net", "time", "rt-multi-thread", "signal", "macros"] }
 tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12"] }
-toml = { version = "=0.9.12", default-features = false, features = ["std", "parse", "serde"] }
+toml = { version = "=1.1.2", default-features = false, features = ["std", "parse", "serde"] }
 tracing = { version = "=0.1.44", default-features = false }
 zstd = { version = "=0.13.3" }
 # Pins for MSRV compatibility:
