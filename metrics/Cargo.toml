@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 # All dependencies MUST be pinned precisely with `X.Y.z`
 axum = { workspace = true }
-prometheus-client = { version = "=0.22.3" }
+prometheus-client = { version = "=0.24.1" }
 sysinfo = { version = "=0.36.1", default-features = false, features = ["system"] }
 tokio = { workspace = true }
 
