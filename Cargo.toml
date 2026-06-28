@@ -52,7 +52,7 @@ bitcoin = { version = "=0.32.8", default-features = false }
 clap = { version = "=4.6.1", default-features = false, features = ["derive", "std"] }
 corepc-types = { version = "=0.11.0" }
 console-subscriber = { version = "=0.5.0", default-features = false }
-dns-lookup = { version = "=2.1.1" }
+dns-lookup = { version = "=3.0.1" }
 hex = { version = "=0.4.3" }
 kv = { version = "=0.24.0" }
 miniscript = { version = "=12.3.6", default-features = false }
