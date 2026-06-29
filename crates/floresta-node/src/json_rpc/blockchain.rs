@@ -29,10 +29,13 @@ use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
 use floresta_wire::node_interface::ChainMethods;
 use miniscript::descriptor::checksum;
+use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::stump::StumpError;
 use serde_json::Value;
 use serde_json::json;
 use tracing::debug;
 
+use super::request::TipProof;
 use super::res::GetBlockHeaderRes;
 use super::res::GetTxOutProof;
 use super::res::jsonrpc_interface::JsonRpcError;
@@ -40,6 +43,8 @@ use super::server::RpcChain;
 use super::server::RpcImpl;
 use crate::json_rpc::res::GetBlockRes;
 use crate::json_rpc::res::RescanConfidence;
+use crate::json_rpc::res::VerifyUtxoChainTipInclusionProofRes;
+use crate::json_rpc::res::VerifyUtxoChainTipInclusionProofVerbose;
 use crate::json_rpc::server::SERIALIZATION_EXPECT_MSG;
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
@@ -808,5 +813,65 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    pub(super) fn verify_utxo_chain_tip_inclusion_proof(
+        &self,
+        proof: TipProof,
+        verbosity: u8,
+        blockhash: Option<BlockHash>,
+    ) -> Result<VerifyUtxoChainTipInclusionProofRes, JsonRpcError> {
+        let target_hash = match blockhash {
+            Some(hash) if self.chain.get_block_header(&hash).is_err() => {
+                Err(JsonRpcError::BlockNotFound)? // This guards us from the block being unknown or unexistent
+            }
+            Some(hash) => hash,
+            None => self.get_best_block_hash()?,
+        };
+
+        let stump = self
+            .chain
+            .get_acc(target_hash)
+            .map_err(|_| JsonRpcError::Chain)?
+            .ok_or(JsonRpcError::UnknownUtreexoAcc(target_hash.to_string()))?;
+
+        let valid = match stump.verify(&proof.proof, &proof.hashes_proven) {
+            Ok(valid) => valid,
+            Err(StumpError::InvalidProof(ref msg)) if msg.contains("Missing sibling") => false,
+            Err(e) => {
+                return Err(JsonRpcError::InvalidProof(format!(
+                    "Proof verification failed: {e:?}"
+                )));
+            }
+        };
+
+        // Display hashes in reversed byte order to match utreexod's
+        // convention (Bitcoin's standard display endianness).
+        let to_reversed_hex = |h: &BitcoinNodeHash| match h {
+            BitcoinNodeHash::Some(bytes) => {
+                let mut rev = *bytes;
+                rev.reverse();
+                rev.iter().fold(String::with_capacity(64), |mut s, b| {
+                    use std::fmt::Write;
+                    write!(s, "{b:02x}").expect("hex write");
+                    s
+                })
+            }
+            _ => "empty".to_string(),
+        };
+
+        match verbosity {
+            0 => Ok(VerifyUtxoChainTipInclusionProofRes::Zero(valid)),
+            1 => Ok(VerifyUtxoChainTipInclusionProofRes::One(
+                VerifyUtxoChainTipInclusionProofVerbose {
+                    valid,
+                    proved_at_hash: proof.proved_at_hash.to_string(),
+                    targets: proof.proof.targets,
+                    proof_hashes: proof.proof.hashes.iter().map(to_reversed_hex).collect(),
+                    hashes_proven: proof.hashes_proven.iter().map(to_reversed_hex).collect(),
+                },
+            )),
+            _ => Err(JsonRpcError::InvalidVerbosityLevel),
+        }
     }
 }

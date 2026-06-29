@@ -46,6 +46,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
+use super::request::TipProof;
 use super::res::RawTxJson;
 use super::res::ScriptPubKeyJson;
 use super::res::ScriptSigJson;
@@ -446,6 +447,18 @@ async fn handle_json_rpc_request(
             state
                 .send_raw_transaction(tx)
                 .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
+        "verifyutxochaintipinclusionproof" => {
+            let proof: TipProof = get_at(&params, 0, "proof")?;
+
+            let verbosity: u8 = get_with_default(&params, 1, "verbosity", 0)?;
+
+            let blockhash: Option<BlockHash> = try_into_optional(get_at(&params, 2, "blockhash"))?;
+
+            state
+                .verify_utxo_chain_tip_inclusion_proof(proof, verbosity, blockhash)
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 

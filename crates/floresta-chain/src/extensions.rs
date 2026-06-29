@@ -455,7 +455,11 @@ mod tests {
             unimplemented!()
         }
 
-        fn acc(&self) -> Stump {
+        fn get_tip_acc(&self) -> Stump {
+            unimplemented!()
+        }
+
+        fn get_acc(&self, _block: BlockHash) -> Result<Option<Stump>, Self::Error> {
             unimplemented!()
         }
 
