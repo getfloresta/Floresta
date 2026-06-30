@@ -28,12 +28,12 @@ crates="\
     floresta-wire \
     florestad \
     floresta-cli \
-    fuzz \
-    metrics"
+    floresta-metrics \
+    fuzz"
 
 for crate in $crates; do
     # Determine the path to the crate
-    if [ "$crate" = "fuzz" ] || [ "$crate" = "metrics" ]; then
+    if [ "$crate" = "fuzz" ]; then
         path="$crate"
     elif [ "$crate" = "florestad" ] || [ "$crate" = "floresta-cli" ]; then
         path="bin/$crate"
@@ -45,8 +45,8 @@ for crate in $crates; do
     # include that case (see https://github.com/taiki-e/cargo-hack/issues/155#issuecomment-2474330839)
     if [ "$crate" = "floresta-compact-filters" ] || \
        [ "$crate" = "floresta-electrum" ] || \
-       [ "$crate" = "fuzz" ] || \
-       [ "$crate" = "metrics" ]; then
+       [ "$crate" = "floresta-metrics" ] || \
+       [ "$crate" = "fuzz" ]; then
         # These crates don't have a default feature
         skip_default=""
     else

@@ -1014,6 +1014,7 @@ dependencies = [
  "floresta-domain",
  "floresta-electrum",
  "floresta-mempool",
+ "floresta-metrics",
  "floresta-node",
  "floresta-rpc",
  "floresta-watch-only",
@@ -1031,10 +1032,10 @@ dependencies = [
  "bitcoinkernel",
  "criterion",
  "floresta-common",
+ "floresta-metrics",
  "hex",
  "lru",
  "memmap2",
- "metrics",
  "rand 0.10.1",
  "rustreexo",
  "serde",
@@ -1135,6 +1136,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "floresta-metrics"
+version = "0.2.0"
+dependencies = [
+ "axum",
+ "prometheus-client",
+ "sysinfo",
+ "tokio",
+]
+
+[[package]]
 name = "floresta-node"
 version = "0.9.0"
 dependencies = [
@@ -1148,10 +1159,10 @@ dependencies = [
  "floresta-domain",
  "floresta-electrum",
  "floresta-mempool",
+ "floresta-metrics",
  "floresta-watch-only",
  "floresta-wire",
  "libc",
- "metrics",
  "miniscript",
  "pretty_assertions",
  "rcgen",
@@ -1209,7 +1220,7 @@ dependencies = [
  "floresta-compact-filters",
  "floresta-domain",
  "floresta-mempool",
- "metrics",
+ "floresta-metrics",
  "rand 0.10.1",
  "rustls",
  "rustreexo",
@@ -1965,16 +1976,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "metrics"
-version = "0.2.0"
-dependencies = [
- "axum",
- "prometheus-client",
- "sysinfo",
- "tokio",
 ]
 
 [[package]]

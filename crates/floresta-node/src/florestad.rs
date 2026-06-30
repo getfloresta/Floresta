@@ -606,7 +606,7 @@ impl Florestad {
             let metrics_server_address =
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
 
-            task::spawn(metrics::metrics_server(metrics_server_address));
+            task::spawn(floresta_metrics::metrics_server(metrics_server_address));
             info!("Started metrics server on: {metrics_server_address}",);
 
             // Periodically update memory usage
@@ -616,7 +616,7 @@ impl Florestad {
 
                 loop {
                     ticker.tick().await;
-                    metrics::get_metrics().update_memory_usage();
+                    floresta_metrics::get_metrics().update_memory_usage();
                 }
             });
         }

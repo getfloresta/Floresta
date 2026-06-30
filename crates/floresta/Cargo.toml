@@ -40,6 +40,7 @@ floresta-compact-filters = { path = "../floresta-compact-filters", optional = tr
 floresta-domain = { path = "../floresta-domain", optional = true, default-features = false }
 floresta-electrum = { path = "../floresta-electrum", optional = true, default-features = false }
 floresta-mempool = { path = "../floresta-mempool", optional = true, default-features = false }
+floresta-metrics = { path = "../floresta-metrics", optional = true, default-features = false }
 floresta-node = { path = "../floresta-node", optional = true, default-features = false }
 floresta-rpc = { path = "../floresta-rpc", optional = true, default-features = false }
 floresta-watch-only = { path = "../floresta-watch-only", optional = true, default-features = false }
@@ -65,6 +66,7 @@ full = [
     "domain",
     "electrum",
     "mempool",
+    "metrics",
     "node-json-rpc",
     "rpc-jsonrpc",
     "watch-only-std",
@@ -93,11 +95,14 @@ electrum = ["dep:floresta-electrum"]
 # floresta-mempool
 mempool = ["dep:floresta-mempool"]
 
+# floresta-metrics
+metrics = ["dep:floresta-metrics"]
+
 # floresta-node
 node = ["dep:floresta-node"]
 node-compact-filters = ["node", "compact-filters", "floresta-node/compact-filters"]
 node-json-rpc = ["node", "floresta-node/json-rpc"]
-node-metrics = ["node", "chain-metrics", "wire-metrics", "floresta-node/metrics"]
+node-metrics = ["node", "metrics", "chain-metrics", "wire-metrics", "floresta-node/metrics"]
 node-zmq-server = ["node", "floresta-node/zmq-server"]
 
 # floresta-rpc
@@ -112,7 +117,7 @@ watch-only-std = ["watch-only", "floresta-watch-only/std"]
 
 # floresta-wire
 wire = ["dep:floresta-wire"]
-wire-metrics = ["wire", "floresta-wire/metrics"]
+wire-metrics = ["wire", "metrics", "floresta-wire/metrics"]
 
 [package.metadata.docs.rs]
 all-features = true
