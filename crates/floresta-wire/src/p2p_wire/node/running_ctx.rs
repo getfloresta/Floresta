@@ -157,7 +157,7 @@ where
         let protected_services = &[service_flags::UTREEXO.into()];
         sync.disconnect_random_peers(peers_to_disconnect, protected_services);
 
-        Ok(UtreexoNode {
+        Ok(Self {
             common: sync.common,
             context: self.context,
         })
