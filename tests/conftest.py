@@ -296,6 +296,39 @@ def shared_utreexod_node(shared_node_manager) -> Node:
     return node
 
 
+@pytest.fixture(scope="class")
+def shared_extra_bitcoind_pair(shared_node_manager) -> tuple[Node, Node]:
+    """Two bitcoind nodes (v1 transport) shared across all methods in a test class."""
+    bitcoind_a = shared_node_manager.add_node_extra_args(
+        variant=NodeType.BITCOIND, extra_args=["-v2transport=0"]
+    )
+    shared_node_manager.run_node(bitcoind_a)
+
+    bitcoind_b = shared_node_manager.add_node_extra_args(
+        variant=NodeType.BITCOIND, extra_args=["-v2transport=0"]
+    )
+    shared_node_manager.run_node(bitcoind_b)
+
+    return bitcoind_a, bitcoind_b
+
+
+@pytest.fixture(scope="class")
+def shared_connect_flag_pair(shared_node_manager) -> tuple[Node, Node]:
+    """A dedicated florestad (with --connect) and bitcoind pair shared across a test class."""
+    bitcoind = shared_node_manager.add_node_extra_args(
+        variant=NodeType.BITCOIND, extra_args=["-v2transport=0"]
+    )
+    shared_node_manager.run_node(bitcoind)
+
+    florestad = shared_node_manager.add_node_extra_args(
+        variant=NodeType.FLORESTAD,
+        extra_args=[f"--connect={bitcoind.p2p_url}"],
+    )
+    shared_node_manager.run_node(florestad)
+
+    return florestad, bitcoind
+
+
 @pytest.fixture
 def add_node_with_extra_args(node_manager):
     """
