@@ -111,7 +111,13 @@ impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
         height: u32,
         spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
     ) {
-        let spent_utxos = spent_utxos.expect("Safe to unwrap because wants_spent_utxos()");
+        // INVARIANT: `wants_spent_utxos()` returns `true` for this impl,
+        // so the caller always passes `Some(...)` for `spent_utxos`
+        #[allow(
+            clippy::expect_used,
+            reason = "invariant: wants_spent_utxos guarantees Some"
+        )]
+        let spent_utxos = spent_utxos.expect("wants_spent_utxos() guarantees Some");
         self.send((block.to_owned(), height, spent_utxos.to_owned()));
     }
 }
@@ -191,7 +197,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
     ) -> Result<(), BlockchainError> {
         for (offset, &header) in headers.iter().enumerate() {
-            let disk_height = height + offset as u32;
+            let offset_u32: u32 = offset
+                .try_into()
+                .map_err(|_err| BlockchainError::Overflow("header offset exceeds u32"))?;
+            let disk_height = height
+                .checked_add(offset_u32)
+                .ok_or(BlockchainError::Overflow("height + offset overflow"))?;
             let disk_header = DiskBlockHeader::FullyValid(header, disk_height);
             let hash = disk_header.block_hash();
 
@@ -224,7 +235,8 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let height = prev_block
             .height()
             .ok_or(BlockValidationErrors::BlockExtendsAnOrphanChain)?
-            + 1;
+            .checked_add(1)
+            .ok_or(BlockchainError::Overflow("height + 1 overflow"))?;
 
         // Check pow
         let expected_target = self.get_next_required_work(&prev_block, height, block_header)?;
@@ -238,7 +250,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         let block_hash = block_header
             .validate_pow(actual_target)
-            .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
+            .map_err(|_err| BlockValidationErrors::NotEnoughPow)?;
         Ok(block_hash)
     }
 
@@ -270,7 +282,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let mut work = self.get_work(fork_point)?;
 
         while header.block_hash() != fork_point {
-            work = work + header.work();
+            // INVARIANT: Work accumulation is bounded by the total Bitcoin supply
+            // of proof-of-work, which fits well within the 256-bit Work type
+            #[allow(clippy::arithmetic_side_effects)]
+            {
+                work = work + header.work();
+            }
             header = *self.get_ancestor(&header)?;
         }
 
@@ -291,7 +308,14 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let mut total_chainwork = Work::from_be_bytes([0u8; 32]);
         for epoch_start_height in (0..=block_height).step_by(2016) {
             // Calculate the number of blocks in this epoch
+            // INVARIANT: epoch_start_height comes from step_by(2016) over 0..=block_height,
+            // so epoch_start_height <= block_height. Adding 2015 fits in u32 since
+            // block_height is a real chain height (well below u32::MAX). The subtraction
+            // cannot underflow because min() guarantees epoch_end_height >= epoch_start_height,
+            // and the +1 cannot overflow since the difference is at most 2015
+            #[allow(clippy::arithmetic_side_effects)]
             let epoch_end_height = min(epoch_start_height + 2015, block_height);
+            #[allow(clippy::arithmetic_side_effects)]
             let blocks_in_epoch = epoch_end_height - epoch_start_height + 1;
 
             // Get the block hash and header at the start of the epoch
@@ -334,7 +358,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let mut counter = 0;
         while !self.is_genesis(&header) {
             header = *self.get_ancestor(&header)?;
-            counter += 1;
+            // INVARIANT: counter is bounded by the chain length (at most ~u32::MAX
+            // blocks), the loop terminates at genesis, so this cannot overflow
+            #[allow(clippy::arithmetic_side_effects)]
+            {
+                counter += 1;
+            }
         }
 
         Ok(counter)
@@ -356,7 +385,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             self.update_header_and_index(&disk_header, hash, height)?;
 
             header = self.get_ancestor(&header)?;
-            height -= 1;
+            // INVARIANT: height starts at get_chain_depth(new_tip) and the loop
+            // exits before reaching genesis (is_genesis check), so height > 0
+            #[allow(clippy::arithmetic_side_effects)]
+            {
+                height -= 1;
+            }
         }
 
         Ok(())
@@ -376,7 +410,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             self.update_header(&DiskBlockHeader::InFork(header, height))?;
 
             header = *self.get_ancestor(&header)?;
-            height -= 1;
+            // INVARIANT: height starts at get_chain_depth(old_tip) and the loop
+            // exits before reaching genesis (is_genesis check), so height > 0
+            #[allow(clippy::arithmetic_side_effects)]
+            {
+                height -= 1;
+            }
         }
 
         Ok(())
@@ -519,7 +558,10 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         let parent_height = self.get_ancestor(&branch_tip)?.try_height()?;
 
-        self.update_header(&DiskBlockHeader::InFork(branch_tip, parent_height + 1))?;
+        let fork_height = parent_height
+            .checked_add(1)
+            .ok_or(BlockchainError::Overflow("fork height + 1 overflow"))?;
+        self.update_header(&DiskBlockHeader::InFork(branch_tip, fork_height))?;
 
         Ok(())
     }
@@ -576,21 +618,20 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         }
     }
 
-    fn new(mut chainstore: PersistedState, network: Network, assume_valid: AssumeValidArg) -> Self {
+    fn new(
+        mut chainstore: PersistedState,
+        network: Network,
+        assume_valid: AssumeValidArg,
+    ) -> Result<Self, BlockchainError> {
         let parameters = network.into();
         let genesis = genesis_block(&parameters);
 
-        chainstore
-            .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
-            .expect("Error while saving genesis");
-
-        chainstore
-            .update_block_index(0, genesis.block_hash())
-            .expect("Error updating index");
+        chainstore.save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))?;
+        chainstore.update_block_index(0, genesis.block_hash())?;
 
         let assume_valid = ChainParams::get_assume_valid(network, assume_valid);
 
-        Self {
+        Ok(Self {
             inner: RwLock::new(ChainStateInner {
                 chainstore,
                 acc: Stump::new(),
@@ -606,7 +647,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
                 consensus: Consensus { parameters },
                 assume_valid,
             }),
-        }
+        })
     }
 
     /// Fetches a `DiskBlockHeader` from the chain store given its block hash. Returns an error if
@@ -644,7 +685,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     /// them
     fn reindex_chain(&self) -> Result<(), BlockchainError> {
         // Figure out what's the best chain we have
-        let best_chain = self.find_best_chain();
+        let best_chain = self.find_best_chain()?;
 
         // This is what we've found as the best chain, now let's figure out
         // what is the most recent accumulator we have
@@ -671,7 +712,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         if let Some((last_acc_height, acc)) = found {
             // If the last acc height is lower than the validation index height, roll back our
             // database state
-            for height in (last_acc_height + 1)..=validation_index_height {
+            // INVARIANT: last_acc_height < validation_index_height (we only set `found` for
+            // heights in 1..=validation_index_height), so +1 produces a valid range start
+            // that fits in u32
+            #[allow(clippy::arithmetic_side_effects)]
+            let rollback_start = last_acc_height + 1;
+            for height in rollback_start..=validation_index_height {
                 let header = self.get_header_by_height(height)?;
                 self.update_header(&DiskBlockHeader::HeadersOnly(*header, height))?;
             }
@@ -697,46 +743,62 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
     /// Reconstructs the `BestChain` data based on the database indexes and headers. This is useful
     /// to recover from an invalid state or data corruption
-    fn find_best_chain(&self) -> BestChain {
+    fn find_best_chain(&self) -> Result<BestChain, BlockchainError> {
         let get_disk_block_hash =
             |height: u32| -> Result<Option<BlockHash>, PersistedState::Error> {
                 read_lock!(self).chainstore.get_block_hash(height)
             };
 
-        let mut best_block = get_disk_block_hash(0)
-            // TODO: handle possible Err
-            .expect("TODO handle chainstore error")
-            .expect("expected genesis block, found None");
+        let mut best_block = get_disk_block_hash(0)?.ok_or(BlockchainError::ChainNotInitialized)?;
 
         let mut depth = 0;
         let mut validation_index = best_block;
+        // INVARIANT: depth starts at 0 and only increments inside the loop below,
+        // bounded by the number of blocks in the database (well below u32::MAX)
+        #[allow(clippy::arithmetic_side_effects)]
         let mut next_height = depth + 1;
 
         // Iteratively fetch the disk header given the next height
         while let Ok(Some(block_hash)) = get_disk_block_hash(next_height) {
             match self.get_disk_block_header(&block_hash) {
                 Ok(DiskBlockHeader::FullyValid(_, height)) => {
-                    assert_eq!(height, next_height);
+                    if height != next_height {
+                        return Err(BlockchainError::InvalidTip(format(format_args!(
+                            "height mismatch at index {next_height}: expected {next_height}, got {height}"
+                        ))));
+                    }
                     validation_index = block_hash;
                 }
                 Ok(DiskBlockHeader::HeadersOnly(_, height))
                 | Ok(DiskBlockHeader::AssumedValid(_, height)) => {
-                    assert_eq!(height, next_height);
+                    if height != next_height {
+                        return Err(BlockchainError::InvalidTip(format(format_args!(
+                            "height mismatch at index {next_height}: expected {next_height}, got {height}"
+                        ))));
+                    }
                 }
-                _ => break,
+                Ok(DiskBlockHeader::Orphan(_))
+                | Ok(DiskBlockHeader::InFork(_, _))
+                | Ok(DiskBlockHeader::InvalidChain(_))
+                | Err(_) => break,
             }
 
             best_block = block_hash;
             depth = next_height;
-            next_height += 1;
+            // INVARIANT: next_height is bounded by the number of blocks stored
+            // in the database, the loop terminates when get_block_hash returns none
+            #[allow(clippy::arithmetic_side_effects)]
+            {
+                next_height += 1;
+            }
         }
 
-        BestChain {
+        Ok(BestChain {
             best_block,
             depth,
             validation_index,
             alternative_tips: Vec::new(),
-        }
+        })
     }
 
     fn load_chain_state(
@@ -802,7 +864,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         if chainstore.load_height()?.is_some() {
             return Self::load_chain_state(chainstore, network, assume_valid);
         }
-        Ok(Self::new(chainstore, network, assume_valid))
+        Self::new(chainstore, network, assume_valid)
     }
 
     /// Checks whether our database got a file-level corruption, and if so, reindex.
@@ -859,7 +921,9 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         }
 
         // make sure we don't have valid blocks that are after our validation index
-        let next_height = validation_index + 1;
+        let next_height = validation_index
+            .checked_add(1)
+            .ok_or(BlockchainError::Overflow("validation_index + 1 overflow"))?;
         if next_height > best_height {
             // We don't have a next block, so we are good
             return Ok(());
@@ -952,16 +1016,27 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let params: ChainParams = self.chain_params();
         // Special testnet rule, if a block takes more than 20 minutes to mine, we can
         // mine a block with diff 1
-        if params.params.allow_min_difficulty_blocks
-            && last_block.time + params.params.pow_target_spacing as u32 * 2 < next_header.time
+        // INVARIANT: `pow_target_spacing` is a small protocol constant (600s on mainnet)
+        // and block timestamps are real Unix timestamps (well below u32::MAX), so
+        // multiplying by 2 and adding to a timestamp cannot overflow u32 in practice
+        #[allow(clippy::arithmetic_side_effects)]
+        let min_difficulty_threshold =
+            last_block.time + params.params.pow_target_spacing as u32 * 2;
+        if params.params.allow_min_difficulty_blocks && min_difficulty_threshold < next_header.time
         {
             return Ok(params.params.max_attainable_target);
         }
 
         // Regtest don't have retarget
-        if !params.params.no_pow_retargeting && (next_height) % 2016 == 0 {
-            // First block in this epoch
+        // INVARIANT: 2016 is a non-zero compile-time constant, so % cannot panic
+        #[allow(clippy::arithmetic_side_effects)]
+        let at_retarget_boundary = next_height % 2016 == 0;
+        if !params.params.no_pow_retargeting && at_retarget_boundary {
+            // INVARIANT: next_height % 2016 == 0 guarantees next_height >= 2016,
+            // so both subtractions are safe
+            #[allow(clippy::arithmetic_side_effects)]
             let first_block = self.get_header_by_height(next_height - 2016)?;
+            #[allow(clippy::arithmetic_side_effects)]
             let last_block = self.get_header_by_height(next_height - 1)?;
 
             let target =
@@ -984,10 +1059,17 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         // Difficulty adjustment window
         let window = params.params.miner_confirmation_window;
 
-        if !params.enforce_bip94 || height % window != 0 {
+        // INVARIANT: `window` is a non-zero protocol constant (2016 on mainnet/signet),
+        // so the remainder operation is safe and cannot panic
+        #[allow(clippy::arithmetic_side_effects)]
+        let at_adjustment_boundary = height % window == 0;
+        if !params.enforce_bip94 || !at_adjustment_boundary {
             return Ok(());
         }
 
+        // INVARIANT: height % window != 0 returned early above, and window > 0,
+        // so height >= 1 and this subtraction cannot underflow
+        #[allow(clippy::arithmetic_side_effects)]
         let prev_header = self.get_header_by_height(height - 1)?;
         Ok(Consensus::check_bip94_time(block, &prev_header)?)
     }
@@ -1110,17 +1192,31 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         while index > 0 {
             while current_height > index {
                 current_header = self.get_ancestor(&current_header)?;
-                current_height -= 1;
+                // INVARIANT: current_height > index is checked by the loop condition,
+                // so current_height > 0 and this cannot underflow
+                #[allow(clippy::arithmetic_side_effects)]
+                {
+                    current_height -= 1;
+                }
             }
 
             if hashes.len() >= 10 {
-                step *= 2;
+                // INVARIANT: step starts at 1 and doubles each iteration, the loop
+                // terminates when index <= step, limiting step to at most index (≤ u32::MAX)
+                #[allow(clippy::arithmetic_side_effects)]
+                {
+                    step *= 2;
+                }
             }
 
             hashes.push(current_header.block_hash());
 
             if index > step {
-                index -= step;
+                // INVARIANT: index > step is checked above, so this cannot underflow
+                #[allow(clippy::arithmetic_side_effects)]
+                {
+                    index -= step;
+                }
             } else {
                 break;
             }
@@ -1148,7 +1244,9 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
     }
 
     fn get_tx(&self, _txid: &Txid) -> Result<Option<Transaction>, Self::Error> {
-        unimplemented!("This chainstate doesn't hold any tx")
+        Err(BlockchainError::Unsupported(
+            "ChainState does not store transactions",
+        ))
     }
 
     fn get_height(&self) -> Result<u32, Self::Error> {
@@ -1168,7 +1266,9 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
     }
 
     fn get_block(&self, _hash: &BlockHash) -> Result<Block, Self::Error> {
-        unimplemented!("This chainstate doesn't hold full blocks")
+        Err(BlockchainError::Unsupported(
+            "ChainState does not store full blocks",
+        ))
     }
 
     fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error> {
@@ -1196,11 +1296,20 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         let mut index = top_height;
         while index > 0 {
             if indexes.len() >= 10 {
-                step *= 2;
+                // INVARIANT: step starts at 1 and doubles, the loop exits when
+                // index <= step, bounding step to at most index (≤ u32::MAX)
+                #[allow(clippy::arithmetic_side_effects)]
+                {
+                    step *= 2;
+                }
             }
             indexes.push(index);
             if index > step {
-                index -= step;
+                // INVARIANT: index > step is checked above, so this cannot underflow
+                #[allow(clippy::arithmetic_side_effects)]
+                {
+                    index -= step;
+                }
             } else {
                 break;
             }
@@ -1230,7 +1339,13 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         let chain_params = self.chain_params();
         let current_height = self.get_disk_block_header(&block)?.try_height()?;
 
-        Ok(height + chain_params.coinbase_maturity <= current_height)
+        // INVARIANT: `height` is a real chain height (well below u32::MAX) and
+        // `coinbase_maturity` is a small fixed consensus constant (100 on mainnet),
+        // so their sum cannot realistically overflow u32
+        #[allow(clippy::arithmetic_side_effects)]
+        let maturity_height = height + chain_params.coinbase_maturity;
+
+        Ok(maturity_height <= current_height)
     }
 
     fn ibd_state(&self) -> IBDState {
@@ -1296,10 +1411,13 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         }
         // Row back to our previous state. Note that acc doesn't actually change in this case
         // only the currently best known block.
+        let prev_height = height.checked_sub(1).ok_or(BlockchainError::InvalidTip(
+            "cannot invalidate the genesis block".to_string(),
+        ))?;
         self.update_tip(
             self.get_ancestor(&self.get_block_header(&block)?)?
                 .block_hash(),
-            height - 1,
+            prev_height,
         );
         Ok(())
     }
@@ -1353,7 +1471,10 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
                 // the next one after the validation index. If not, we would be trying to
                 // connect a block where our accumulator isn't the right one. So the proof will
                 // always be invalid.
-                if height != validation_index + 1 {
+                let next_validation = validation_index
+                    .checked_add(1)
+                    .ok_or(BlockchainError::Overflow("height + 1 overflow"))?;
+                if height != next_validation {
                     Err(BlockValidationErrors::BlockDoesntExtendTip)?;
                 }
 
@@ -1384,7 +1505,10 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         #[cfg(feature = "metrics")]
         metrics::get_metrics().block_height.set(height.into());
 
-        if !self.is_in_ibd() || height % 100_000 == 0 {
+        // INVARIANT: 100_000 is a non-zero compile-time constant, so % cannot panic
+        #[allow(clippy::arithmetic_side_effects)]
+        let at_flush_boundary = height % 100_000 == 0;
+        if !self.is_in_ibd() || at_flush_boundary {
             self.flush()?;
         }
 
@@ -1394,7 +1518,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
     }
 
     fn handle_transaction(&self) -> Result<(), BlockchainError> {
-        unimplemented!("This chain_state has no mempool")
+        Err(BlockchainError::Unsupported("ChainState has no mempool"))
     }
 
     fn flush(&self) -> Result<(), BlockchainError> {
@@ -1432,7 +1556,10 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
 
         // Update our current tip
         if header.prev_blockhash == best_block.1 {
-            let height = best_block.0 + 1;
+            let height = best_block
+                .0
+                .checked_add(1)
+                .ok_or(BlockchainError::Overflow("best chain height + 1 overflow"))?;
             debug!("Header builds on top of our best chain");
 
             write_lock!(self).best_block.new_block(block_hash, height);
@@ -1461,14 +1588,10 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
     ) -> Result<super::partial_chain::PartialChainState, BlockchainError> {
         let blocks = (0..=final_height)
             .map(|height| {
-                let hash = self
-                    .get_block_hash(height)
-                    .expect("Block should be present");
-                *self
-                    .get_disk_block_header(&hash)
-                    .expect("Block should be present")
+                let hash = self.get_block_hash(height)?;
+                Ok(*self.get_disk_block_header(&hash)?)
             })
-            .collect();
+            .collect::<Result<Vec<_>, BlockchainError>>()?;
 
         let inner = PartialChainStateInner {
             error: None,
@@ -1525,6 +1648,14 @@ macro_rules! write_lock {
 }
 
 #[cfg(all(test, feature = "flat-chainstore"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::wildcard_enum_match_arm
+)]
 mod test {
     use std::format;
     use std::fs::File;
@@ -1535,12 +1666,14 @@ mod test {
     use bitcoin::BlockHash;
     use bitcoin::Network;
     use bitcoin::OutPoint;
+    use bitcoin::Txid;
     use bitcoin::Work;
     use bitcoin::block::Header as BlockHeader;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::constants::genesis_block;
+    use bitcoin::hashes::Hash;
     use floresta_common::assert_ok;
     use floresta_common::bhash;
     use rand::RngExt;
@@ -1901,7 +2034,7 @@ mod test {
         assert_eq!(*chain.get_header_by_height(1).unwrap(), headers[0]);
 
         // find_best_chain
-        assert_eq!(chain.find_best_chain().depth, 2015);
+        assert_eq!(chain.find_best_chain().unwrap().depth, 2015);
 
         // get_block_locator_for_tip
         assert!(
@@ -1976,7 +2109,8 @@ mod test {
             })
             .unwrap();
 
-        let chainstate = ChainState::new(chainstore, Network::Bitcoin, AssumeValidArg::Disabled);
+        let chainstate =
+            ChainState::new(chainstore, Network::Bitcoin, AssumeValidArg::Disabled).unwrap();
         let header = headers[headers.len() - 1];
         let fork = headers[headers.len() / 2];
 
@@ -1995,5 +2129,51 @@ mod test {
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(fork_work, work);
         assert_eq!(work, expected_work);
+    }
+
+    #[test]
+    fn propagates_block_not_present() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let missing =
+            BlockHash::from_raw_hash(bitcoin::hashes::sha256d::Hash::from_byte_array([0xAB; 32]));
+        let err = chain.get_block_header(&missing).unwrap_err();
+        assert!(matches!(err, BlockchainError::BlockNotPresent));
+    }
+
+    #[test]
+    fn propagates_unsupported_get_tx() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let err = chain.get_tx(&Txid::all_zeros()).unwrap_err();
+        assert!(matches!(err, BlockchainError::Unsupported(_)));
+    }
+
+    #[test]
+    fn propagates_unsupported_get_block() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let err = chain.get_block(&BlockHash::all_zeros()).unwrap_err();
+        assert!(matches!(err, BlockchainError::Unsupported(_)));
+    }
+
+    #[test]
+    fn propagates_unsupported_handle_transaction() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        let err = chain.handle_transaction().unwrap_err();
+        assert!(matches!(err, BlockchainError::Unsupported(_)));
+    }
+
+    #[test]
+    fn propagates_validation_index_ok() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded);
+        // the genesis is FullyValid, so validation index should succeed
+        let idx = chain.get_validation_index().unwrap();
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn propagates_orphan_or_invalid_block() {
+        let genesis = genesis_block(Network::Regtest);
+        let orphan = DiskBlockHeader::Orphan(genesis.header);
+        let err = orphan.try_height().unwrap_err();
+        assert!(matches!(err, BlockchainError::OrphanOrInvalidBlock));
     }
 }
