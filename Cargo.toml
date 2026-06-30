@@ -70,7 +70,7 @@ toml = { version = "=1.1.2", default-features = false, features = ["std", "parse
 tracing = { version = "=0.1.44", default-features = false }
 zstd = { version = "=0.13.3" }
 # Pins for MSRV compatibility:
-time = { version = "=0.3.45" } # note: >0.3.45 requires Rust 1.88.0
+time = { version = "=0.3.47" } # note: >0.3.45 requires Rust 1.88.0
 tonic = { version = "=0.14.5" } # note: >0.14.5 requires Rust 1.88.0
 tonic-prost = { version = "=0.14.5" } # note: >0.14.5 requires Rust 1.88.0
 
