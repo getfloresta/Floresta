@@ -18,12 +18,13 @@ use bitcoin::p2p::ServiceFlags;
 use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 use floresta_chain::ThreadSafeChain;
+use floresta_chain::pruned_utreexo::IBDState;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_chain::swift_sync_agg::SipHashKeys;
 use floresta_chain::swift_sync_agg::SwiftSyncAgg;
 use floresta_common::service_flags;
 use hintsfile::Hintsfile;
-use rand::RngCore;
+use rand::Rng;
 use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
@@ -225,7 +226,7 @@ where
             return Ok(()); // already being processed
         }
 
-        let Some(block_hints) = hints.take_indices(block_height) else {
+        let Some(block_hints) = hints.indices_at_height(block_height) else {
             error!("We tried processing block {block_height} but its hints are missing");
             return Ok(());
         };
@@ -241,7 +242,7 @@ where
         // If we find a very cheap block (e.g., ~10μs), it's faster to process it directly
         if block.txdata.len() == 1 {
             let result =
-                consensus.process_block_swiftsync(&block, block_height, unspent_indexes, &salt);
+                consensus.process_block_swiftsync(&block, block_height, &unspent_indexes, &salt);
 
             self.handle_worker_notification(result, block_hash, block_height, hints)?;
             return Ok(());
@@ -250,7 +251,7 @@ where
         let node_sender = self.node_tx.clone();
         tokio::task::spawn_blocking(move || {
             let result =
-                consensus.process_block_swiftsync(&block, block_height, unspent_indexes, &salt);
+                consensus.process_block_swiftsync(&block, block_height, &unspent_indexes, &salt);
 
             let notification = NodeNotification::FromWorker((result, block_hash, block_height));
             let _ = node_sender.send(notification);
@@ -451,7 +452,7 @@ where
         self.chain
             .mark_chain_as_assumed(final_acc, tip_hash)
             .unwrap();
-        self.chain.toggle_ibd(false);
+        self.chain.update_ibd(IBDState::Done);
     }
 
     /// Process a message from a peer and handle it accordingly between the variants of [`PeerMessages`].
@@ -561,6 +562,8 @@ where
                 self.context.supply += unspent_amount;
                 self.pump_utreexo_adds(height, utreexo_adds);
 
+                // Block is valid and not mutated, we can drop these hints from memory
+                hints.take_indices(height);
                 self.handle_valid_worker_block(block_hash, height, block);
             }
             Err(e) => {
@@ -623,14 +626,19 @@ where
             | BlockValidationErrors::BadBip34
             | BlockValidationErrors::BIP94TimeWarp
             | BlockValidationErrors::UnspendableUTXO
-            | BlockValidationErrors::CoinbaseNotMatured => {
+            | BlockValidationErrors::CoinbaseNotMatured
+            | BlockValidationErrors::DuplicateInput => {
                 self.context.abort_height = Some(height);
                 try_and_log!(self.chain.invalidate_block(block_hash));
             }
 
             // This block's txdata doesn't match the txid or wtxid merkle root. This can be a
             // mutated block, so we can't invalidate it since the original txdata may be valid.
-            BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment => {}
+            BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment => {
+                // Re-insert the block request so that we can retry it after banning this peer
+                self.inflight
+                    .insert(InflightRequests::Blocks(block_hash), (peer, Instant::now()));
+            }
 
             // No proofs involved in SwiftSync
             BlockValidationErrors::InvalidUtreexoProof => {}
