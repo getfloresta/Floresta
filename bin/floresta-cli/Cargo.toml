@@ -21,6 +21,7 @@ categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 anyhow = { version = "=1.0.103" }
 bitcoin = { workspace = true }
 clap = { workspace = true, features = ["help"] }
+dirs = { version = "=4.0.0", default-features = false }
 serde_json = { workspace = true }
 
 # Local dependencies

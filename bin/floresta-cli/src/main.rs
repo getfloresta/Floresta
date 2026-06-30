@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::fmt::Debug;
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 mod parsers;
 
+use anyhow::Context;
 use anyhow::Ok;
 use bitcoin::BlockHash;
 use bitcoin::Network;
@@ -11,6 +14,7 @@ use bitcoin::Txid;
 use clap::Parser;
 use clap::Subcommand;
 use floresta_rpc::jsonrpc_client::Client;
+use floresta_rpc::jsonrpc_client::JsonRPCConfig;
 use floresta_rpc::rpc::FlorestaRPC;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_rpc::rpc_types::RescanConfidence;
@@ -20,8 +24,16 @@ fn main() -> anyhow::Result<()> {
     // Parse command line arguments into a Cli struct
     let cli = Cli::parse();
 
-    // Create a new JSON-RPC client using the host from the CLI arguments
-    let client = Client::new(get_host(&cli));
+    // Resolve basic-auth credentials: explicit flags win, otherwise read the
+    // cookie file written by florestad at startup.
+    let (user, pass) = resolve_credentials(&cli)?;
+
+    // Create a new JSON-RPC client using the host and credentials.
+    let client = Client::new_with_config(JsonRPCConfig {
+        url: get_host(&cli),
+        user: Some(user),
+        pass: Some(pass),
+    });
 
     // Perform the requested RPC call and get the result
     let res = do_request(&cli, client)?;
@@ -31,6 +43,53 @@ fn main() -> anyhow::Result<()> {
 
     // Return Ok to indicate the program ran successfully
     anyhow::Ok(())
+}
+
+// Resolve the basic-auth credentials for the RPC call.
+//
+// Precedence:
+//   1. `--rpc-user` and `--rpc-password` both set: use them.
+//   2. Otherwise read the cookie file at `--rpc-cookie-file` (or the network's
+//      default location) and split on the first `:` into (user, pass).
+fn resolve_credentials(cli: &Cli) -> anyhow::Result<(String, String)> {
+    if let (Some(user), Some(pass)) = (cli.rpc_user.clone(), cli.rpc_password.clone()) {
+        return anyhow::Ok((user, pass));
+    }
+    let cookie_path = cli
+        .rpc_cookie_file
+        .clone()
+        .unwrap_or_else(|| default_cookie_path(cli.network));
+    read_cookie(&cookie_path)
+}
+
+// Read a cookie file and split it into (user, pass) on the first `:`.
+fn read_cookie(path: &Path) -> anyhow::Result<(String, String)> {
+    let contents = fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read RPC cookie file at {}; start florestad first or pass --rpc-user/--rpc-password",
+            path.display()
+        )
+    })?;
+    let (user, pass) = contents
+        .split_once(':')
+        .with_context(|| format!("cookie file at {} is malformed", path.display()))?;
+    anyhow::Ok((user.to_string(), pass.to_string()))
+}
+
+// Compute the default cookie file path for the given network. Mirrors
+// florestad's `datadir_path` layout: `~/.floresta/[<net>/].cookie`.
+fn default_cookie_path(network: Network) -> PathBuf {
+    let base = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".floresta");
+    let net_dir = match network {
+        Network::Bitcoin => base,
+        Network::Signet => base.join("signet"),
+        Network::Testnet => base.join("testnet3"),
+        Network::Testnet4 => base.join("testnet4"),
+        Network::Regtest => base.join("regtest"),
+    };
+    net_dir.join(".cookie")
 }
 
 // Function to determine the RPC host based on CLI arguments and network type
@@ -164,6 +223,9 @@ pub struct Cli {
     /// The RPC password to use
     #[arg(short = 'P', long, value_name = "PASSWORD")]
     pub rpc_password: Option<String>,
+    /// Path to the RPC cookie file. Defaults to `<datadir>/[<net>/].cookie`.
+    #[arg(long, value_name = "PATH")]
+    pub rpc_cookie_file: Option<PathBuf>,
     /// An actual RPC command to run
     #[command(subcommand)]
     pub methods: Methods,

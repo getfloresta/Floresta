@@ -667,6 +667,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         log_path: impl AsRef<Path>,
         user_agent: String,
         proxy: Option<SocketAddr>,
+        credentials: Arc<super::auth::Auth>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", Self::get_port(&network))
@@ -697,6 +698,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .allow_private_network(true)
                     .allow_methods([Method::POST, Method::HEAD]),
             )
+            .layer(axum::middleware::from_fn_with_state(
+                credentials,
+                super::auth::auth_middleware,
+            ))
             .with_state(Arc::new(Self {
                 chain,
                 wallet,
@@ -711,8 +716,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 proxy,
             }));
 
-        axum::serve(listener, router)
-            .await
-            .expect("failed to start rpc server");
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("failed to start rpc server");
     }
 }
