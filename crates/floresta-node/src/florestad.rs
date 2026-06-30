@@ -30,12 +30,14 @@ use floresta_common::try_and_log;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_domain::wallet::error::WatchOnlyError;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_mempool::Mempool;
 use floresta_watch_only::AddressCache;
-use floresta_watch_only::WatchOnlyError;
 use floresta_watch_only::kv_database::KvDatabase;
+use floresta_watch_only::new_wallet_default;
 use floresta_wire::UtreexoNodeConfig;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::address_man::ReachableNetworks;
@@ -718,10 +720,7 @@ impl Florestad {
 
     /// Setup the wallet by initializing the database and adding descriptors, xpubs, and addresses.
     fn setup_wallet(&self) -> Result<AddressCache<KvDatabase>, FlorestadError> {
-        let database = KvDatabase::new(&self.config.datadir)
-            .map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-
-        let wallet = AddressCache::new(database);
+        let wallet = new_wallet_default(&self.config.datadir)?;
 
         wallet
             .setup()
@@ -751,7 +750,7 @@ impl Florestad {
         }
 
         for address in self.get_addresses()? {
-            wallet.cache_address(address);
+            wallet.cache_address(address)?;
         }
 
         info!("Wallet setup completed!");

@@ -43,7 +43,7 @@ pub mod jsonrpc_interface {
     use floresta_chain::extensions::HeaderExtError;
     use floresta_common::impl_error_from;
     use floresta_domain::mempool::MempoolError;
-    use floresta_watch_only::WatchOnlyError;
+    use floresta_domain::wallet::error::WatchOnlyError;
     use floresta_wire::bitcoin_socket_addr::InvalidAddressError;
     use serde::Deserialize;
     use serde::Serialize;
@@ -493,8 +493,8 @@ pub mod jsonrpc_interface {
     }
 
     impl_error_from!(JsonRpcError, miniscript::Error, InvalidDescriptor);
-    impl<T: fmt::Debug> From<WatchOnlyError<T>> for JsonRpcError {
-        fn from(e: WatchOnlyError<T>) -> Self {
+    impl From<WatchOnlyError> for JsonRpcError {
+        fn from(e: WatchOnlyError) -> Self {
             Self::Wallet(e.to_string())
         }
     }

@@ -1011,6 +1011,7 @@ dependencies = [
  "floresta",
  "floresta-chain",
  "floresta-common",
+ "floresta-domain",
  "floresta-electrum",
  "floresta-mempool",
  "floresta-watch-only",
@@ -1080,7 +1081,9 @@ version = "0.1.0"
 dependencies = [
  "bitcoin",
  "floresta-chain",
- "rustreexo",
+ "floresta-common",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1091,8 +1094,8 @@ dependencies = [
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
+ "floresta-domain",
  "floresta-mempool",
- "floresta-watch-only",
  "floresta-wire",
  "rand 0.10.1",
  "rcgen",
@@ -1185,6 +1188,7 @@ dependencies = [
  "bitcoin",
  "floresta-chain",
  "floresta-common",
+ "floresta-domain",
  "kv",
  "miniscript",
  "rand 0.10.1",

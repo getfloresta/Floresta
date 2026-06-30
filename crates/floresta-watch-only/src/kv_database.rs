@@ -13,13 +13,14 @@ use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use floresta_common::impl_error_from;
 use floresta_common::prelude::*;
+use floresta_domain::wallet::error::WatchOnlyError;
+use floresta_domain::wallet::model::CachedTransaction;
 use kv::Bucket;
 use kv::Config;
 use kv::Store;
 
 use super::AddressCacheDatabase;
 use super::CachedAddress;
-use super::CachedTransaction;
 use super::Stats;
 
 /// A key-value database for the watch-only wallet.
@@ -75,6 +76,12 @@ impl Error for KvDatabaseError {}
 impl_error_from!(KvDatabaseError, serde_json::Error, SerdeJsonError);
 impl_error_from!(KvDatabaseError, kv::Error, KvError);
 impl_error_from!(KvDatabaseError, EncodingError, DeserializeError);
+
+impl From<KvDatabaseError> for WatchOnlyError {
+    fn from(e: KvDatabaseError) -> Self {
+        Self::DatabaseError(e.to_string())
+    }
+}
 
 type Result<T> = floresta_common::prelude::Result<T, KvDatabaseError>;
 

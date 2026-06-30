@@ -32,9 +32,8 @@ use bitcoin::hex::DisplayHex;
 use floresta_chain::ThreadSafeChain;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
-use floresta_watch_only::AddressCache;
-use floresta_watch_only::CachedTransaction;
-use floresta_watch_only::kv_database::KvDatabase;
+use floresta_domain::wallet::model::CachedTransaction;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_wire::node_handle::NodeHandle;
 use floresta_wire::node_interface::ChainMethods;
 use floresta_wire::node_interface::MempoolMethods;
@@ -83,7 +82,7 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) block_filter_storage: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
     pub(super) network: Network,
     pub(super) chain: Blockchain,
-    pub(super) wallet: Arc<AddressCache<KvDatabase>>,
+    pub(super) wallet: Arc<dyn WalletBase>,
     pub(super) node: NodeHandle,
     pub(super) kill_signal: Arc<RwLock<bool>>,
     pub(super) inflight: Arc<RwLock<HashMap<Value, InflightRpc>>>,
@@ -100,14 +99,14 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         if verbosity {
             let tx = self
                 .wallet
-                .get_transaction(&tx_id)
+                .get_transaction(&tx_id)?
                 .ok_or(JsonRpcError::TxNotFound)?;
             let raw = self.make_raw_transaction(tx)?;
             return Ok(serde_json::to_value(raw).expect(SERIALIZATION_EXPECT_MSG));
         }
 
         self.wallet
-            .get_transaction(&tx_id)
+            .get_transaction(&tx_id)?
             .and_then(|tx| {
                 self.make_raw_transaction(tx)
                     .ok()
@@ -121,7 +120,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         info!("Descriptor pushed: {descriptor}");
         debug!("Rescanning with block filters for addresses: {addresses:?}");
 
-        let addresses = self.wallet.get_cached_addresses();
+        let addresses = self.wallet.get_cached_addresses()?;
         let wallet = self.wallet.clone();
         let cfilters = self
             .block_filter_storage
@@ -158,7 +157,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::InInitialBlockDownload);
         }
 
-        let addresses = self.wallet.get_cached_addresses();
+        let addresses = self.wallet.get_cached_addresses()?;
 
         if addresses.is_empty() {
             return Err(JsonRpcError::NoAddressesToRescan);
@@ -502,7 +501,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     async fn rescan_with_block_filters(
         addresses: Vec<ScriptBuf>,
         chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
+        wallet: Arc<dyn WalletBase>,
         cfilters: Arc<NetworkFilters<FlatFiltersStore>>,
         node: NodeHandle,
         start_height: Option<u32>,
@@ -526,7 +525,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .map_err(|_| JsonRpcError::Chain)?
                     .ok_or(JsonRpcError::BlockNotFound)?;
 
-                wallet.block_process(&block, height);
+                wallet.block_process(&block, height)?;
             }
         }
 
@@ -658,7 +657,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
+        wallet: Arc<dyn WalletBase>,
         node: NodeHandle,
         kill_signal: Arc<RwLock<bool>>,
         network: Network,

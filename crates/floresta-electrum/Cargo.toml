@@ -29,7 +29,7 @@ tracing = { workspace = true }
 floresta-chain = { workspace = true, features = ["bitcoinkernel"] }
 floresta-compact-filters = { workspace = true }
 floresta-common = { workspace = true }
-floresta-watch-only = { workspace = true }
+floresta-domain = {workspace = true, features = ["wallet"]}
 floresta-wire = { workspace = true }
 
 [dev-dependencies]

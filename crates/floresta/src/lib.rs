@@ -12,6 +12,8 @@
 pub use floresta_chain as chain;
 /// Useful data structures and traits used by the other crates.
 pub use floresta_common as common;
+#[cfg(feature = "watch-only-wallet")]
+pub use floresta_domain::wallet as wallet_domain;
 #[cfg(feature = "electrum-server")]
 /// An electrum server implementation
 pub use floresta_electrum as electrum;

@@ -23,9 +23,8 @@ use floresta_common::spsc::Channel;
 use floresta_common::try_and_log;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
-use floresta_watch_only::AddressCache;
-use floresta_watch_only::CachedTransaction;
-use floresta_watch_only::kv_database::KvDatabase;
+use floresta_domain::wallet::model::CachedTransaction;
+use floresta_domain::wallet::wallet_base::WalletBase;
 use floresta_wire::node_handle::NodeHandle;
 use floresta_wire::node_interface::ChainMethods;
 use floresta_wire::node_interface::MempoolMethods;
@@ -189,7 +188,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
 
     /// The address cache is used to store addresses and transactions, like a
     /// watch-only wallet, but it is adapted to the electrum protocol.
-    address_cache: Arc<AddressCache<KvDatabase>>,
+    address_cache: Arc<dyn WalletBase>,
 
     /// The clients are the clients connected to our server, we keep track of them
     /// using a unique id.
@@ -231,7 +230,7 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
 
 impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     pub fn new(
-        address_cache: Arc<AddressCache<KvDatabase>>,
+        address_cache: Arc<dyn WalletBase>,
         chain: Arc<Blockchain>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         node_interface: NodeHandle,
@@ -328,7 +327,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "blockchain.relayfee" => json_rpc_res!(request, 0.00001),
             "blockchain.scripthash.get_balance" => {
                 let script_hash = get_arg!(request, sha256::Hash, 0);
-                let balance = self.address_cache.get_address_balance(&script_hash);
+                let balance = self.address_cache.get_address_balance(&script_hash)?;
                 let result = json!({
                     "confirmed": balance,
                     "unconfirmed": 0
@@ -338,7 +337,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "blockchain.scripthash.get_history" => {
                 let script_hash = get_arg!(request, sha256::Hash, 0);
                 self.address_cache
-                    .get_address_history(&script_hash)
+                    .get_address_history(&script_hash)?
                     .map(|transactions| {
                         let res = Self::process_history(&transactions);
                         json_rpc_res!(request, res)
@@ -354,7 +353,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "blockchain.scripthash.get_mempool" => json_rpc_res!(request, []),
             "blockchain.scripthash.listunspent" => {
                 let hash = get_arg!(request, sha256::Hash, 0);
-                let utxos = self.address_cache.get_address_utxos(&hash);
+                let utxos = self.address_cache.get_address_utxos(&hash)?;
                 if utxos.is_none() {
                     return json_rpc_res!(request, []);
                 }
@@ -376,7 +375,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = get_arg!(request, sha256::Hash, 0);
                 self.client_addresses.insert(hash, client);
 
-                let history = self.address_cache.get_address_history(&hash);
+                let history = self.address_cache.get_address_history(&hash)?;
                 match history {
                     Some(transactions) if !transactions.is_empty() => {
                         let res = get_status(transactions);
@@ -398,8 +397,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let script = get_arg!(request, ScriptBuf, 0);
                 let hash = get_spk_hash(&script);
 
-                if !self.address_cache.is_address_cached(&hash) {
-                    self.address_cache.cache_address(script.clone());
+                if !self.address_cache.is_address_cached(&hash)? {
+                    self.address_cache.cache_address(script.clone())?;
                     self.addresses_to_scan.push(script);
                     let res = json!({
                         "confirmed": 0,
@@ -408,7 +407,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     return json_rpc_res!(request, res);
                 }
 
-                let balance = self.address_cache.get_address_balance(&hash);
+                let balance = self.address_cache.get_address_balance(&hash)?;
                 let result = json!({
                     "confirmed": balance,
                     "unconfirmed": 0
@@ -419,14 +418,14 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let script = get_arg!(request, ScriptBuf, 0);
                 let hash = get_spk_hash(&script);
 
-                if !self.address_cache.is_address_cached(&hash) {
-                    self.address_cache.cache_address(script.clone());
+                if !self.address_cache.is_address_cached(&hash)? {
+                    self.address_cache.cache_address(script.clone())?;
                     self.addresses_to_scan.push(script);
                     return json_rpc_res!(request, null);
                 }
 
                 self.address_cache
-                    .get_address_history(&hash)
+                    .get_address_history(&hash)?
                     .map(|transactions| {
                         let res = Self::process_history(&transactions);
                         json_rpc_res!(request, res)
@@ -444,7 +443,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = get_spk_hash(&script);
                 self.client_addresses.insert(hash, client);
 
-                let history = self.address_cache.get_address_history(&hash);
+                let history = self.address_cache.get_address_history(&hash)?;
                 match history {
                     Some(transactions) if !transactions.is_empty() => {
                         let res = get_status(transactions);
@@ -486,17 +485,17 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                 let updated = self
                     .address_cache
-                    .cache_mempool_transaction(&tx)
+                    .cache_mempool_transaction(&tx)?
                     .into_iter()
                     .map(|spend| (tx.clone(), spend))
                     .collect::<Vec<_>>();
 
-                self.wallet_notify(&updated);
+                self.wallet_notify(&updated)?;
                 json_rpc_res!(request, txid)
             }
             "blockchain.transaction.get" => {
                 let tx_id = get_arg!(request, Txid, 0);
-                let tx = self.address_cache.get_cached_transaction(&tx_id);
+                let tx = self.address_cache.get_cached_transaction(&tx_id)?;
                 if let Some(tx) = tx {
                     return json_rpc_res!(request, tx);
                 }
@@ -505,8 +504,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
             "blockchain.transaction.get_merkle" => {
                 let tx_id = get_arg!(request, Txid, 0);
-                let proof = self.address_cache.get_merkle_proof(&tx_id);
-                let height = self.address_cache.get_height(&tx_id);
+                let proof = self.address_cache.get_merkle_proof(&tx_id)?;
+                let height = self.address_cache.get_height(&tx_id)?;
                 if let Some(proof) = proof {
                     let result = json!({
                         "merkle": proof.hashes,
@@ -575,7 +574,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
         loop {
             for (block, height) in blocks.recv() {
-                self.handle_block(block, height);
+                if let Err(e) = self.handle_block(block, height) {
+                    error!("Error in processing block: {e}")
+                }
             }
 
             // handles client requests
@@ -611,7 +612,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 }
 
                 self.addresses_to_scan.iter().for_each(|address| {
-                    self.address_cache.cache_address(address.clone());
+                    if let Err(e) = self.address_cache.cache_address(address.clone()) {
+                        error!("Error in cache address: {e}")
+                    }
                 });
 
                 info!("Catching up with addresses {:?}", self.addresses_to_scan);
@@ -681,7 +684,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 .flatten()
                 .unwrap();
 
-            self.handle_block(block, height);
+            self.handle_block(block, height)?;
         }
 
         Ok(())
@@ -708,7 +711,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         res
     }
 
-    fn handle_block(&self, block: bitcoin::Block, height: u32) {
+    fn handle_block(&self, block: bitcoin::Block, height: u32) -> Result<(), super::error::Error> {
         let result = json!({
             "jsonrpc": "2.0",
             "method": "blockchain.headers.subscribe",
@@ -718,10 +721,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }]
         });
 
-        let current_height = self.address_cache.get_cache_height();
+        let current_height = self.address_cache.get_cache_height()?;
 
         if (!self.chain.is_in_ibd() || height % 1000 == 0) && (height > current_height) {
-            self.address_cache.bump_height(height);
+            let _ = self.address_cache.bump_height(height);
         }
 
         if self.chain.get_height().unwrap() == height {
@@ -730,9 +733,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
         }
 
-        let transactions = self.address_cache.block_process(&block, height);
+        let transactions = self.address_cache.block_process(&block, height)?;
 
-        self.wallet_notify(&transactions);
+        self.wallet_notify(&transactions)
     }
 
     /// Handles each kind of Message
@@ -822,13 +825,19 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         Ok(())
     }
 
-    fn wallet_notify(&self, transactions: &[(Transaction, TxOut)]) {
+    fn wallet_notify(
+        &self,
+        transactions: &[(Transaction, TxOut)],
+    ) -> Result<(), crate::error::Error> {
         for (_, out) in transactions {
             let hash = get_spk_hash(&out.script_pubkey);
             if let Some(client) = self.client_addresses.get(&hash) {
-                let history = self.address_cache.get_address_history(&hash);
+                let history = self
+                    .address_cache
+                    .get_address_history(&hash)?
+                    .ok_or(crate::error::Error::InvalidParams)?;
 
-                let status_hash = get_status(history.unwrap());
+                let status_hash = get_status(history);
                 let notify = json!({
                     "jsonrpc": "2.0",
                     "method": "blockchain.scripthash.subscribe",
@@ -838,6 +847,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 try_and_log!(client.write(serde_json::to_string(&notify).unwrap().as_bytes()));
             }
         }
+
+        Ok(())
     }
 }
 
@@ -948,13 +959,19 @@ macro_rules! get_arg {
 #[cfg(test)]
 mod test {
     use core::str::FromStr;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::io;
     use std::sync::Arc;
     use std::time::Duration;
 
     use bitcoin::Address;
     use bitcoin::Network;
+    use bitcoin::OutPoint;
+    use bitcoin::ScriptBuf;
     use bitcoin::Transaction;
+    use bitcoin::TxOut;
+    use bitcoin::Txid;
     use bitcoin::address::NetworkChecked;
     use bitcoin::block::Header as BlockHeader;
     use bitcoin::consensus::Decodable;
@@ -967,10 +984,12 @@ mod test {
     use floresta_chain::FlatChainStoreConfig;
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
+    use floresta_domain::wallet::error::WatchOnlyError;
+    use floresta_domain::wallet::model::CachedTransaction;
+    use floresta_domain::wallet::model::MerkleProof;
+    use floresta_domain::wallet::model::Stats;
+    use floresta_domain::wallet::wallet_base::WalletBase;
     use floresta_mempool::Mempool;
-    use floresta_watch_only::AddressCache;
-    use floresta_watch_only::kv_database::KvDatabase;
-    use floresta_watch_only::merkle::MerkleProof;
     use floresta_wire::UtreexoNodeConfig;
     use floresta_wire::address_man::AddressMan;
     use floresta_wire::address_man::ReachableNetworks;
@@ -1002,6 +1021,302 @@ mod test {
     /// chosen size.
     const MEMPOOL_SIZE: usize = 10_000;
 
+    type MockTransaction = (CachedTransaction, u32, Option<TxOut>, Option<MerkleProof>);
+    type MockScriptBalances = (u64, Vec<CachedTransaction>, Vec<(TxOut, OutPoint)>);
+    /// A simple in-memory mock wallet that implements WalletBase for testing.
+    ///
+    /// This stores all data in memory and simulates a watch-only wallet behavior
+    /// without requiring any actual database backend.
+    struct MockWallet {
+        cache_height: std::sync::RwLock<u32>,
+        transactions: std::sync::RwLock<HashMap<Txid, MockTransaction>>,
+        script_balances: std::sync::RwLock<HashMap<sha256::Hash, MockScriptBalances>>,
+        cached_scripts: std::sync::RwLock<HashSet<sha256::Hash>>,
+        descriptors: std::sync::RwLock<Vec<String>>,
+        unconfirmed: std::sync::RwLock<Vec<Transaction>>,
+    }
+
+    impl MockWallet {
+        fn new() -> Self {
+            Self {
+                cache_height: std::sync::RwLock::new(0),
+                transactions: std::sync::RwLock::new(HashMap::new()),
+                script_balances: std::sync::RwLock::new(HashMap::new()),
+                cached_scripts: std::sync::RwLock::new(HashSet::new()),
+                descriptors: std::sync::RwLock::new(Vec::new()),
+                unconfirmed: std::sync::RwLock::new(Vec::new()),
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        /// Inserts a test transaction into the wallet
+        fn insert_transaction(
+            &self,
+            transaction: &Transaction,
+            height: u32,
+            value: u64,
+            merkle_block: MerkleProof,
+            position: u32,
+            index: usize,
+            is_spend: bool,
+            hash: sha256::Hash,
+        ) {
+            let txid = transaction.compute_txid();
+            let cached = CachedTransaction {
+                tx: transaction.clone(),
+                height,
+                hash: txid,
+                merkle_block: Some(merkle_block.clone()),
+                position,
+            };
+            let txout = if !is_spend {
+                transaction.output.get(index).map(|o| TxOut {
+                    value: bitcoin::Amount::from_sat(value),
+                    script_pubkey: o.script_pubkey.clone(),
+                })
+            } else {
+                None
+            };
+
+            let outpoint = if !is_spend {
+                Some(OutPoint {
+                    txid,
+                    vout: index as u32,
+                })
+            } else {
+                None
+            };
+
+            self.transactions.write().unwrap().insert(
+                txid,
+                (cached.clone(), height, txout.clone(), Some(merkle_block)),
+            );
+
+            if !is_spend {
+                let mut balances = self.script_balances.write().unwrap();
+                let entry = balances
+                    .entry(hash)
+                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
+                entry.0 += value;
+                entry.1.push(cached);
+                if let (Some(txout), Some(outpoint)) = (txout, outpoint) {
+                    entry.2.push((txout, outpoint));
+                }
+            }
+
+            self.cached_scripts.write().unwrap().insert(hash);
+        }
+    }
+
+    impl WalletBase for MockWallet {
+        fn get_utxo(&self, _: &OutPoint) -> Result<Option<TxOut>, WatchOnlyError> {
+            let txs = self.transactions.read().unwrap();
+            for (_, _, txout_opt, _) in txs.values() {
+                if let Some(txout) = txout_opt {
+                    return Ok(Some(txout.clone()));
+                }
+            }
+            Ok(None)
+        }
+
+        fn n_cached_addresses(&self) -> Result<usize, WatchOnlyError> {
+            Ok(self.cached_scripts.read().unwrap().len())
+        }
+
+        fn get_address_balance(
+            &self,
+            script_hash: &sha256::Hash,
+        ) -> Result<Option<u64>, WatchOnlyError> {
+            let balances = self.script_balances.read().unwrap();
+            Ok(balances.get(script_hash).map(|(bal, _, _)| *bal))
+        }
+
+        fn get_cached_addresses(&self) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn bump_height(&self, height: u32) -> Result<(), WatchOnlyError> {
+            *self.cache_height.write().unwrap() = height;
+            Ok(())
+        }
+
+        fn get_cache_height(&self) -> Result<u32, WatchOnlyError> {
+            Ok(*self.cache_height.read().unwrap())
+        }
+
+        fn is_cached(&self, _desc: &str) -> Result<bool, WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn is_address_cached(&self, script_hash: &sha256::Hash) -> Result<bool, WatchOnlyError> {
+            Ok(self.cached_scripts.read().unwrap().contains(script_hash))
+        }
+
+        fn push_descriptor(&self, descriptor: &str) -> Result<Vec<ScriptBuf>, WatchOnlyError> {
+            self.descriptors
+                .write()
+                .unwrap()
+                .push(descriptor.to_string());
+            unimplemented!()
+        }
+
+        fn push_xpub(&self, _xpub: &str, _network: bitcoin::Network) -> Result<(), WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn get_position(&self, _: &Txid) -> Result<Option<u32>, WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn get_height(&self, txid: &Txid) -> Result<Option<u32>, WatchOnlyError> {
+            let txs = self.transactions.read().unwrap();
+            Ok(txs.get(txid).map(|(_, height, _, _)| *height))
+        }
+
+        fn get_cached_transaction(&self, txid: &Txid) -> Result<Option<String>, WatchOnlyError> {
+            let txs = self.transactions.read().unwrap();
+            Ok(txs
+                .get(txid)
+                .map(|(cached, _, _, _)| bitcoin::consensus::encode::serialize_hex(&cached.tx)))
+        }
+
+        fn setup(&self) -> Result<(), WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn block_process(
+            &self,
+            _: &bitcoin::Block,
+            _: u32,
+        ) -> Result<Vec<(Transaction, TxOut)>, WatchOnlyError> {
+            Ok(Vec::new())
+        }
+
+        fn get_address_utxos(
+            &self,
+            script_hash: &sha256::Hash,
+        ) -> Result<Option<Vec<(TxOut, OutPoint)>>, WatchOnlyError> {
+            let balances = self.script_balances.read().unwrap();
+            Ok(balances.get(script_hash).map(|(_, _, utxos)| utxos.clone()))
+        }
+
+        fn get_transaction(&self, _: &Txid) -> Result<Option<CachedTransaction>, WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn get_address_history(
+            &self,
+            script_hash: &sha256::Hash,
+        ) -> Result<Option<Vec<CachedTransaction>>, WatchOnlyError> {
+            let balances = self.script_balances.read().unwrap();
+            Ok(balances.get(script_hash).map(|(_, txs, _)| {
+                let mut sorted = txs.clone();
+                sorted.sort();
+                let unconfirmed: Vec<_> =
+                    sorted.iter().filter(|tx| tx.height == 0).cloned().collect();
+                sorted.retain(|tx| tx.height != 0);
+                sorted.extend(unconfirmed);
+                sorted
+            }))
+        }
+
+        fn get_merkle_proof(&self, txid: &Txid) -> Result<Option<MerkleProof>, WatchOnlyError> {
+            let txs = self.transactions.read().unwrap();
+            Ok(txs.get(txid).and_then(|(_, _, _, proof)| proof.clone()))
+        }
+
+        fn derive_addresses(&self) -> Result<(), WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn get_stats(&self) -> Result<Stats, WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn maybe_derive_addresses(&self) -> Result<(), WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError> {
+            Ok(self.unconfirmed.read().unwrap().clone())
+        }
+
+        fn cache_address(&self, script_pk: ScriptBuf) -> Result<(), WatchOnlyError> {
+            let hash = get_spk_hash(&script_pk);
+            self.cached_scripts.write().unwrap().insert(hash);
+            Ok(())
+        }
+
+        fn cache_mempool_transaction(
+            &self,
+            transaction: &Transaction,
+        ) -> Result<Vec<TxOut>, WatchOnlyError> {
+            self.unconfirmed.write().unwrap().push(transaction.clone());
+            let txid = transaction.compute_txid();
+            let cached = CachedTransaction {
+                tx: transaction.clone(),
+                height: 0,
+                hash: txid,
+                merkle_block: None,
+                position: 0,
+            };
+            self.transactions
+                .write()
+                .unwrap()
+                .insert(txid, (cached, 0, None, None));
+            Ok(Vec::new())
+        }
+
+        fn save_mempool_tx(
+            &self,
+            _: sha256::Hash,
+            _: CachedTransaction,
+        ) -> Result<(), WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn save_non_mempool_tx(
+            &self,
+            _transaction: &Transaction,
+            _is_spend: bool,
+            _value: u64,
+            _index: usize,
+            _hash: sha256::Hash,
+            _transaction_to_cache: CachedTransaction,
+        ) -> Result<(), WatchOnlyError> {
+            unimplemented!()
+        }
+
+        fn get_descriptors(&self) -> Result<Vec<String>, WatchOnlyError> {
+            Ok(self.descriptors.read().unwrap().clone())
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn cache_transaction(
+            &self,
+            transaction: &Transaction,
+            height: u32,
+            value: u64,
+            merkle_block: MerkleProof,
+            position: u32,
+            index: usize,
+            is_spend: bool,
+            hash: sha256::Hash,
+        ) -> Result<(), WatchOnlyError> {
+            self.insert_transaction(
+                transaction,
+                height,
+                value,
+                merkle_block,
+                position,
+                index,
+                is_spend,
+                hash,
+            );
+            Ok(())
+        }
+    }
+
     fn get_test_transaction() -> (Transaction, MerkleProof) {
         // Signet transaction with id 6bb0665122c7dcecc6e6c45b6384ee2bdce148aea097896e6f3e9e08070353ea
         // block hash 0000009298f9e75a91fa763c78b66d1555cb059d9ca9d45601eed2b95166a151.
@@ -1031,25 +1346,25 @@ mod test {
         headers
     }
 
-    fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
-        let test_id: u32 = rand::random();
-        let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
-        let cache = AddressCache::new(cache);
+    fn get_test_cache() -> Arc<dyn WalletBase> {
+        let wallet = MockWallet::new();
 
         // Inserting test transactions in the wallet
         let (transaction, proof) = get_test_transaction();
-        cache.cache_transaction(
-            &transaction,
-            118511,
-            transaction.output[0].value.to_sat(),
-            proof,
-            1,
-            0,
-            false,
-            get_spk_hash(&transaction.output[0].script_pubkey),
-        );
+        wallet
+            .cache_transaction(
+                &transaction,
+                118511,
+                transaction.output[0].value.to_sat(),
+                proof,
+                1,
+                0,
+                false,
+                get_spk_hash(&transaction.output[0].script_pubkey),
+            )
+            .unwrap();
 
-        Arc::new(cache)
+        Arc::new(wallet)
     }
 
     fn get_test_address() -> (Address<NetworkChecked>, sha256::Hash) {
