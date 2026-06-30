@@ -57,6 +57,23 @@ for crate in $crates; do
     cd "$path" || exit 1
     printf "\033[1;35mRunning cargo %s for all feature combinations in %s...\033[0m\n" "$action" "$crate"
 
+    # Only test the `floresta` crate using the `full`
+    # feature as to not blow up the amount of combinations
+    if [ "$crate" = "floresta" ]; then
+        if [ "$action" = "clippy" ]; then
+            # The floresta crate is a facade over the workspace crates. Check its full
+            # re-export surface without enumerating every re-export feature subset.
+            # shellcheck disable=SC2086
+            cargo +nightly clippy --all-targets --no-default-features --features full $cargo_arg
+        elif [ "$action" = "test" ]; then
+            # shellcheck disable=SC2086
+            cargo test --release --no-default-features --features full -v $cargo_arg
+        fi
+
+        cd - > /dev/null || exit 1
+        continue
+    fi
+
     if [ "$action" = "clippy" ]; then
         # shellcheck disable=SC2086
         cargo +nightly hack clippy --all-targets --feature-powerset $skip_default $cargo_arg

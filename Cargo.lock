@@ -1008,11 +1008,14 @@ name = "floresta"
 version = "0.5.0"
 dependencies = [
  "bitcoin",
- "floresta",
  "floresta-chain",
  "floresta-common",
+ "floresta-compact-filters",
+ "floresta-domain",
  "floresta-electrum",
  "floresta-mempool",
+ "floresta-node",
+ "floresta-rpc",
  "floresta-watch-only",
  "floresta-wire",
  "miniscript",

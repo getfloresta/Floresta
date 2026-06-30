@@ -8,11 +8,11 @@
 
 use bitcoin::Network;
 use bitcoin::blockdata::constants::genesis_block;
-use floresta_chain::AssumeValidArg;
-use floresta_chain::ChainParams;
-use floresta_chain::FlatChainStore;
-use floresta_chain::FlatChainStoreConfig;
-use floresta_chain::pruned_utreexo::chain_state_builder::ChainStateBuilder;
+use floresta::chain::AssumeValidArg;
+use floresta::chain::ChainParams;
+use floresta::chain::FlatChainStore;
+use floresta::chain::FlatChainStoreConfig;
+use floresta::chain::pruned_utreexo::chain_state_builder::ChainStateBuilder;
 use rustreexo::stump::Stump;
 
 const DATA_DIR: &str = "./tmp-db";
