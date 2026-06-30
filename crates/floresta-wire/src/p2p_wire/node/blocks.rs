@@ -251,7 +251,7 @@ where
 
             #[cfg(feature = "metrics")]
             {
-                use metrics::get_metrics;
+                use floresta_metrics::get_metrics;
 
                 let avg = self.block_sync_avg.value().expect("at least one sample");
                 let metrics = get_metrics();

@@ -828,7 +828,7 @@ where
 
         #[cfg(feature = "metrics")]
         {
-            use metrics::get_metrics;
+            use floresta_metrics::get_metrics;
             let metrics = get_metrics();
 
             metrics.message_times.observe(elapsed);
@@ -839,7 +839,7 @@ where
 
     #[cfg(feature = "metrics")]
     pub(crate) fn update_peer_metrics(&self) {
-        use metrics::get_metrics;
+        use floresta_metrics::get_metrics;
 
         let metrics = get_metrics();
         metrics.peer_count.set(self.peer_ids.len() as f64);

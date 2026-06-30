@@ -62,7 +62,7 @@ Example `peers.json`:
 
 ## Cargo features
 
-- `metrics`: when enabled, `floresta-wire` links in a small Prometheus exporter so your node can expose runtime metrics over HTTP (start with `metrics::metrics_server(addr)`).
+- `metrics`: when enabled, `floresta-wire` links in a small Prometheus exporter so your node can expose runtime metrics over HTTP (start with `floresta_metrics::metrics_server(addr)`).
 
 ## Minimum Supported Rust Version (MSRV)
 

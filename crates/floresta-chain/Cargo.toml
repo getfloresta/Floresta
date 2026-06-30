@@ -33,7 +33,7 @@ twox-hash = { version = "=2.1.2", default-features = false, features = ["xxhash3
 
 # Local dependencies
 floresta-common = { workspace = true, features = ["std"] }
-metrics = { workspace = true,  optional = true }
+floresta-metrics = { workspace = true, optional = true }
 
 [dev-dependencies]
 bitcoin = { workspace = true, features = ["serde"] }
@@ -48,8 +48,8 @@ zstd = { workspace = true }
 [features]
 default = []
 bitcoinkernel = ["dep:bitcoinkernel"]
-metrics = ["dep:metrics"]
-test-utils = ["dep:serde"]
+metrics = ["dep:floresta-metrics"]
+test-utils = ["dep:serde", "bitcoin/serde"]
 flat-chainstore = ["dep:memmap2", "dep:lru", "dep:twox-hash"]
 
 [[bench]]
