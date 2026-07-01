@@ -707,7 +707,8 @@ impl Florestad {
         network: Network,
         assume_valid: AssumeValidArg,
     ) -> Result<ChainState<ChainStore>, FlorestadError> {
-        let chain_store_config = FlatChainStoreConfig::new(datadir.as_ref().join("chaindata"));
+        let chain_store_config =
+            FlatChainStoreConfig::new_with_path(datadir.as_ref().join("chaindata"));
 
         let chain_store = ChainStore::new(chain_store_config)
             .map_err(|e| FlorestadError::CouldNotLoadFlatChainStore(e.into()))?;
