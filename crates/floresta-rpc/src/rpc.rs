@@ -6,6 +6,7 @@ use std::vec;
 use bitcoin::BlockHash;
 use bitcoin::Txid;
 use corepc_types::v29::GetTxOut;
+use corepc_types::v30::AddPeerAddress;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::v30::GetDeploymentInfo;
@@ -160,6 +161,14 @@ pub trait FlorestaRPC {
     fn ping(&self) -> Result<()>;
     /// Returns address manager statistics broken down by network.
     fn get_addrman_info(&self) -> Result<GetAddrManInfo>;
+
+    #[doc = include_str!("../../../doc/rpc/addpeeraddress.md")]
+    fn add_peer_address(
+        &self,
+        address: String,
+        port: Option<u16>,
+        tried: bool,
+    ) -> Result<AddPeerAddress>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -389,5 +398,19 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
         self.call("getaddrmaninfo", &[])
+    }
+
+    fn add_peer_address(
+        &self,
+        address: String,
+        port: Option<u16>,
+        tried: bool,
+    ) -> Result<AddPeerAddress> {
+        let mut params: Vec<Value> = vec![Value::String(address)];
+        if let Some(p) = port {
+            params.push(Value::Number(Number::from(p)));
+            params.push(Value::Bool(tried));
+        }
+        self.call("addpeeraddress", &params)
     }
 }

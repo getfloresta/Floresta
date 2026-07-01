@@ -390,6 +390,18 @@ class BaseRPC(ABC):
         """
         return self.perform_request("ping")
 
+    def add_peer_address(
+        self, address: str, port: int = None, tried: bool = False
+    ) -> dict:
+        """
+        Add a peer address to the address manager
+        """
+        params = [address]
+        if port is not None:
+            params.append(port)
+            params.append(tried)
+        return self.perform_request("addpeeraddress", params)
+
     def disconnectnode(self, node_address: str = "", node_id: Optional[int] = None):
         """
         Disconnect from a peer by `node_address` or `node_id`

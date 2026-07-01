@@ -315,6 +315,17 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
+        "addpeeraddress" => {
+            let address = get_at(&params, 0, "address")?;
+            let port = try_into_optional(get_at(&params, 1, "port"))?;
+            let tried = get_with_default(&params, 2, "tried", false)?;
+
+            state
+                .add_peer_address(address, port, tried)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
         "disconnectnode" => {
             let node_address = get_at(&params, 0, "node_address")?;
             let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
