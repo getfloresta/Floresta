@@ -30,12 +30,13 @@ use floresta_common::try_and_log;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_domain::wallet::error::WatchOnlyError;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_mempool::Mempool;
 use floresta_watch_only::AddressCache;
-use floresta_watch_only::WatchOnlyError;
 use floresta_watch_only::kv_database::KvDatabase;
+use floresta_watch_only::new_wallet_default;
 use floresta_wire::UtreexoNodeConfig;
 use floresta_wire::address_man::AddressMan;
 use floresta_wire::address_man::ReachableNetworks;
@@ -718,10 +719,7 @@ impl Florestad {
 
     /// Setup the wallet by initializing the database and adding descriptors, xpubs, and addresses.
     fn setup_wallet(&self) -> Result<AddressCache<KvDatabase>, FlorestadError> {
-        let database = KvDatabase::new(&self.config.datadir)
-            .map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-
-        let wallet = AddressCache::new(database);
+        let wallet = new_wallet_default(&self.config.datadir)?;
 
         wallet
             .setup()
@@ -731,7 +729,7 @@ impl Florestad {
         for descriptor in self.get_descriptors() {
             match wallet.push_descriptor(&descriptor) {
                 Ok(_) => info!("Added descriptor to wallet: {descriptor}"),
-                Err(WatchOnlyError::DuplicateDescriptor(_)) => {
+                Err(WatchOnlyError::DuplicateDescriptor { descriptor: _ }) => {
                     warn!("Descriptor already exists in wallet, skipping: {descriptor}");
                 }
                 Err(e) => {
@@ -743,7 +741,7 @@ impl Florestad {
         for xpub in self.get_xpubs() {
             match wallet.push_xpub(&xpub, self.config.network) {
                 Ok(()) => info!("Added xpubs to wallet: {xpub}"),
-                Err(WatchOnlyError::DuplicateDescriptor(_)) => warn!(
+                Err(WatchOnlyError::DuplicateDescriptor { descriptor: _ }) => warn!(
                     "Descriptor for the provided XPUB already exists in the wallet. Skipping: {xpub}"
                 ),
                 Err(e) => return Err(FlorestadError::from(e)),
@@ -751,7 +749,7 @@ impl Florestad {
         }
 
         for address in self.get_addresses()? {
-            wallet.cache_address(address);
+            wallet.cache_address(address)?;
         }
 
         info!("Wallet setup completed!");

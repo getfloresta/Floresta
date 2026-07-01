@@ -1080,7 +1080,6 @@ version = "0.1.0"
 dependencies = [
  "bitcoin",
  "floresta-chain",
- "rustreexo",
 ]
 
 [[package]]
@@ -1091,6 +1090,7 @@ dependencies = [
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
+ "floresta-domain",
  "floresta-mempool",
  "floresta-watch-only",
  "floresta-wire",
@@ -1185,6 +1185,7 @@ dependencies = [
  "bitcoin",
  "floresta-chain",
  "floresta-common",
+ "floresta-domain",
  "kv",
  "miniscript",
  "rand 0.10.1",
