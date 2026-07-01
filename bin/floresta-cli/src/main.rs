@@ -139,6 +139,17 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.get_deployment_info(blockhash)?)?
         }
         Methods::GetAddrManInfo => serde_json::to_string_pretty(&client.get_addrman_info()?)?,
+        Methods::AddPeerAddress {
+            address,
+            port,
+            tried,
+        } => {
+            let tried = tried.unwrap_or(false);
+            serde_json::to_string_pretty(&client.add_peer_address(address, port, tried)?)?
+        }
+        Methods::GetNodeAddresses { count, network } => {
+            serde_json::to_string_pretty(&client.get_node_addresses(count, network)?)?
+        }
     })
 }
 
@@ -463,4 +474,32 @@ pub enum Methods {
         disable_help_subcommand = true
     )]
     GetAddrManInfo,
+
+    #[doc = include_str!("../../../doc/rpc/addpeeraddress.md")]
+    #[command(
+        name = "addpeeraddress",
+        about = "Add an address to the address manager",
+        long_about = Some(include_str!("../../../doc/rpc/addpeeraddress.md")),
+        disable_help_subcommand = true
+    )]
+    AddPeerAddress {
+        address: String,
+        port: Option<u16>,
+        tried: Option<bool>,
+    },
+
+    #[doc = include_str!("../../../doc/rpc/getnodeaddresses.md")]
+    #[command(
+        name = "getnodeaddresses",
+        about = "Returns known peer addresses from the address manager",
+        long_about = Some(include_str!("../../../doc/rpc/getnodeaddresses.md")),
+        disable_help_subcommand = true
+    )]
+    GetNodeAddresses {
+        /// How many addresses we will return, defaults to 1.
+        count: Option<u32>,
+
+        /// Network to filter addresses
+        network: Option<String>,
+    },
 }

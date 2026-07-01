@@ -41,6 +41,7 @@ use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::AddressCache;
 use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
+use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::node_handle::NodeHandle;
 use floresta_wire::node_interface::ChainMethods;
 use floresta_wire::node_interface::MempoolMethods;
@@ -315,6 +316,17 @@ async fn handle_json_rpc_request(
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
+        "addpeeraddress" => {
+            let address = get_at(&params, 0, "address")?;
+            let port = try_into_optional(get_at(&params, 1, "port"))?;
+            let tried = get_with_default(&params, 2, "tried", false)?;
+
+            state
+                .add_peer_address(address, port, tried)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
         "disconnectnode" => {
             let node_address = get_at(&params, 0, "node_address")?;
             let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
@@ -419,6 +431,30 @@ async fn handle_json_rpc_request(
 
             state
                 .get_txout_proof(&txids, block_hash)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
+        "getnodeaddresses" => {
+            let count = get_with_default(&params, 0, "count", 1)?;
+            let network_str = get_with_default(&params, 1, "network", "all")?;
+
+            let network: Option<ReachableNetworks> = match network_str {
+                "all" => None,
+                "ipv4" => Some(ReachableNetworks::IPv4),
+                "ipv6" => Some(ReachableNetworks::IPv6),
+                "onion" => Some(ReachableNetworks::TorV3),
+                "i2p" => Some(ReachableNetworks::I2P),
+                "cjdns" => Some(ReachableNetworks::Cjdns),
+                other => {
+                    return Err(JsonRpcError::InvalidParameterType(format!(
+                        "Unknown network '{other}'. Expected one of: ipv4, ipv6, onion, i2p, cjdns or all"
+                    )));
+                }
+            };
+
+            state
+                .get_node_addresses(count, network)
                 .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
