@@ -5,11 +5,23 @@ use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
+pub use corepc_types::ScriptPubKey;
+pub use corepc_types::ScriptSig;
+pub use corepc_types::v26::AddrManInfoNetwork;
+pub use corepc_types::v30::DeploymentInfo;
+pub use corepc_types::v30::GetAddrManInfo;
+pub use corepc_types::v30::GetBlockHeaderVerbose;
+pub use corepc_types::v30::GetBlockVerboseOne;
+pub use corepc_types::v30::GetBlockchainInfo;
+pub use corepc_types::v30::GetDeploymentInfo;
 pub use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v31::GetRawTransactionVerbose;
+pub use corepc_types::v30::GetNetworkInfoNetwork;
+pub use corepc_types::v30::GetTxOut;
+pub use corepc_types::v31::GetRawTransactionVerbose;
+pub use corepc_types::v31::RawTransactionInput;
+pub use corepc_types::v31::RawTransactionOutput;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -98,6 +110,17 @@ pub enum RescanConfidence {
 
     /// `exact`: Removes any lookback addition. Meaning 0 in seconds.
     Exact,
+}
+
+impl RescanConfidence {
+    pub const fn as_secs(&self) -> u32 {
+        match self {
+            Self::Exact => 0,
+            Self::Low => 1_380,
+            Self::Medium => 1_800,
+            Self::High => 2_760,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -223,6 +246,19 @@ impl Display for AddNodeCommand {
             Self::Onetry => "onetry",
         };
         write!(f, "{cmd}")
+    }
+}
+
+impl FromStr for AddNodeCommand {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "add" => Ok(Self::Add),
+            "remove" => Ok(Self::Remove),
+            "onetry" => Ok(Self::Onetry),
+            _ => Err(format!("Invalid command: {}", s)),
+        }
     }
 }
 
