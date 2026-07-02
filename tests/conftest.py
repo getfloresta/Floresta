@@ -12,7 +12,7 @@ This module provides fixtures for creating and managing test nodes
 import logging
 import os
 import time
-from typing import List
+from typing import Callable, List
 
 import pytest
 from test_framework import FlorestaTestFramework
@@ -183,7 +183,7 @@ def florestad_bitcoind(
 @pytest.fixture
 def florestad_bitcoind_utreexod_with_chain(
     florestad_node, bitcoind_node, utreexod_node, node_manager
-) -> tuple[Node, Node, Node]:
+) -> Callable[..., tuple[Node, Node, Node]]:
     """
     Factory fixture that initializes a three-node network with a populated blockchain.
 
@@ -195,7 +195,7 @@ def florestad_bitcoind_utreexod_with_chain(
     def _create_nodes_with_chain(
         blocks: int = 100,
         floresta_descriptors: List[str] | None = None,
-        addr_coinbase: str = None,
+        addr_coinbase: str | None = None,
     ) -> tuple[Node, Node, Node]:
         if floresta_descriptors is None:
             floresta_descriptors = [
@@ -218,6 +218,48 @@ def florestad_bitcoind_utreexod_with_chain(
         node_manager.connect_nodes(florestad_node, bitcoind_node)
 
         return florestad_node, bitcoind_node, utreexod_node
+
+    return _create_nodes_with_chain
+
+
+@pytest.fixture(scope="class")
+def shared_florestad_bitcoind_utreexod_with_chain(
+    shared_florestad_node,
+    shared_bitcoind_node,
+    shared_utreexod_node,
+    shared_node_manager,
+) -> Callable[..., tuple[Node, Node, Node]]:
+    """
+    Class-scoped variant of ``florestad_bitcoind_utreexod_with_chain``.
+
+    Returns a factory that initializes a three-node network shared across
+    every method in a test class.
+    """
+
+    def _create_nodes_with_chain(
+        blocks: int = 100,
+        floresta_descriptors: List[str] | None = None,
+    ) -> tuple[Node, Node, Node]:
+        if floresta_descriptors is None:
+            floresta_descriptors = [
+                WALLET_DESCRIPTOR_EXTERNAL,
+                WALLET_DESCRIPTOR_INTERNAL,
+            ]
+
+        for descriptor in floresta_descriptors:
+            shared_florestad_node.rpc.load_descriptor(descriptor)
+
+        shared_utreexod_node.rpc.generate(blocks)
+
+        shared_node_manager.connect_nodes(shared_florestad_node, shared_utreexod_node)
+        time.sleep(3)
+        shared_node_manager.connect_nodes(shared_bitcoind_node, shared_utreexod_node)
+        time.sleep(1)
+        shared_node_manager.connect_nodes(shared_florestad_node, shared_bitcoind_node)
+
+        shared_node_manager.wait_for_sync_nodes(is_finished_ibd=False)
+
+        return shared_florestad_node, shared_bitcoind_node, shared_utreexod_node
 
     return _create_nodes_with_chain
 

@@ -581,7 +581,7 @@ pub enum GetBlockHeaderRes {
 }
 
 /// Return type for the `gettxoutproof` rpc command, the internal is
-/// just the hex representation of the Merkle Block, which was defined
-/// by btc core.
+/// the hex-encoded representation of the Merkle Block, as defined
+/// by Bitcoin Core.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetTxOutProof(pub Vec<u8>);
+pub struct GetTxOutProof(pub String);
