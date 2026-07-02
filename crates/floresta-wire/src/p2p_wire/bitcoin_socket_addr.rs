@@ -117,7 +117,7 @@ impl BitcoinSocketAddr {
     /// Returns that network's default port, if present
     ///
     /// Note: it takes an option because it makes the logic inside `parse_port_if_present` easier
-    fn get_default_port(network: Network) -> u16 {
+    pub(crate) fn get_default_port(network: Network) -> u16 {
         match network {
             Network::Signet => 38333,
             Network::Bitcoin => 8333,
@@ -491,6 +491,18 @@ mod tests {
         } else {
             assert!(result.is_err(), "Unexpected success: {description}");
         }
+    }
+
+    #[test]
+    fn test_get_default_port() {
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Bitcoin), 8333);
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Testnet), 18333);
+        assert_eq!(
+            BitcoinSocketAddr::get_default_port(Network::Testnet4),
+            48333
+        );
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Signet), 38333);
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Regtest), 18444);
     }
 
     #[test]

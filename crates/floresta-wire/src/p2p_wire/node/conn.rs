@@ -37,6 +37,7 @@ use crate::TransportProtocol;
 use crate::address_man::AddressMan;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
+use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::node_context::NodeContext;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::Peer;
@@ -362,13 +363,7 @@ where
     // TODO(@luisschwab): get rid of this once
     // https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
     pub(crate) fn get_port(network: Network) -> u16 {
-        match network {
-            Network::Bitcoin => 8333,
-            Network::Signet => 38333,
-            Network::Testnet => 18333,
-            Network::Testnet4 => 48333,
-            Network::Regtest => 18444,
-        }
+        BitcoinSocketAddr::get_default_port(network)
     }
 
     /// Fetch peers from DNS seeds, sending a `NodeNotification` with found ones. Returns
