@@ -494,6 +494,18 @@ mod tests {
     }
 
     #[test]
+    fn test_get_default_port() {
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Bitcoin), 8333);
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Testnet), 18333);
+        assert_eq!(
+            BitcoinSocketAddr::get_default_port(Network::Testnet4),
+            48333
+        );
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Signet), 38333);
+        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Regtest), 18444);
+    }
+
+    #[test]
     fn test_parse_address() {
         // IPv6 Tests
         check_address_resolving("[::1]", true, "Valid IPv6 without port");
