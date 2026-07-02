@@ -8,10 +8,17 @@ Base client to connect to Floresta's Electrum server.
 
 import json
 import socket
-from typing import Any, List, Tuple
 from OpenSSL import SSL
 
 from test_framework.electrum import ConfigElectrum
+from test_framework.util import wait_until
+
+# Read one byte at a time so the first ``\n`` terminates the message.
+# Any data that arrives after it stays in the kernel socket buffer and
+# will be returned by the next call.  This prevents coalesced messages
+# (e.g. a notification + response in one TCP segment) from being
+# concatenated into an invalid JSON payload.
+BUFFER_SIZE = 1
 
 
 # pylint: disable=too-few-public-methods
@@ -24,6 +31,8 @@ class BaseClient:
         self._conn = None
         self._config = config
         self._log = log
+        self._request_id = 0
+        self.result = None
 
     @property
     def log(self):
@@ -89,6 +98,51 @@ class BaseClient:
         else:
             self._conn = s
 
+    def receive_response(self) -> bool:
+        """
+        Receive a response from the Electrum server.
+
+        Returns True if a valid response is received, False otherwise.
+        """
+        response = self.read_response()
+        self.log.debug(f"Response: {response}")
+        result = json.loads(response)
+
+        # Notifications do not have an `id`. They can arrive before the
+        # response we are waiting for, so keep reading until the matching
+        # response shows up.
+        if result.get("id") != self._request_id:
+            if "method" in result and "id" not in result:
+                self.log.debug(f"Ignoring notification: {result}")
+                return False
+
+            self.log.debug(
+                f"Ignoring unmatched message with id {result.get('id')}: {result}"
+            )
+            return False
+
+        self.result = result
+        return True
+
+    def read_response(self) -> str:
+        """
+        Receive a single JSON-RPC message from the server (delineated by ``\\n``).
+
+        Electrum servers can send notifications asynchronously, so we may need
+        to read several messages before we get the response for the current
+        request.
+        """
+        response = b""
+        byte = self.conn.recv(BUFFER_SIZE)
+        while byte and byte != b"\n":
+            response += byte
+            byte = self.conn.recv(BUFFER_SIZE)
+        return response.decode("utf-8").strip()
+
+    def _next_request_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
+
     def request(self, method, params) -> object:
         """
         Request something to Floresta server
@@ -98,54 +152,27 @@ class BaseClient:
             if not self.is_connected:
                 raise ConnectionError("Could not connect to Electrum server")
 
+        request_id = self._next_request_id()
         request = json.dumps(
-            {"jsonrpc": "2.0", "id": 0, "method": method, "params": params}
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         )
 
         mnt_point = "/".join(method.split("."))
         self.log.debug(f"GET electrum://{mnt_point}?params={params}")
         self.conn.sendall(request.encode("utf-8") + b"\n")
 
-        response = b""
-        while True:
-            chunk = self.conn.recv(1)
-            if not chunk:
-                break
-            response += chunk
-            if b"\n" in response:
-                break
-        response = response.decode("utf-8").strip()
-        self.log.debug(response)
+        # pylint: disable=unnecessary-lambda
+        # Lambda is required here because wait_until needs a callable to invoke
+        # repeatedly until it returns True. Without it, receive_response() would
+        # execute immediately and pass its result, not a function.
+        wait_until(lambda: self.receive_response(), interval=0)
 
-        return json.loads(response)
-
-    def batch_request(self, calls: List[Tuple[str, List[Any]]]) -> object:
-        """
-        Send batch JSON-RPC requests to electrum's server.
-        """
-        request_map = {
-            i: {"jsonrpc": "2.0", "id": i, "method": method, "params": params}
-            for i, (method, params) in enumerate(calls)
-        }
-
-        request_list = list(request_map.values())
-        self.log.debug(
-            "BATCH "
-            + ", ".join(
-                f"electrum://{'/'.join(m.split('.'))}?params={p}" for m, p in calls
+        # Check for JSON-RPC error response
+        error = self.result.get("error")
+        if error is not None:
+            raise ValueError(
+                f"Electrum RPC error {error.get('code')}: {error.get('message')}"
             )
-        )
-        self.conn.sendall(json.dumps(request_list).encode("utf-8") + b"\n")
 
-        response = b""
-        while True:
-            chunk = self.conn.recv(1)
-            if not chunk:
-                break
-            response += chunk
-            if b"\n" in response:
-                break
-
-        response = response.decode("utf-8").strip()
-        self.log.debug(response)
-        return response
+        # Return only the result, not the whole response
+        return self.result.get("result")
