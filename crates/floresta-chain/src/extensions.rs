@@ -10,6 +10,7 @@ use bitcoin::BlockHash;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::hashes::Hash;
 use floresta_common::bhash;
 use floresta_common::prelude::Box;
 use floresta_common::prelude::String;
@@ -46,6 +47,14 @@ pub trait HeaderExt {
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<u32, HeaderExtError>;
+
+    /// Calculates Median Time Past using a caller-provided previous-header lookup.
+    fn median_time_past_with<E>(
+        &self,
+        previous_header: impl FnMut(&Self) -> Result<Self, E>,
+    ) -> Result<u32, E>
+    where
+        Self: Sized;
 
     /// Calculates the total accumulated chain work up to the current block.
     fn calculate_chain_work(
@@ -123,19 +132,27 @@ impl HeaderExt for Header {
         &self,
         chain: &impl BlockchainInterface,
     ) -> Result<u32, HeaderExtError> {
+        self.median_time_past_with(|current_header| current_header.get_previous_block_header(chain))
+    }
+
+    fn median_time_past_with<E>(
+        &self,
+        mut previous_header: impl FnMut(&Self) -> Result<Self, E>,
+    ) -> Result<u32, E> {
         let mut block_timestamps = Vec::with_capacity(MEDIAN_TIME_PAST_BLOCK_COUNT);
         let mut current_header = *self;
+
         for _ in 0..MEDIAN_TIME_PAST_BLOCK_COUNT {
             block_timestamps.push(current_header.time);
-            let Ok(prev_header) = current_header.get_previous_block_header(chain) else {
+            if current_header.prev_blockhash == BlockHash::all_zeros() {
                 break;
-            };
-            current_header = prev_header;
-        }
-        block_timestamps.sort();
-        let median_time_past = block_timestamps[block_timestamps.len() / 2];
+            }
 
-        Ok(median_time_past)
+            current_header = previous_header(&current_header)?;
+        }
+
+        block_timestamps.sort();
+        Ok(block_timestamps[block_timestamps.len() / 2])
     }
 
     fn calculate_chain_work(
@@ -288,6 +305,7 @@ mod tests {
     use core::fmt::Display;
     use core::fmt::Formatter;
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use bitcoin::Block;
@@ -311,6 +329,7 @@ mod tests {
     #[derive(Debug)]
     pub enum MockBlockchainError {
         NotFound,
+        Storage,
     }
 
     impl Display for MockBlockchainError {
@@ -324,6 +343,7 @@ mod tests {
     pub struct MockBlockchainInterface {
         pub headers: HashMap<BlockHash, Header>,
         pub heights: HashMap<BlockHash, u32>,
+        pub storage_errors: HashSet<BlockHash>,
         pub chain_height: u32,
     }
 
@@ -332,6 +352,7 @@ mod tests {
             Self {
                 headers: HashMap::new(),
                 heights: HashMap::new(),
+                storage_errors: HashSet::new(),
                 chain_height: 0,
             }
         }
@@ -351,6 +372,10 @@ mod tests {
         }
 
         fn get_block_header(&self, hash: &BlockHash) -> Result<Header, Self::Error> {
+            if self.storage_errors.contains(hash) {
+                return Err(MockBlockchainError::Storage);
+            }
+
             self.headers
                 .get(hash)
                 .cloned()
@@ -544,6 +569,21 @@ mod tests {
         let expected_mtp = headers[0].time;
 
         assert_eq!(mtp, expected_mtp);
+    }
+
+    #[test]
+    fn test_calculate_median_time_past_propagates_storage_errors() {
+        let (mut mock_chain, headers) = get_chain_and_headers(12);
+        let median_header = headers[headers.len() - 1];
+        let missing_hash = headers[headers.len() - 2].block_hash();
+        mock_chain.storage_errors.insert(missing_hash);
+
+        let result = median_header.calculate_median_time_past(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "MTP lookup failure should be propagated, got {result:?}"
+        );
     }
 
     #[test]
