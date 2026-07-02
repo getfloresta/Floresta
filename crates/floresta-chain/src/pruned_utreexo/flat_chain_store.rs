@@ -77,6 +77,7 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use core::mem::size_of;
 use core::num::NonZeroUsize;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::DirBuilder;
 use std::fs::File;
@@ -103,7 +104,6 @@ use lru::LruCache;
 use memmap2::MmapMut;
 use memmap2::MmapOptions;
 use tracing::debug;
-use tracing::info;
 use twox_hash::XxHash3_64;
 
 use crate::BestChain;
@@ -118,7 +118,7 @@ use crate::DiskBlockHeader;
 const FLAT_CHAINSTORE_MAGIC: u32 = 0x74_73_6C_66; // "flst" backwards
 
 /// The version of our flat chain store
-const FLAT_CHAINSTORE_VERSION: u32 = 1;
+const FLAT_CHAINSTORE_VERSION: u32 = 2;
 
 /// We use a LRU cache to keep the last n blocks we've touched, so we don't need to do a map search
 /// again. This is the type of our cache
@@ -313,7 +313,10 @@ struct HashedDiskHeader {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// Metadata about our chainstate and the blocks we have. We need this to keep track of the
-/// network state, our local validation state and accumulator state
+/// network state, our local validation state and accumulator state.
+///
+/// V2: `alternative_tips` removed — tips are now derived dynamically from stored fork headers
+/// on startup (see [`FlatChainStore::derive_alternative_tips`]).
 struct Metadata {
     /// A magic number to make sure we're reading the right file and it was initialized correctly
     magic: u32,
@@ -329,12 +332,6 @@ struct Metadata {
 
     /// We actually validated blocks up to this point
     validation_index: BlockHash,
-
-    /// Blockchains are not fast-forward only, they might have "forks", sometimes it's useful
-    /// to keep track of them, in case they become the best one. This keeps track of some
-    /// tips we know about, but are not the best one. We don't keep tips that are too deep
-    /// or has too little work if compared to our best one
-    alternative_tips: [BlockHash; 64], // we hope to never have more than 64 alt-chains
 
     /// How many blocks we have that are not in our main chain
     fork_count: u32,
@@ -688,9 +685,6 @@ impl FlatChainStore {
         _metadata.depth = 0;
         _metadata.validation_index = BlockHash::all_zeros();
         _metadata.fork_count = 0;
-        _metadata
-            .alternative_tips
-            .copy_from_slice(&[BlockHash::all_zeros(); 64]);
 
         _metadata.checksum = DbCheckSum {
             headers_checksum: FileChecksum(0),
@@ -726,8 +720,18 @@ impl FlatChainStore {
         let metadata_path = datadir.join("metadata.bin");
         let file_mode = config.file_permission.unwrap_or(0o600);
 
-        // Maybe migrate our database if it's the old version 0
-        migrate_v0_to_v1::maybe_migrate(&metadata_path, file_mode)?;
+        debug!("FLAT_CHAINSTORE_VERSION:{}", FLAT_CHAINSTORE_VERSION);
+
+        // Maybe migrate our database from older versions
+        debug!(
+            "Checking migration v0 to v1. Migrated : {}",
+            migrations::migrate_v0_to_v1::maybe_migrate(&metadata_path, file_mode)?
+        );
+
+        debug!(
+            "Checking migration v1 to v2. Migrated : {}",
+            migrations::migrate_v1_to_v2::maybe_migrate(&metadata_path, file_mode)?
+        );
 
         // Check if metadata file exists before attempting to load
         let metadata_exists = Path::new(&metadata_path).metadata().is_ok();
@@ -965,19 +969,38 @@ impl FlatChainStore {
         metadata.depth = best_block.depth;
         metadata.validation_index = best_block.validation_index;
 
-        assert!(best_block.alternative_tips.len() <= 64);
+        Ok(())
+    }
 
-        unsafe {
-            metadata
-                .alternative_tips
-                .as_mut_ptr()
-                .copy_from_nonoverlapping(
-                    best_block.alternative_tips.as_ptr(),
-                    best_block.alternative_tips.len(),
-                );
+    /// Derives the current set of alternative chain tips by scanning stored fork headers.
+    ///
+    /// A fork header is considered a tip if no other fork header references it as its
+    /// parent (`prev_blockhash`). This mirrors how Bitcoin Core computes chain tips from
+    /// its block index rather than maintaining an explicit on-disk list.
+    ///
+    /// This is called once on startup (via `get_best_chain`) to populate the in-memory
+    /// `BestChain.alternative_tips` cache. At runtime, tips are maintained incrementally
+    /// by `ChainState::push_alt_tip`.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the memory-mapped files are valid and properly initialized.
+    unsafe fn derive_alternative_tips(&self) -> Result<Vec<BlockHash>, FlatChainstoreError> {
+        let metadata = unsafe { self.get_metadata()? };
+        let fork_count = metadata.fork_count as usize;
+
+        let mut fork_hashes = HashSet::with_capacity(fork_count);
+        let mut parent_hashes = HashSet::with_capacity(fork_count);
+
+        for i in 0..fork_count {
+            let index = Index::new_fork(i as u32)?;
+            let hdr = unsafe { self.get_disk_header(index)? };
+            fork_hashes.insert(hdr.hash);
+            parent_hashes.insert(hdr.header.prev_blockhash);
         }
 
-        Ok(())
+        // A tip is a fork header that no other fork header builds on
+        Ok(fork_hashes.difference(&parent_hashes).copied().collect())
     }
 
     unsafe fn get_best_chain(&self) -> Result<BestChain, FlatChainstoreError> {
@@ -987,11 +1010,7 @@ impl FlatChainStore {
             best_block: metadata.best_block,
             depth: metadata.depth,
             validation_index: metadata.validation_index,
-            alternative_tips: metadata
-                .alternative_tips
-                .into_iter()
-                .take_while(|tip| *tip != BlockHash::all_zeros())
-                .collect(),
+            alternative_tips: unsafe { self.derive_alternative_tips()? },
         })
     }
 
@@ -1303,99 +1322,328 @@ impl ChainStore for FlatChainStore {
     }
 }
 
-pub mod migrate_v0_to_v1 {
+mod migrations {
+    extern crate std;
+
     use std::fs;
     use std::fs::OpenOptions;
     use std::io;
     use std::path::Path;
 
+    use bitcoin::BlockHash;
     use memmap2::Mmap;
     use memmap2::MmapOptions;
+    use tracing::info;
 
-    use super::*;
-
-    #[repr(C)]
-    #[derive(Debug, Clone, Copy)]
-    struct MetadataV0 {
-        magic: u32,
-        version: u32,
-        best_block: BlockHash,
-        depth: u32,
-        validation_index: BlockHash,
-        alternative_tips: [BlockHash; 64],
-        assume_valid_index: u32, // DEPRECATED FIELD
-        fork_count: u32,
-        headers_file_size: usize,
-        fork_file_size: usize,
-        block_index_occupancy: usize,
-        index_capacity: usize,
-        checksum: DbCheckSum,
-    }
-
-    impl From<MetadataV0> for Metadata {
-        fn from(value: MetadataV0) -> Self {
-            Self {
-                magic: value.magic,
-                version: FLAT_CHAINSTORE_VERSION, // bump version
-                best_block: value.best_block,
-                depth: value.depth,
-                validation_index: value.validation_index,
-                alternative_tips: value.alternative_tips,
-                // assume_valid_index is skipped
-                fork_count: value.fork_count,
-                headers_file_size: value.headers_file_size,
-                fork_file_size: value.fork_file_size,
-                block_index_occupancy: value.block_index_occupancy,
-                index_capacity: value.index_capacity,
-                checksum: value.checksum,
-            }
-        }
-    }
-
-    /// If `metadata.bin` is exactly the old size, rename to `.bin.old`, mmap it as `MetadataV0`,
-    /// then create a fresh v1 file and copy all fields except the deprecated u32. Returns a bool
-    /// indicating whether a migration was performed or not.
-    pub fn maybe_migrate(
-        metadata_path: impl AsRef<Path>,
-        mode: u32,
-    ) -> Result<bool, FlatChainstoreError> {
-        let metadata_path = metadata_path.as_ref();
-
-        match fs::metadata(metadata_path) {
-            // No db found, nothing to migrate from
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-            // Propagate the rest of errors
-            Err(e) => return Err(e.into()),
-            // Found but doesn't have the v0 size
-            Ok(meta) if meta.len() != size_of::<MetadataV0>() as u64 => return Ok(false),
-            Ok(_) => {}
-        }
-
-        // 1) back up
-        let metadata_backup_path = Path::new(metadata_path).with_extension("bin.old");
-        fs::rename(metadata_path, &metadata_backup_path)?;
-
-        // 2) read old struct
-        let mmap = init_mmap(&metadata_backup_path, size_of::<MetadataV0>())?;
-        let old_meta = unsafe { &*(mmap.as_ptr() as *const MetadataV0) };
-
-        // 3) create new v1 mmap
-        let mut new_mmap =
-            unsafe { FlatChainStore::init_file(metadata_path, size_of::<Metadata>(), mode)? };
-        let new_meta = unsafe { &mut *(new_mmap.as_mut_ptr() as *mut Metadata) };
-
-        // 4) copy everything but the deprecated u32, bump version
-        *new_meta = Metadata::from(*old_meta);
-        info!("Migrated FlatChainStore from v0 to v1!");
-
-        Ok(true)
-    }
+    use super::FLAT_CHAINSTORE_VERSION;
+    use super::FlatChainStore;
+    use super::Metadata;
+    use crate::DbCheckSum;
+    use crate::FlatChainstoreError;
 
     /// Initialize a read-only mmap
     pub(super) fn init_mmap(file_path: &Path, size: usize) -> Result<Mmap, FlatChainstoreError> {
         let file = OpenOptions::new().read(true).open(file_path)?;
         let mmap = unsafe { MmapOptions::new().len(size).map(&file)? };
         Ok(mmap)
+    }
+
+    pub(super) mod migrate_v0_to_v1 {
+
+        use super::migrate_v1_to_v2::MetadataV1;
+        use super::*;
+
+        #[repr(C)]
+        #[derive(Debug, Clone, Copy)]
+        struct MetadataV0 {
+            pub(super) magic: u32,
+            pub(super) version: u32,
+            pub(super) best_block: BlockHash,
+            pub(super) depth: u32,
+            pub(super) validation_index: BlockHash,
+            pub(super) alternative_tips: [BlockHash; 64],
+            pub(super) assume_valid_index: u32, // DEPRECATED FIELD
+            pub(super) fork_count: u32,
+            pub(super) headers_file_size: usize,
+            pub(super) fork_file_size: usize,
+            pub(super) block_index_occupancy: usize,
+            pub(super) index_capacity: usize,
+            pub(super) checksum: DbCheckSum,
+        }
+
+        impl From<MetadataV0> for MetadataV1 {
+            fn from(value: MetadataV0) -> Self {
+                Self {
+                    magic: value.magic,
+                    version: 1, // V0 → V1
+                    best_block: value.best_block,
+                    depth: value.depth,
+                    validation_index: value.validation_index,
+                    alternative_tips: value.alternative_tips,
+                    // assume_valid_index is skipped
+                    fork_count: value.fork_count,
+                    headers_file_size: value.headers_file_size,
+                    fork_file_size: value.fork_file_size,
+                    block_index_occupancy: value.block_index_occupancy,
+                    index_capacity: value.index_capacity,
+                    checksum: value.checksum,
+                }
+            }
+        }
+
+        /// If `metadata.bin` is exactly the old V0 size, rename to `.bin.old`, mmap it as
+        /// `MetadataV0`, then create a V1 file and copy all fields except the deprecated u32.
+        /// Returns a bool indicating whether a migration was performed or not.
+        pub fn maybe_migrate(
+            metadata_path: impl AsRef<Path>,
+            mode: u32,
+        ) -> Result<bool, FlatChainstoreError> {
+            let metadata_path = metadata_path.as_ref();
+
+            match fs::metadata(metadata_path) {
+                // No db found, nothing to migrate from
+                Err(e) if e.kind() == super::io::ErrorKind::NotFound => return Ok(false),
+                // Propagate the rest of errors
+                Err(e) => return Err(e.into()),
+                // Found but doesn't have the v0 size
+                Ok(meta) if meta.len() != size_of::<MetadataV0>() as u64 => return Ok(false),
+                Ok(_) => {}
+            }
+
+            // 1) back up
+            let metadata_backup_path = Path::new(metadata_path).with_extension("bin.old");
+            fs::rename(metadata_path, &metadata_backup_path)?;
+
+            // 2) read old struct
+            let mmap = init_mmap(&metadata_backup_path, size_of::<MetadataV0>())?;
+            let old_meta = unsafe { &*(mmap.as_ptr() as *const MetadataV0) };
+
+            // 3) create new v1 mmap
+            let mut new_mmap =
+                unsafe { FlatChainStore::init_file(metadata_path, size_of::<MetadataV1>(), mode)? };
+            let new_meta = unsafe { &mut *(new_mmap.as_mut_ptr() as *mut MetadataV1) };
+
+            // 4) copy everything but the deprecated u32, bump version
+            *new_meta = MetadataV1::from(*old_meta);
+            info!("Migrated FlatChainStore from v0 to v1!");
+
+            Ok(true)
+        }
+    }
+
+    pub(super) mod migrate_v1_to_v2 {
+
+        use super::*;
+
+        /// The V1 on-disk metadata layout. Kept here for migration purposes.
+        ///
+        /// Differs from [`Metadata`] (V2) by having `alternative_tips: [BlockHash; 64]` and
+        /// from `MetadataV0` by not having the deprecated `assume_valid_index` field.
+        #[repr(C)]
+        #[derive(Debug, Clone, Copy)]
+        pub(super) struct MetadataV1 {
+            pub magic: u32,
+            pub version: u32,
+            pub best_block: BlockHash,
+            pub depth: u32,
+            pub validation_index: BlockHash,
+            pub alternative_tips: [BlockHash; 64],
+            pub fork_count: u32,
+            pub headers_file_size: usize,
+            pub fork_file_size: usize,
+            pub block_index_occupancy: usize,
+            pub index_capacity: usize,
+            pub checksum: DbCheckSum,
+        }
+
+        impl From<MetadataV1> for Metadata {
+            fn from(value: MetadataV1) -> Self {
+                Self {
+                    magic: value.magic,
+                    version: FLAT_CHAINSTORE_VERSION,
+                    best_block: value.best_block,
+                    depth: value.depth,
+                    validation_index: value.validation_index,
+                    // alternative_tips removed — derived dynamically on startup
+                    fork_count: value.fork_count,
+                    headers_file_size: value.headers_file_size,
+                    fork_file_size: value.fork_file_size,
+                    block_index_occupancy: value.block_index_occupancy,
+                    index_capacity: value.index_capacity,
+                    checksum: value.checksum,
+                }
+            }
+        }
+
+        /// If `metadata.bin` is exactly the V1 size, rename to `.bin.old`, read it as
+        /// `MetadataV1`, then create a V2 file without the `alternative_tips` field.
+        /// Returns a bool indicating whether a migration was performed or not.
+        pub fn maybe_migrate(
+            metadata_path: impl AsRef<Path>,
+            mode: u32,
+        ) -> Result<bool, FlatChainstoreError> {
+            let metadata_path = metadata_path.as_ref();
+
+            match fs::metadata(metadata_path) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(e.into()),
+                Ok(meta) if meta.len() != size_of::<MetadataV1>() as u64 => return Ok(false),
+                Ok(_) => {}
+            }
+
+            // 1) back up
+            let metadata_backup_path = Path::new(metadata_path).with_extension("bin.old");
+            fs::rename(metadata_path, &metadata_backup_path)?;
+
+            // 2) read old V1 struct
+            let mmap = init_mmap(&metadata_backup_path, size_of::<MetadataV1>())?;
+            let old_meta = unsafe { &*(mmap.as_ptr() as *const MetadataV1) };
+
+            // 3) create new V2 mmap
+            let mut new_mmap =
+                unsafe { FlatChainStore::init_file(metadata_path, size_of::<Metadata>(), mode)? };
+            let new_meta = unsafe { &mut *(new_mmap.as_mut_ptr() as *mut Metadata) };
+
+            // 4) copy everything, drop alternative_tips, bump version
+            *new_meta = Metadata::from(*old_meta);
+            info!("Migrated FlatChainStore from v1 to v2!");
+
+            Ok(true)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::mem::size_of;
+        use std::fs;
+
+        use floresta_common::bhash;
+        use tempfile::TempDir;
+
+        use super::migrate_v0_to_v1;
+        use super::migrate_v1_to_v2;
+        use super::migrate_v1_to_v2::MetadataV1;
+        use super::*;
+        use crate::DbCheckSum;
+        use crate::pruned_utreexo::flat_chain_store::FLAT_CHAINSTORE_MAGIC;
+        use crate::pruned_utreexo::flat_chain_store::FileChecksum;
+
+        #[test]
+        fn test_migrate_v0_to_v1() {
+            let tmp = TempDir::new().expect("Failed to create temp dir");
+            // Sanity check
+            let did_migrate =
+                migrate_v0_to_v1::maybe_migrate(tmp.path().to_str().unwrap(), 0o600).unwrap();
+            assert!(!did_migrate, "Should not migrate: empty directory");
+
+            // Copy the v0 metadata file to the temporal directory (we will rename it to .bin.old)
+            let src = "./testdata/v0_flat_metadata.bin";
+            let dst = tmp.path().join("metadata.bin");
+            fs::copy(src, &dst).unwrap();
+
+            let did_migrate =
+                migrate_v0_to_v1::maybe_migrate(dst.to_str().unwrap(), 0o600).unwrap();
+            assert!(did_migrate, "Expected a migration to happen");
+
+            // V0→V1 now produces a MetadataV1 file
+            let new_len = fs::metadata(&dst).unwrap().len();
+            assert_eq!(new_len, size_of::<MetadataV1>() as u64);
+
+            let mmap = init_mmap(&dst, size_of::<MetadataV1>()).unwrap();
+            let metadata = unsafe { &*(mmap.as_ptr() as *const MetadataV1) };
+
+            assert_eq!(metadata.magic, FLAT_CHAINSTORE_MAGIC);
+            assert_eq!(metadata.version, 1);
+            assert_eq!(
+                metadata.best_block,
+                bhash!("000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161")
+            );
+            assert_eq!(metadata.depth, 10_236);
+            assert_eq!(metadata.fork_count, 0);
+            assert_eq!(metadata.headers_file_size, 32_768);
+            assert_eq!(metadata.fork_file_size, 16_384);
+            assert_eq!(metadata.block_index_occupancy, 10_236);
+            assert_eq!(metadata.index_capacity, 32_768);
+        }
+
+        #[test]
+        fn test_migrate_v1_to_v2() {
+            let tmp = TempDir::new().expect("Failed to create temp dir");
+
+            // Sanity check — no file means no migration
+            let did_migrate =
+                migrate_v1_to_v2::maybe_migrate(tmp.path().to_str().unwrap(), 0o600).unwrap();
+            assert!(!did_migrate, "Should not migrate: empty directory");
+
+            // Copy the v1 metadata fixture
+            let src = "./testdata/v1_flat_metadata.bin";
+            let dst = tmp.path().join("metadata.bin");
+            fs::copy(src, &dst).unwrap();
+
+            let did_migrate =
+                migrate_v1_to_v2::maybe_migrate(dst.to_str().unwrap(), 0o600).unwrap();
+            assert!(did_migrate, "Expected a V1→V2 migration to happen");
+
+            // V1→V2 produces a Metadata (V2) file
+            let new_len = fs::metadata(&dst).unwrap().len();
+            assert_eq!(new_len, size_of::<Metadata>() as u64);
+
+            let mmap = init_mmap(&dst, size_of::<Metadata>()).unwrap();
+            let metadata = unsafe { &*(mmap.as_ptr() as *const Metadata) };
+
+            let expected = Metadata {
+                magic: FLAT_CHAINSTORE_MAGIC,
+                version: FLAT_CHAINSTORE_VERSION,
+                best_block: bhash!(
+                    "000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161"
+                ),
+                depth: 10_236,
+                validation_index: bhash!(
+                    "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+                ),
+                fork_count: 0,
+                headers_file_size: 32_768,
+                fork_file_size: 16_384,
+                block_index_occupancy: 10_236,
+                index_capacity: 32_768,
+                checksum: DbCheckSum {
+                    headers_checksum: FileChecksum(4430534975455841125),
+                    index_checksum: FileChecksum(9017076313313378046),
+                    fork_headers_checksum: FileChecksum(10728257719073392722),
+                },
+            };
+
+            assert_eq!(metadata, &expected);
+        }
+
+        #[test]
+        fn test_migrate_v0_through_v2() {
+            // End-to-end: a V0 database gets migrated all the way to V2 via chained migrations
+
+            let tmp = TempDir::new().expect("Failed to create temp dir");
+            let src = "./testdata/v0_flat_metadata.bin";
+            let dst = tmp.path().join("metadata.bin");
+            fs::copy(src, &dst).unwrap();
+
+            // Run both migrations in sequence (same order as FlatChainStore::new)
+            let did_v0_v1 = migrate_v0_to_v1::maybe_migrate(dst.to_str().unwrap(), 0o600).unwrap();
+            assert!(did_v0_v1, "V0→V1 migration should fire");
+
+            let did_v1_v2 = migrate_v1_to_v2::maybe_migrate(dst.to_str().unwrap(), 0o600).unwrap();
+            assert!(did_v1_v2, "V1→V2 migration should fire");
+
+            // Final file should be V2 size
+            let new_len = fs::metadata(&dst).unwrap().len();
+            assert_eq!(new_len, size_of::<Metadata>() as u64);
+
+            let mmap = init_mmap(&dst, size_of::<Metadata>()).unwrap();
+            let metadata = unsafe { &*(mmap.as_ptr() as *const Metadata) };
+
+            assert_eq!(metadata.magic, FLAT_CHAINSTORE_MAGIC);
+            assert_eq!(metadata.version, FLAT_CHAINSTORE_VERSION);
+            assert_eq!(metadata.depth, 10_236);
+            assert_eq!(metadata.fork_count, 0);
+        }
     }
 }
 
@@ -1406,14 +1654,18 @@ mod tests {
 
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
+    use bitcoin::TxMerkleNode;
     use bitcoin::block::Header;
+    use bitcoin::block::Version;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
-    use floresta_common::bhash;
-    use tempfile::TempDir;
+    use rand::RngExt;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use twox_hash::XxHash3_64;
 
     use super::FLAT_CHAINSTORE_MAGIC;
@@ -1427,13 +1679,8 @@ mod tests {
     use crate::BestChain;
     use crate::ChainState;
     use crate::ChainStore;
-    use crate::DbCheckSum;
     use crate::DiskBlockHeader;
-    use crate::migrate_v0_to_v1::init_mmap;
-    use crate::migrate_v0_to_v1::maybe_migrate;
     use crate::pruned_utreexo::UpdatableChainstate;
-    use crate::pruned_utreexo::flat_chain_store::FileChecksum;
-    use crate::pruned_utreexo::flat_chain_store::Metadata;
 
     #[test]
     fn test_truncate_pow2() {
@@ -1540,53 +1787,6 @@ mod tests {
                 ),
             }
         }
-    }
-
-    #[test]
-    fn test_migrate_v0_to_v1() {
-        let tmp = TempDir::new().expect("Failed to create temp dir");
-        // Sanity check
-        let did_migrate = maybe_migrate(tmp.path().to_str().unwrap(), 0o600).unwrap();
-        assert!(!did_migrate, "Should not migrate: empty directory");
-
-        // Copy the v0 metadata file to the temporal directory (we will rename it to .bin.old)
-        let src = "./testdata/v0_flat_metadata.bin";
-        let dst = tmp.path().join("metadata.bin");
-        fs::copy(src, &dst).unwrap();
-
-        let did_migrate = maybe_migrate(dst.to_str().unwrap(), 0o600).unwrap();
-        assert!(did_migrate, "Expected a migration to happen");
-
-        // Check that the length is now the expected one
-        let new_len = fs::metadata(&dst).unwrap().len();
-        assert_eq!(new_len, size_of::<Metadata>() as u64);
-
-        // Mmap the file and read the metadata
-        let mmap = init_mmap(&dst, size_of::<Metadata>()).unwrap();
-        let metadata = unsafe { &*(mmap.as_ptr() as *const Metadata) };
-
-        let expected = Metadata {
-            magic: FLAT_CHAINSTORE_MAGIC,
-            version: FLAT_CHAINSTORE_VERSION,
-            best_block: bhash!("000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161"),
-            depth: 10_236,
-            validation_index: bhash!(
-                "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
-            ),
-            alternative_tips: [BlockHash::all_zeros(); 64],
-            fork_count: 0,
-            headers_file_size: 32_768,
-            fork_file_size: 16_384,
-            block_index_occupancy: 10_236,
-            index_capacity: 32_768,
-            checksum: DbCheckSum {
-                headers_checksum: FileChecksum(4430534975455841125),
-                index_checksum: FileChecksum(9017076313313378046),
-                fork_headers_checksum: FileChecksum(10728257719073392722),
-            },
-        };
-
-        assert_eq!(metadata, &expected);
     }
 
     #[test]
@@ -1929,5 +2129,124 @@ mod tests {
             Err(e) => panic!("Unexpected err: {e:?}"),
             Ok(_) => panic!("Should not have been able to save roots for a block we don't have"),
         }
+    }
+
+    /// Test helper that wraps a [`FlatChainStore`] with a seeded RNG and a fork slot
+    /// counter, providing ergonomic methods for building fork topologies.
+    struct ForkBuilder {
+        store: FlatChainStore,
+        rng: StdRng,
+        next_slot: u32,
+    }
+
+    impl ForkBuilder {
+        fn new(seed: u64) -> Self {
+            let mut store = get_test_chainstore(None).unwrap();
+            // The open-addressing hash map probes slots via `get_disk_header`.
+            // Position 0 must hold a valid header so probes that land there
+            // don't fail with `HeaderNotFound`.
+            let genesis = genesis_block(Network::Regtest);
+            store
+                .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
+                .unwrap();
+            store.update_block_index(0, genesis.block_hash()).unwrap();
+            Self {
+                store,
+                rng: StdRng::seed_from_u64(seed),
+                next_slot: 0,
+            }
+        }
+
+        /// Save a single independent fork header branching off genesis and return its hash.
+        fn add_independent_fork(&mut self) -> BlockHash {
+            let genesis_hash = genesis_block(Network::Regtest).block_hash();
+            self.add_fork_child(genesis_hash)
+        }
+
+        /// Extend a fork chain: save a header whose parent is `prev` and return its hash.
+        fn add_fork_child(&mut self, prev: BlockHash) -> BlockHash {
+            let header = Header {
+                version: Version::from_consensus(2),
+                prev_blockhash: prev,
+                merkle_root: TxMerkleNode::from_byte_array(self.rng.random()),
+                time: self.rng.random(),
+                bits: CompactTarget::from_consensus(self.rng.random()),
+                nonce: self.rng.random(),
+            };
+            let hash = header.block_hash();
+            let slot = self.next_slot;
+            self.next_slot += 1;
+            self.store
+                .save_header(&DiskBlockHeader::InFork(header, slot))
+                .unwrap();
+            hash
+        }
+
+        /// Build a fork chain of `len` blocks branching off genesis and return the tip hash.
+        fn add_fork_chain(&mut self, len: usize) -> BlockHash {
+            let mut tip = genesis_block(Network::Regtest).block_hash();
+            for _ in 0..len {
+                tip = self.add_fork_child(tip);
+            }
+            tip
+        }
+
+        fn derive_tips(&self) -> std::collections::HashSet<BlockHash> {
+            unsafe { self.store.derive_alternative_tips().unwrap() }
+                .into_iter()
+                .collect()
+        }
+    }
+
+    #[test]
+    fn derive_alternative_tips_no_forks() {
+        let fb = ForkBuilder::new(0x0f10_e57a_0000);
+        assert!(fb.derive_tips().is_empty());
+    }
+
+    #[test]
+    fn derive_alternative_tips_independent_forks() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0001);
+
+        let expected: std::collections::HashSet<_> =
+            (0..5).map(|_| fb.add_independent_fork()).collect();
+
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_fork_chain() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0002);
+
+        // Chain of 3: only the tip should be returned.
+        let tip = fb.add_fork_chain(3);
+
+        let tips = fb.derive_tips();
+        assert_eq!(tips.len(), 1);
+        assert!(tips.contains(&tip));
+    }
+
+    #[test]
+    fn derive_alotof_alternative_tips() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0003);
+
+        // 300 tips, go brr and dont crash.
+        let expected: std::collections::HashSet<_> =
+            (0..300).map(|_| fb.add_independent_fork()).collect();
+
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_mixed_chains_and_independent() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0004);
+
+        // Chain A→B (tip: B), independent C (tip: C), chain D→E→F (tip: F)
+        let tip_b = fb.add_fork_chain(2);
+        let tip_c = fb.add_independent_fork();
+        let tip_f = fb.add_fork_chain(3);
+
+        let expected: std::collections::HashSet<_> = [tip_b, tip_c, tip_f].into_iter().collect();
+        assert_eq!(fb.derive_tips(), expected);
     }
 }
