@@ -51,6 +51,7 @@ use crate::address_man::LocalAddress;
 use crate::block_proof::UtreexoProofMask;
 use crate::node::ConnectionKind;
 use crate::node::MAX_ADDRV2_ADDRESSES;
+use crate::node::WitnessMode;
 use crate::p2p_wire::block_proof::GetUtreexoProof;
 use crate::p2p_wire::block_proof::UtreexoProof;
 use crate::p2p_wire::transport::ReadTransport;
@@ -364,10 +365,13 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         assert_eq!(self.state, State::Connected);
         debug!("Handling node request: {request:?}");
         match request {
-            NodeRequest::GetBlock(block_hashes) => {
+            NodeRequest::GetBlock(block_hashes, witness) => {
                 let inv = block_hashes
                     .iter()
-                    .map(|block| Inventory::WitnessBlock(*block))
+                    .map(|block| match witness {
+                        WitnessMode::Full => Inventory::WitnessBlock(*block),
+                        WitnessMode::Witnessless => Inventory::Block(*block),
+                    })
                     .collect();
 
                 let _ = self.write(NetworkMessage::GetData(inv)).await;
