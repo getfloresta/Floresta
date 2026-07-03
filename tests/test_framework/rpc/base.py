@@ -384,6 +384,16 @@ class BaseRPC(ABC):
         """
         return self.perform_request("gettxout", params=[txid, vout, include_mempool])
 
+    def get_txout_proof(self, txids: list, blockhash: str = None) -> str:
+        """
+        Get a hex-encoded Merkle proof that one or more transactions
+        were included in a block.
+        """
+        params = [txids]
+        if blockhash is not None:
+            params.append(blockhash)
+        return self.perform_request("gettxoutproof", params=params)
+
     def ping(self):
         """
         Tells our node to send a ping to all its peers

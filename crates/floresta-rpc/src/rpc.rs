@@ -68,8 +68,8 @@ pub trait FlorestaRPC {
     /// Returns the proof that one or more transactions were included in a block
     ///
     /// This method returns the Merkle proof, showing that a transaction was included in a block.
-    /// The pooof is returned as a vector hexadecimal string.
-    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Option<String>;
+    /// The proof is returned as a hex-encoded string.
+    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Result<String>;
     /// Loads up a descriptor into the wallet
     ///
     /// This method loads up a descriptor into the wallet. If the rescan option is not None,
@@ -299,7 +299,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         serde_json::from_value(result).map_err(Error::Serde)
     }
 
-    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Option<String> {
+    fn get_txout_proof(&self, txids: Vec<Txid>, blockhash: Option<BlockHash>) -> Result<String> {
         let params: Vec<Value> = match blockhash {
             Some(blockhash) => vec![
                 serde_json::to_value(txids)
@@ -312,7 +312,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
                 vec![txids]
             }
         };
-        self.call("gettxoutproof", &params).ok()
+        self.call("gettxoutproof", &params)
     }
 
     fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {

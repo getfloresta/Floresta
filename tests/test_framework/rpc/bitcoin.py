@@ -33,6 +33,18 @@ class BitcoinRPC(BaseRPC):
         """
         return self.perform_request("generatetoaddress", params=[nblocks, address])
 
+    def verify_txout_proof(self, proof: str) -> list:
+        """
+        Verify a Merkle proof returned by `gettxoutproof`.
+
+        Args:
+            proof: The hex-encoded proof string
+
+        Returns:
+            A list of transaction ids that the proof commits to
+        """
+        return self.perform_request("verifytxoutproof", params=[proof])
+
     def generate_block(self, nblocks: int) -> list:
         """
         Mine blocks immediately to a address(bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch) using
