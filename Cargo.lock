@@ -418,9 +418,9 @@ checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
 name = "bitreq"
-version = "0.2.0"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c84f27ed293cb5218ab015faad9fbb95cf7905865ce71df075c8805a0b33b71"
+checksum = "b65c2e1ab98050c93cc9ada070d5070e014329c65196d03f6f8f1f75c2666f37"
 dependencies = [
  "serde",
  "serde_json",
@@ -1804,9 +1804,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpc"
-version = "0.19.0"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "629d2b4ae586d04b6bae3c75879d7ddd39325c2b67a9c87634f4ec88a488dc65"
+checksum = "12f6b9ae59887c395c907855e24b48cf61593a44a2d6757b1ada83d5a2d6b85a"
 dependencies = [
  "base64 0.22.1",
  "bitreq",
