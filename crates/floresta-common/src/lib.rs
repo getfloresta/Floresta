@@ -18,6 +18,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::VarInt;
 use bitcoin::consensus::Decodable;
@@ -87,6 +88,27 @@ pub mod service_flags {
     /// `UTREEXO_ARCHIVE`: the node is capable of serving historical
     /// inclusion proofs for all blocks, but not necessarily historical blocks.
     pub const UTREEXO_ARCHIVE: u64 = 1 << 13;
+}
+
+/// Extension trait for [`bitcoin::Network`] providing network-specific defaults.
+// TODO(@luisschwab): get rid of this once
+// https://github.com/rust-bitcoin/rust-bitcoin/pull/6502 makes it into a release.
+// TODO: move to a dedicated network utilities crate if needed.
+pub trait NetworkExt {
+    /// Returns the default RPC port for the given network.
+    fn default_rpc_port(&self) -> u16;
+}
+
+impl NetworkExt for Network {
+    fn default_rpc_port(&self) -> u16 {
+        match self {
+            Self::Bitcoin => 8332,
+            Self::Signet => 38332,
+            Self::Testnet => 18332,
+            Self::Testnet4 => 48332,
+            Self::Regtest => 18442,
+        }
+    }
 }
 
 /// The P2P protocol version Floresta speaks.
@@ -181,10 +203,12 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::Network;
     use bitcoin::ScriptBuf;
     use bitcoin::hashes::Hash;
     use bitcoin::hex::DisplayHex;
 
+    use super::NetworkExt;
     use super::prelude::*;
 
     #[test]
@@ -208,5 +232,14 @@ mod tests {
             String::from("8b01df4e368ea28f8dc0423bcf7a4923e3a12d307c875e47a0cfbf90b5c39161");
 
         assert_eq!(hash.as_byte_array().to_lower_hex_string(), expected);
+    }
+
+    #[test]
+    fn test_default_rpc_port() {
+        assert_eq!(Network::Bitcoin.default_rpc_port(), 8332);
+        assert_eq!(Network::Testnet.default_rpc_port(), 18332);
+        assert_eq!(Network::Testnet4.default_rpc_port(), 48332);
+        assert_eq!(Network::Signet.default_rpc_port(), 38332);
+        assert_eq!(Network::Regtest.default_rpc_port(), 18442);
     }
 }
