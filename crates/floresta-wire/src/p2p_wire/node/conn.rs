@@ -360,12 +360,6 @@ where
 
     // === BOOTSTRAPPING ===
 
-    // TODO(@luisschwab): get rid of this once
-    // https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
-    pub(crate) fn get_port(network: Network) -> u16 {
-        BitcoinSocketAddr::get_default_port(network)
-    }
-
     /// Fetch peers from DNS seeds, sending a `NodeNotification` with found ones. Returns
     /// immediately after spawning a background blocking task that performs the work.
     pub(crate) fn get_peers_from_dns(&self) -> Result<(), WireError> {
@@ -379,7 +373,7 @@ where
         });
 
         tokio::task::spawn_blocking(move || {
-            let default_port = Self::get_port(network);
+            let default_port = BitcoinSocketAddr::default_p2p_port(network);
             let dns_seeds = floresta_chain::get_chain_dns_seeds(network);
 
             let mut addresses = Vec::new();

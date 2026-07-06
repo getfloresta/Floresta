@@ -114,10 +114,10 @@ impl DnsResolver for SystemResolver {
 }
 
 impl BitcoinSocketAddr {
-    /// Returns that network's default port, if present
-    ///
-    /// Note: it takes an option because it makes the logic inside `parse_port_if_present` easier
-    pub(crate) fn get_default_port(network: Network) -> u16 {
+    // TODO(@luisschwab): get rid of this once
+    // https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
+    /// Returns the default P2P port for the given network.
+    pub fn default_p2p_port(network: Network) -> u16 {
         match network {
             Network::Signet => 38333,
             Network::Bitcoin => 8333,
@@ -145,7 +145,7 @@ impl BitcoinSocketAddr {
             .map(str::parse)
             .transpose()
             .map_err(|_| InvalidAddressError::InvalidPort)?
-            .or_else(|| network.map(Self::get_default_port))
+            .or_else(|| network.map(Self::default_p2p_port))
             .ok_or(InvalidAddressError::MissingPort)
     }
 
@@ -186,7 +186,7 @@ impl BitcoinSocketAddr {
             IpAddr::V6(ipv6) => AddrV2::Ipv6(ipv6),
         };
 
-        let port = Self::get_default_port(network);
+        let port = Self::default_p2p_port(network);
 
         Self { address, port }
     }
@@ -494,15 +494,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_default_port() {
-        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Bitcoin), 8333);
-        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Testnet), 18333);
+    fn test_default_p2p_port() {
+        assert_eq!(BitcoinSocketAddr::default_p2p_port(Network::Bitcoin), 8333);
+        assert_eq!(BitcoinSocketAddr::default_p2p_port(Network::Testnet), 18333);
         assert_eq!(
-            BitcoinSocketAddr::get_default_port(Network::Testnet4),
+            BitcoinSocketAddr::default_p2p_port(Network::Testnet4),
             48333
         );
-        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Signet), 38333);
-        assert_eq!(BitcoinSocketAddr::get_default_port(Network::Regtest), 18444);
+        assert_eq!(BitcoinSocketAddr::default_p2p_port(Network::Signet), 38333);
+        assert_eq!(BitcoinSocketAddr::default_p2p_port(Network::Regtest), 18444);
     }
 
     #[test]
