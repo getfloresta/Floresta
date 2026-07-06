@@ -25,6 +25,8 @@ use floresta_chain::FlatChainStore as ChainStore;
 use floresta_chain::FlatChainStoreConfig;
 #[cfg(feature = "zmq-server")]
 use floresta_chain::pruned_utreexo::BlockchainInterface;
+#[cfg(feature = "json-rpc")]
+use floresta_common::NetworkExt;
 use floresta_common::try_and_log;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
@@ -470,7 +472,7 @@ impl Florestad {
                 self.config
                     .json_rpc_address
                     .as_ref()
-                    .map(|x| Self::resolve_hostname(x, 8332))
+                    .map(|x| Self::resolve_hostname(x, self.config.network.default_rpc_port()))
                     .transpose()?,
                 datadir.join("debug.log"),
                 self.config.user_agent.clone(),

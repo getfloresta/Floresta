@@ -24,6 +24,7 @@ clap = { workspace = true, features = ["help"] }
 serde_json = { workspace = true }
 
 # Local dependencies
+floresta-common = { workspace = true }
 floresta-rpc = { workspace = true, features = ["clap"] }
 
 [lints]

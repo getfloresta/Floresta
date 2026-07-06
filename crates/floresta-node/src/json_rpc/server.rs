@@ -36,6 +36,7 @@ use corepc_types::v30::GetRawTransactionVerbose;
 use corepc_types::v31::RawTransactionInput;
 use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;
+use floresta_common::NetworkExt;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_watch_only::AddressCache;
@@ -656,18 +657,6 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         })
     }
 
-    // TODO(@luisschwab): get rid of this once
-    // https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
-    fn get_port(net: &Network) -> u16 {
-        match net {
-            Network::Bitcoin => 8332,
-            Network::Signet => 38332,
-            Network::Testnet => 18332,
-            Network::Testnet4 => 48332,
-            Network::Regtest => 18442,
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         chain: Blockchain,
@@ -682,7 +671,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         proxy: Option<SocketAddr>,
     ) {
         let address = address.unwrap_or_else(|| {
-            format!("127.0.0.1:{}", Self::get_port(&network))
+            format!("127.0.0.1:{}", network.default_rpc_port())
                 .parse()
                 .expect("hardcoded address is valid")
         });

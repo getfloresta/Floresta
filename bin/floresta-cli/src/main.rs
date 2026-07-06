@@ -9,6 +9,7 @@ use bitcoin::Network;
 use bitcoin::Txid;
 use clap::Parser;
 use clap::Subcommand;
+use floresta_common::NetworkExt;
 use floresta_rpc::jsonrpc_client::Client;
 use floresta_rpc::rpc::FlorestaRPC;
 use floresta_rpc::rpc_types::AddNodeCommand;
@@ -40,16 +41,7 @@ fn get_host(cmd: &Cli) -> String {
     }
 
     // Otherwise, use the default host based on the network type
-    //
-    // TODO(@luisschwab): use `NetworkExt` to append the correct port
-    // once https://github.com/rust-bitcoin/rust-bitcoin/pull/4639 makes it into a release.
-    match cmd.network {
-        Network::Bitcoin => "http://127.0.0.1:8332".into(),
-        Network::Signet => "http://127.0.0.1:38332".into(),
-        Network::Testnet => "http://127.0.0.1:18332".into(),
-        Network::Testnet4 => "http://127.0.0.1:48332".into(),
-        Network::Regtest => "http://127.0.0.1:18442".into(),
-    }
+    format!("http://127.0.0.1:{}", cmd.network.default_rpc_port())
 }
 
 // Function to perform the requested RPC call based on CLI arguments
