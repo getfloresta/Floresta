@@ -11,7 +11,7 @@ use floresta_common::impl_error_from;
 use miniscript::Descriptor;
 use miniscript::DescriptorPublicKey;
 use miniscript::Error as MiniscriptError;
-use miniscript::descriptor::ConversionError;
+use miniscript::descriptor::NonDefiniteKeyError;
 
 mod slip132;
 
@@ -30,12 +30,12 @@ pub enum DescriptorError {
     /// Error in miniscript
     MiniscriptError(MiniscriptError),
 
-    DeriveDescriptorError(ConversionError),
+    DeriveDescriptorError(NonDefiniteKeyError),
 }
 
 impl_error_from!(DescriptorError, Slip132Error, XpubParseError);
 impl_error_from!(DescriptorError, MiniscriptError, MiniscriptError);
-impl_error_from!(DescriptorError, ConversionError, DeriveDescriptorError);
+impl_error_from!(DescriptorError, NonDefiniteKeyError, DeriveDescriptorError);
 
 impl Display for DescriptorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {

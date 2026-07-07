@@ -560,8 +560,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 let address = Address::from_script(script, network).ok();
 
                 let base_descriptor = Self::get_script_type_descriptor(script, &address);
-                let descriptor: Option<String> = match checksum::desc_checksum(&base_descriptor) {
-                    Ok(checksum) => Some(format!("{base_descriptor}#{checksum}")),
+                let mut checksum_engine = checksum::Engine::new();
+                let descriptor: Option<String> = match checksum_engine.input(&base_descriptor) {
+                    Ok(()) => Some(format!("{base_descriptor}#{}", checksum_engine.checksum())),
                     Err(_) => None,
                 };
 
