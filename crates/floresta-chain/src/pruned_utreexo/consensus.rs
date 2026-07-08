@@ -231,7 +231,7 @@ impl Consensus {
         height: u32,
         block: &Block,
         txids: Vec<Txid>,
-        unspent_indexes: HashSet<u32>,
+        unspent_indexes: &HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
         let transactions = &block.txdata;
@@ -603,12 +603,22 @@ impl Consensus {
         &self,
         block: &Block,
         height: u32,
-        unspent_indexes: HashSet<u32>,
+        unspent_indexes: &HashSet<u32>,
         salt: &SipHashKeys,
-    ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
+    ) -> Result<(SwiftSyncAgg, Amount, Vec<BitcoinNodeHash>), BlockchainError> {
         let txids = self.check_block(block, height)?;
 
-        Self::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)
+        let utreexo_adds = udata::proof_util::get_block_adds_with_hints(
+            block,
+            &txids,
+            height,
+            block.block_hash(),
+            unspent_indexes,
+        );
+        let (agg, amount) =
+            Self::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)?;
+
+        Ok((agg, amount, utreexo_adds))
     }
 
     /// Returns the TxOut being spent by the given input.
@@ -765,7 +775,7 @@ impl Consensus {
         let adds = udata::proof_util::get_block_adds(block, height, block_hash);
 
         // Update the accumulator
-        let acc = acc.modify(&adds, &del_hashes, &proof)?.0;
+        let acc = acc.modify(&adds, &del_hashes, &proof)?;
         Ok(acc)
     }
 
@@ -1638,8 +1648,8 @@ mod tests {
             match i {
                 // We add the only TxOut in this block to the aggregator (spent later).
                 9 => {
-                    let unspent_indexes = HashSet::new();
-                    let (agg_blk_9, amount) = consensus
+                    let unspent_indexes = &HashSet::new();
+                    let (agg_blk_9, amount, _) = consensus
                         .process_block_swiftsync(block, 9, unspent_indexes, &salt)
                         .unwrap();
 
@@ -1652,8 +1662,8 @@ mod tests {
                 }
                 // This block spends the TxOut that was added to the aggregator in block 9.
                 170 => {
-                    let unspent_indexes = HashSet::from_iter(vec![0, 1, 2]);
-                    let (agg_blk_170, amount) = consensus
+                    let unspent_indexes = &HashSet::from_iter(vec![0, 1, 2]);
+                    let (agg_blk_170, amount, _) = consensus
                         .process_block_swiftsync(block, 170, unspent_indexes, &salt)
                         .unwrap();
 
@@ -1665,8 +1675,8 @@ mod tests {
                     supply += amount;
                 }
                 i => {
-                    let unspent_indexes = default_unspent_idx.clone();
-                    let (agg_i, amount) = consensus
+                    let unspent_indexes = &default_unspent_idx;
+                    let (agg_i, amount, _) = consensus
                         .process_block_swiftsync(block, i as u32, unspent_indexes, &salt)
                         .unwrap();
 
@@ -1699,11 +1709,11 @@ mod tests {
         let block_9 = &mainnet_blocks[9];
         let block_170 = &mainnet_blocks[170];
 
-        let (agg_9, _) = consensus
-            .process_block_swiftsync(block_9, 9, HashSet::new(), &salt)
+        let (agg_9, _, _) = consensus
+            .process_block_swiftsync(block_9, 9, &HashSet::new(), &salt)
             .unwrap();
-        let (agg_170, _) = consensus
-            .process_block_swiftsync(block_170, 170, HashSet::from_iter(vec![0, 1, 2]), &salt)
+        let (agg_170, _, _) = consensus
+            .process_block_swiftsync(block_170, 170, &HashSet::from_iter(vec![0, 1, 2]), &salt)
             .unwrap();
 
         assert!(!agg_9.is_zero(), "block aggregator shouldn't be zero");

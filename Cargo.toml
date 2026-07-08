@@ -96,3 +96,6 @@ opt-level = 3     # maximum optimization level
 strip = true      # strip symbol tables and metadata
 lto = true        # enable link-time optimizations
 codegen-units = 1 # compile a single codegen unit
+
+[patch.crates-io]
+rustreexo = { git = "https://github.com/Davidson-Souza/rustreexo.git", branch = "swift-sync" }

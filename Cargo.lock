@@ -1208,6 +1208,7 @@ dependencies = [
  "floresta-compact-filters",
  "floresta-domain",
  "floresta-mempool",
+ "hintsfile",
  "metrics",
  "rand 0.10.1",
  "rustls",
@@ -1497,6 +1498,12 @@ name = "hex_lit"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3011d1213f159867b13cfd6ac92d2cd5f1345762c63be3554e84092d85a50bbd"
+
+[[package]]
+name = "hintsfile"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "554a58f64ca02ec89bb21ae10f675092647b94c7f8c846efef11c28633b5092b"
 
 [[package]]
 name = "http"
@@ -2603,8 +2610,7 @@ dependencies = [
 [[package]]
 name = "rustreexo"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8353cd48bea30340eced2a11770e47bb6b83f0e7e679742301f3332e6ec1f6ab"
+source = "git+https://github.com/Davidson-Souza/rustreexo.git?branch=swift-sync#d86c31981f42344d739000eb1c2a3f6d09c9b30d"
 dependencies = [
  "bitcoin-io 0.3.0",
  "bitcoin_hashes 0.20.0",
