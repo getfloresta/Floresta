@@ -42,13 +42,13 @@ lookup much faster.
 
 ### Ok Response
 
-If the output is found, an object describing it is returned:
+If the output is found, an object describing it is returned. This is a variant of the
+[`gettxout`](gettxout.md) response, currently returning just:
 
 - `value` - (numeric) The output value in satoshis.
 - `script_pubkey` - (string) The output scriptPubKey, hex encoded.
 
-If the output can't be found (it doesn't exist or has already been spent), an empty object `{}`
-is returned.
+In the future `findtxout` will return the same response shape as `gettxout` directly.
 
 ### Error Enum `JsonRpcError`
 
@@ -62,6 +62,8 @@ to use this method.
 
 ## Notes
 
+- If the output can't be found (it doesn't exist or has already been spent), an empty object `{}`
+is returned.
 - You must enable block filters by setting the `blockfilters=1` option, otherwise this method
 returns `NoBlockFilters`.
 - Passing a good `height_hint` matters a lot for performance, since without it the scan starts
