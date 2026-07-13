@@ -423,6 +423,12 @@ class BaseRPC(ABC):
         """
         return self.perform_request("getaddrmaninfo")
 
+    def get_chain_tips(self) -> list:
+        """
+        Get information about all known tips in the block tree
+        """
+        return self.perform_request("getchaintips")
+
     def get_raw_transaction(self, txid: str, verbose: int | None = None):
         """
         Returns the raw transaction data for a given transaction ID.
