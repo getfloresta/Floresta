@@ -34,6 +34,7 @@ use rustreexo::stump::Stump;
 use tracing::info;
 
 use super::BlockchainInterface;
+use super::ChainTipInfo;
 use super::UpdatableChainstate;
 use super::chainparams::ChainParams;
 use super::consensus::Consensus;
@@ -407,7 +408,7 @@ impl BlockchainInterface for PartialChainState {
         unimplemented!("PartialChainState::get_block_header")
     }
 
-    fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {
+    fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error> {
         unimplemented!("PartialChainState::get_chain_tips")
     }
 

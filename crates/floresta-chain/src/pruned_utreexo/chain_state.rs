@@ -25,6 +25,7 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
+use core::cmp::Reverse;
 use core::cmp::min;
 use core::ops::Add;
 
@@ -52,6 +53,7 @@ use tracing::info;
 use tracing::warn;
 
 use super::BlockchainInterface;
+use super::ChainTipInfo;
 use super::UpdatableChainstate;
 use super::chain_state_builder::BlockchainBuilderError;
 use super::chain_state_builder::ChainStateBuilder;
@@ -1063,12 +1065,49 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         Consensus::update_acc(&acc, block, height, proof, del_hashes)
     }
 
-    fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {
-        let inner = read_lock!(self);
-        let mut tips = Vec::new();
+    fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error> {
+        let (best_height, best_hash, alt_tips) = {
+            let inner = read_lock!(self);
+            (
+                inner.best_block.depth,
+                inner.best_block.best_block,
+                inner.best_block.alternative_tips.clone(),
+            )
+        };
 
-        tips.push(inner.best_block.best_block);
-        tips.extend(inner.best_block.alternative_tips.iter());
+        let mut tips = Vec::with_capacity(1 + alt_tips.len());
+
+        // The active tip is always the first element, with branch_length 0.
+        tips.push(ChainTipInfo {
+            height: best_height,
+            hash: best_hash,
+            branch_length: 0,
+        });
+
+        for tip_hash in &alt_tips {
+            let tip_height = self
+                .get_disk_block_header(tip_hash)?
+                .height()
+                .ok_or(BlockchainError::BlockNotPresent)?;
+
+            let fork_point = self.find_fork_point(&self.get_block_header(tip_hash)?)?;
+            let fork_height = self
+                .get_disk_block_header(&fork_point.block_hash())?
+                .height()
+                .ok_or(BlockchainError::BlockNotPresent)?;
+
+            let tip = ChainTipInfo {
+                height: tip_height,
+                hash: *tip_hash,
+                branch_length: tip_height - fork_height,
+            };
+
+            // Insert sorted by height descending among the alternative tips (indices 1..).
+            let pos = tips[1..]
+                .binary_search_by_key(&Reverse(tip_height), |t| Reverse(t.height))
+                .unwrap_or_else(|i| i);
+            tips.insert(1 + pos, tip);
+        }
 
         Ok(tips)
     }
@@ -1904,6 +1943,8 @@ mod test {
         // Only one tip so far (the main chain)
         let tips = chain.get_chain_tips().unwrap();
         assert_eq!(tips.len(), 1);
+        assert_eq!(tips[0].height, 10);
+        assert_eq!(tips[0].branch_length, 0);
 
         // Accept only 4 fork headers (less work than main chain: 4 < 5 blocks after fork point)
         for block in &long_chain[..4] {
@@ -1917,10 +1958,14 @@ mod test {
         // First tip is always the best block (main chain tip at height 10)
         let (best_height, best_hash) = chain.get_best_block().unwrap();
         assert_eq!(best_height, 10);
-        assert_eq!(tips[0], best_hash);
+        assert_eq!(tips[0].hash, best_hash);
+        assert_eq!(tips[0].height, 10);
+        assert_eq!(tips[0].branch_length, 0);
 
-        // Second tip is the fork tip (4th fork block)
-        assert_eq!(tips[1], long_chain[3].block_hash());
+        // Second tip is the fork tip (4th fork block, height 9, branching at height 5)
+        assert_eq!(tips[1].hash, long_chain[3].block_hash());
+        assert_eq!(tips[1].height, 9);
+        assert_eq!(tips[1].branch_length, 4);
     }
 
     #[test]
