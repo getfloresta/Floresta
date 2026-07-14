@@ -34,8 +34,11 @@ pub struct PeerInfo {
     pub id: u32,
     /// The network address for this peer.
     pub address: String,
-    /// A string with the services this peer advertises. E.g. NODE_NETWORK, UTREEXO, WITNESS...
+    /// Hex-encoded bitfield with the services this peer advertises.
     pub services: String,
+    /// Human-readable names for the recognized services this peer advertises.
+    #[serde(rename = "servicesnames")]
+    pub services_names: Vec<String>,
     /// User agent is a string that represents the client being used by our peer. E.g.
     /// /Satoshi-26.0/ for bitcoin core version 26
     pub user_agent: String,
