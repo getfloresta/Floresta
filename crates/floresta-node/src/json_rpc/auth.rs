@@ -84,7 +84,7 @@ pub(crate) fn generate_cookie(path: &Path) -> io::Result<(String, String)> {
 }
 
 /// `Authorization: Basic` header parsing.
-pub(crate) mod basic {
+pub mod basic {
     use core::error::Error;
     use core::fmt;
 
@@ -96,7 +96,7 @@ pub(crate) mod basic {
 
     #[derive(Debug, PartialEq, Eq)]
     /// Errors produced by [`parse_header`].
-    pub(crate) enum HeaderError {
+    pub enum HeaderError {
         /// The header value did not start with the literal `"Basic "` prefix.
         MissingBasicPrefix,
 
@@ -139,7 +139,7 @@ pub(crate) mod basic {
     /// base64 payload is whitespace-trimmed before decoding, and the split
     /// between user and password is on the **first** `:`. Passwords may contain
     /// `:`; usernames may not.
-    pub(crate) fn parse_header(value: &str) -> Result<(String, String), HeaderError> {
+    pub fn parse_header(value: &str) -> Result<(String, String), HeaderError> {
         if value.len() > MAX_LEN {
             return Err(HeaderError::PayloadTooLarge);
         }

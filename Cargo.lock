@@ -1114,6 +1114,7 @@ dependencies = [
  "arbitrary",
  "bitcoin",
  "floresta-chain",
+ "floresta-node",
  "floresta-wire",
  "libfuzzer-sys",
  "tempfile",
