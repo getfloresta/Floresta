@@ -186,7 +186,9 @@ def assert_bitcoind_service_fields(peer_info):
     assert set(peer_info["servicesnames"]) == BITCOIND_TEST_FRAMEWORK_SERVICESNAMES
 
 
-def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
+def compare_fields(
+    candidate, reference, ignore_fields=None, float_tol=1e-8, ordered_lists=True
+):
     """
     Recursively compare two data structures (dicts, lists, or scalars),
     ignoring specified fields.
@@ -195,6 +197,11 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
         The comparison is asymmetric. `reference` defines the required fields.
         For Floresta RPC tests, use Floresta as `candidate` and the reference
         node as `reference`.
+
+    Args:
+        ordered_lists: If True (default), lists are compared element-by-element
+        in order. If False, scalar items (non-dict, non-list, non-float) are
+        only checked for presence in the candidate list, regardless of order.
     """
     if ignore_fields is None:
         ignore_fields = set()
@@ -215,17 +222,45 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
             if key in ignore_fields:
                 continue
             assert key in candidate, f"Missing key in candidate: {key}"
-            compare_fields(candidate[key], ref_value, ignore_fields=ignore_fields)
-
+            compare_fields(
+                candidate[key],
+                ref_value,
+                ignore_fields=ignore_fields,
+                float_tol=float_tol,
+                ordered_lists=ordered_lists,
+            )
         return
 
     # list
     if isinstance(candidate, list) and isinstance(reference, list):
+        if not ordered_lists:
+            for ref_item in reference:
+                if isinstance(ref_item, (dict, list, float)):
+                    # complex types: fall back to ordered comparison by position
+                    compare_fields(
+                        candidate[reference.index(ref_item)],
+                        ref_item,
+                        ignore_fields=ignore_fields,
+                        float_tol=float_tol,
+                        ordered_lists=ordered_lists,
+                    )
+                else:
+                    assert (
+                        ref_item in candidate
+                    ), f"Item {ref_item!r} not found in candidate list {candidate!r}"
+            return
+
         assert len(candidate) == len(
             reference
-        ), f"List length mismatch: expected {len(candidate)}, got {len(reference)}"
+        ), f"List length mismatch: expected {len(reference)}, got {len(candidate)}"
         for cand_item, ref_item in zip(candidate, reference):
-            compare_fields(cand_item, ref_item, ignore_fields=ignore_fields)
+            compare_fields(
+                cand_item,
+                ref_item,
+                ignore_fields=ignore_fields,
+                float_tol=float_tol,
+                ordered_lists=ordered_lists,
+            )
         return
 
     # scalar
