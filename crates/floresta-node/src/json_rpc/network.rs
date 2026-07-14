@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use corepc_types::v26::AddrManInfoNetwork;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v30::GetNetworkInfoNetwork;
+use corepc_types::v31::AddrManInfoNetwork;
+use corepc_types::v31::GetAddrManInfo;
+use corepc_types::v31::GetNetworkInfo;
+use corepc_types::v31::GetNetworkInfoNetwork;
 use floresta_common::PROTOCOL_VERSION;
 use floresta_common::advertised_services;
 use floresta_common::service_flags_strings;

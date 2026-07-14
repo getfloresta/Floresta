@@ -6,9 +6,9 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-pub use corepc_types::v30::GetNetworkInfo;
+use corepc_types::v31::GetBlockHeaderVerbose;
 use corepc_types::v31::GetBlockVerboseOne;
+pub use corepc_types::v31::GetNetworkInfo;
 use corepc_types::v31::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;

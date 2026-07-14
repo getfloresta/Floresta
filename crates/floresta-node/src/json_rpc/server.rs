@@ -32,7 +32,7 @@ use bitcoin::hex::DisplayHex;
 use bitcoin::taproot::Signature as TaprootSignature;
 use corepc_types::ScriptPubKey;
 use corepc_types::ScriptSig;
-use corepc_types::v30::GetRawTransactionVerbose;
+use corepc_types::v31::GetRawTransactionVerbose;
 use corepc_types::v31::RawTransactionInput;
 use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;

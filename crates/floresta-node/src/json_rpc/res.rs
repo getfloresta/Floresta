@@ -23,9 +23,9 @@
 
 use core::fmt::Debug;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetRawTransactionVerbose;
+use corepc_types::v31::GetBlockHeaderVerbose;
 use corepc_types::v31::GetBlockVerboseOne;
+use corepc_types::v31::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 
