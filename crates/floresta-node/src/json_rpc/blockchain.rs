@@ -21,15 +21,16 @@ use bitcoin::hex;
 use bitcoin::hex::DisplayHex;
 use corepc_types::ScriptPubKey;
 use corepc_types::v29::GetTxOut;
-use corepc_types::v30::DeploymentInfo;
 use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockchainInfo;
-use corepc_types::v30::GetDeploymentInfo;
 use corepc_types::v31::CoinbaseTransaction;
+use corepc_types::v31::DeploymentInfo;
 use corepc_types::v31::GetBlockVerboseOne;
+use corepc_types::v31::GetDeploymentInfo;
 use floresta_chain::buried_deployments_for;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
+use floresta_chain::get_script_flags;
 use floresta_wire::node_interface::ChainMethods;
 use miniscript::descriptor::checksum;
 use serde_json::Value;
@@ -411,7 +412,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         for &(name, activation_height) in buried_deployments_for(self.network) {
             deployments.insert(
-                name.to_string(),
+                name.to_deployment_name().into(),
                 DeploymentInfo {
                     deployment_type: "buried".to_string(),
                     height: Some(activation_height),
@@ -421,10 +422,15 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             );
         }
 
+        let script_flags = get_script_flags(self.network, target_hash, height)
+            .into_iter()
+            .collect();
+
         Ok(GetDeploymentInfo {
             hash: target_hash.to_string(),
             height,
             deployments,
+            script_flags,
         })
     }
 
