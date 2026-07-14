@@ -10,6 +10,7 @@ use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message_blockdata::Inventory;
 use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
+use floresta_common::service_flags_strings;
 use floresta_common::try_and_log;
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
@@ -865,7 +866,8 @@ where
         Some(PeerInfo {
             id: *peer_id,
             address: peer.address.as_bitcoin_socket_addr().clone(),
-            services: peer.services,
+            services: format!("{:016x}", peer.services.to_u64()),
+            services_names: service_flags_strings(&peer.services),
             user_agent: peer.user_agent.clone(),
             initial_height: peer.height,
             state: peer.state,

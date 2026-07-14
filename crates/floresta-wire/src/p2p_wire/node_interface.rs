@@ -21,7 +21,6 @@ use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::Txid;
-use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::message_filter::CFHeaders;
 use floresta_domain::mempool::MempoolError;
 use serde::Serialize;
@@ -43,8 +42,9 @@ pub struct PeerInfo {
     pub id: u32,
     #[serde(serialize_with = "serialize_addr")]
     pub address: BitcoinSocketAddr,
-    #[serde(serialize_with = "serialize_service_flags")]
-    pub services: ServiceFlags,
+    pub services: String,
+    #[serde(rename = "servicesnames")]
+    pub services_names: Vec<String>,
     pub user_agent: String,
     pub initial_height: u32,
     pub state: PeerStatus,
@@ -177,11 +177,4 @@ where
     S: serde::Serializer,
 {
     serializer.serialize_str(&local_addr.to_string())
-}
-
-fn serialize_service_flags<S>(flags: &ServiceFlags, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&flags.to_string())
 }
