@@ -7,8 +7,8 @@ use core::fmt::Formatter;
 use std::path::PathBuf;
 
 use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
 pub use corepc_types::v30::GetNetworkInfo;
+use corepc_types::v31::GetBlockVerboseOne;
 use corepc_types::v31::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
