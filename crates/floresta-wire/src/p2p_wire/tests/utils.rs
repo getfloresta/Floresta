@@ -53,6 +53,9 @@ use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
 use crate::p2p_wire::transport::TransportProtocol;
 
+/// Timeout for node helpers -- long enough to sync signet fixture blocks under CI load.
+const NODE_SYNC_TIMEOUT_SECS: u64 = 100;
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UtreexoRoots {
     roots: Option<Vec<String>>,
@@ -198,6 +201,8 @@ pub fn get_node_config(
         pow_fraud_proofs,
         datadir: datadir.as_ref().into(),
         user_agent: "node_test".to_string(),
+        // Fixture blocks are historical; disable the stale-tip guard.
+        max_tip_age_secs: u32::MAX,
         ..Default::default()
     }
 }
@@ -292,19 +297,23 @@ pub struct PeerData {
     accs: HashMap<BlockHash, Vec<u8>>,
 }
 
-pub async fn setup_node(
+type SyncTestNode = UtreexoNode<Arc<ChainState<FlatChainStore>>, SyncNode>;
+
+/// Builds a chain and a fully-wired [`UtreexoNode`] ready to run, without starting it.
+///
+/// Both [`setup_node`] and [`setup_node_with_tip_age`] delegate here; they differ only
+/// in how they handle the run timeout.
+fn build_node(
     peers: Vec<PeerData>,
     pow_fraud_proofs: bool,
     network: Network,
     datadir: impl AsRef<Path>,
     num_blocks: usize,
-) -> Arc<ChainState<FlatChainStore>> {
-    let config = FlatChainStoreConfig::new(&datadir);
-
-    let chainstore = FlatChainStore::new(config).unwrap();
+    max_tip_age_secs: u32,
+) -> (Arc<ChainState<FlatChainStore>>, SyncTestNode) {
+    let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(&datadir)).unwrap();
     let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
-    let chain = ChainState::open(chainstore, network, AssumeValidArg::Disabled).unwrap();
-    let chain = Arc::new(chain);
+    let chain = Arc::new(ChainState::open(chainstore, network, AssumeValidArg::Disabled).unwrap());
 
     let mut headers = signet_headers();
     headers.remove(0);
@@ -313,14 +322,15 @@ pub async fn setup_node(
         chain.accept_header(header).unwrap();
     }
 
-    let config = get_node_config(&datadir, network, pow_fraud_proofs);
+    let mut config = get_node_config(&datadir, network, pow_fraud_proofs);
+    config.max_tip_age_secs = max_tip_age_secs;
     let kill_signal = Arc::new(RwLock::new(false));
     let mut node = UtreexoNode::<Arc<ChainState<FlatChainStore>>, SyncNode>::new(
         config,
         chain.clone(),
         mempool,
         None,
-        kill_signal.clone(),
+        kill_signal,
         AddressMan::new(None, &[]),
     )
     .unwrap();
@@ -334,18 +344,16 @@ pub async fn setup_node(
             peer.blocks,
             peer.accs,
             node.node_tx.clone(),
-            sender.clone(),
+            sender,
             receiver,
             peer_id,
         );
 
-        // Add a fixed peer to avoid opening real P2P connections
         if i == 0 {
             node.fixed_peers = vec![peer.address.clone()];
         }
 
         node.peers.insert(peer_id, peer);
-        // Populate the peer services too
         for service in [
             service_flags::UTREEXO.into(),
             ServiceFlags::COMPACT_FILTERS,
@@ -357,17 +365,65 @@ pub async fn setup_node(
                 .push(peer_id);
         }
 
-        // This allows the node to properly assign a message time for the peer
         node.inflight.insert(
             InflightRequests::Connect(peer_id),
             (peer_id, Instant::now()),
         );
     }
 
-    timeout(Duration::from_secs(100), node.run(|_| {}))
-        .await
-        .unwrap();
+    (chain, node)
+}
 
+pub async fn setup_node(
+    peers: Vec<PeerData>,
+    pow_fraud_proofs: bool,
+    network: Network,
+    datadir: impl AsRef<Path>,
+    num_blocks: usize,
+) -> Arc<ChainState<FlatChainStore>> {
+    let (chain, node) = build_node(
+        peers,
+        pow_fraud_proofs,
+        network,
+        datadir,
+        num_blocks,
+        u32::MAX,
+    );
+    timeout(
+        Duration::from_secs(NODE_SYNC_TIMEOUT_SECS),
+        node.run(|_| {}),
+    )
+    .await
+    .unwrap();
+    chain
+}
+
+/// Like [`setup_node`] but with a configurable `max_tip_age_secs`.
+///
+/// Does not panic on timeout. When the stale-tip guard is active the node
+/// completes validation but never exits IBD, so the run lasts until the
+/// timeout ceiling.
+pub async fn setup_node_with_tip_age(
+    peers: Vec<PeerData>,
+    pow_fraud_proofs: bool,
+    network: Network,
+    datadir: impl AsRef<Path>,
+    num_blocks: usize,
+    max_tip_age_secs: u32,
+) -> Arc<ChainState<FlatChainStore>> {
+    let (chain, node) = build_node(
+        peers,
+        pow_fraud_proofs,
+        network,
+        datadir,
+        num_blocks,
+        max_tip_age_secs,
+    );
+    let _ = timeout(
+        Duration::from_secs(NODE_SYNC_TIMEOUT_SECS),
+        node.run(|_| {}),
+    )
+    .await;
     chain
 }
 
