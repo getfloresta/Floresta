@@ -56,6 +56,7 @@ use super::UpdatableChainstate;
 use super::chain_state_builder::BlockchainBuilderError;
 use super::chain_state_builder::ChainStateBuilder;
 use super::chainparams::ChainParams;
+use super::chainstore::ChainStoreWarning;
 use super::chainstore::DiskBlockHeader;
 use super::consensus::Consensus;
 use super::error::BlockValidationErrors;
@@ -1236,6 +1237,10 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
     fn ibd_state(&self) -> IBDState {
         let inner = read_lock!(self);
         inner.ibd
+    }
+
+    fn get_warnings(&self) -> Vec<ChainStoreWarning> {
+        read_lock!(self).chainstore.get_warnings()
     }
 }
 

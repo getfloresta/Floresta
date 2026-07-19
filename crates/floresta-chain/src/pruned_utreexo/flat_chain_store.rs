@@ -108,6 +108,7 @@ use twox_hash::XxHash3_64;
 
 use crate::BestChain;
 use crate::ChainStore;
+use crate::ChainStoreWarning;
 use crate::DatabaseError;
 use crate::DiskBlockHeader;
 
@@ -628,6 +629,8 @@ pub struct FlatChainStore {
 
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
+    /// Warnings accumulated when writes fail; surfaced via [`ChainStore::get_warnings`].
+    pending_warnings: Vec<ChainStoreWarning>,
 }
 
 impl FlatChainStore {
@@ -717,6 +720,7 @@ impl FlatChainStore {
             fork_headers,
             datadir: datadir.to_path_buf(),
             cache: LruCache::new(cache_size).into(),
+            pending_warnings: Vec::new(),
         })
     }
 
@@ -789,6 +793,7 @@ impl FlatChainStore {
             fork_headers,
             datadir: datadir.clone(),
             cache: LruCache::new(cache_size).into(),
+            pending_warnings: Vec::new(),
         })
     }
 
@@ -1125,6 +1130,12 @@ impl FlatChainStore {
     ) -> Result<MutexGuard<'_, CacheType>, PoisonError<MutexGuard<'_, CacheType>>> {
         self.cache.lock()
     }
+
+    fn try_push_warning(&mut self, warning: ChainStoreWarning) {
+        if !self.pending_warnings.contains(&warning) {
+            self.pending_warnings.push(warning);
+        }
+    }
 }
 
 impl ChainStore for FlatChainStore {
@@ -1272,7 +1283,7 @@ impl ChainStore for FlatChainStore {
         let cache = self.get_cache_mut();
         cache?.put(header.block_hash(), *header);
 
-        match header {
+        let result = match header {
             DiskBlockHeader::FullyValid(_, _)
             | DiskBlockHeader::HeadersOnly(_, _)
             | DiskBlockHeader::AssumedValid(_, _) => unsafe {
@@ -1281,7 +1292,13 @@ impl ChainStore for FlatChainStore {
             DiskBlockHeader::InFork(_, _)
             | DiskBlockHeader::Orphan(_)
             | DiskBlockHeader::InvalidChain(_) => unsafe { self.save_fork_block(*header) },
+        };
+
+        if matches!(result, Err(FlatChainstoreError::FullIndex)) {
+            self.try_push_warning(ChainStoreWarning::HeaderStorageFull);
         }
+
+        result
     }
 
     fn get_block_hash(&self, height: u32) -> Result<Option<BlockHash>, Self::Error> {
@@ -1299,7 +1316,17 @@ impl ChainStore for FlatChainStore {
     fn update_block_index(&mut self, height: u32, hash: BlockHash) -> Result<(), Self::Error> {
         let index = Index::new(height)?;
 
-        unsafe { self.add_index_entry(hash, index) }
+        let result = unsafe { self.add_index_entry(hash, index) };
+
+        if matches!(result, Err(FlatChainstoreError::FullIndex)) {
+            self.try_push_warning(ChainStoreWarning::BlockIndexFull);
+        }
+
+        result
+    }
+
+    fn get_warnings(&self) -> Vec<ChainStoreWarning> {
+        self.pending_warnings.clone()
     }
 }
 
@@ -1427,6 +1454,7 @@ mod tests {
     use crate::BestChain;
     use crate::ChainState;
     use crate::ChainStore;
+    use crate::ChainStoreWarning;
     use crate::DbCheckSum;
     use crate::DiskBlockHeader;
     use crate::migrate_v0_to_v1::init_mmap;
@@ -1929,5 +1957,104 @@ mod tests {
             Err(e) => panic!("Unexpected err: {e:?}"),
             Ok(_) => panic!("Should not have been able to save roots for a block we don't have"),
         }
+    }
+
+    #[test]
+    fn test_warnings_block_index_full() {
+        // capacity=2 allows exactly one insert before FullIndex fires
+        // (occupancy 0→1 < 2 succeeds; 1+1=2 >= 2 fails)
+        const FILLS_AFTER_ONE_INSERT: usize = 2;
+        const UNCONSTRAINED_HEADERS: usize = 32_768;
+        const UNCONSTRAINED_FORK: usize = 16_384;
+
+        let mut store = make_sized_store(
+            FILLS_AFTER_ONE_INSERT,
+            UNCONSTRAINED_HEADERS,
+            UNCONSTRAINED_FORK,
+        );
+        let genesis = genesis_block(Network::Regtest);
+
+        // Empty buckets hold Index(0); hash_map_find_pos reads get_disk_header(Index(0)) before
+        // is_empty(). Slot 0 must be pre-populated (as production code always does via save_header).
+        store
+            .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
+            .expect("pre-populate headers slot 0");
+
+        // Hash distinct from the genesis header at slot 0 → genuinely new entry, occupancy 0→1.
+        let hash_a = BlockHash::from_byte_array([0x01; 32]);
+        store
+            .update_block_index(1, hash_a)
+            .expect("first insert should succeed");
+
+        // Second insert: occupancy 1 + 1 = 2 >= index_capacity=2, FullIndex fires.
+        let r1 = store.update_block_index(2, BlockHash::from_byte_array([0x02; 32]));
+        assert!(
+            matches!(r1, Err(FlatChainstoreError::FullIndex)),
+            "second insert must fail with FullIndex"
+        );
+
+        let warns = store.get_warnings();
+        assert_eq!(warns.len(), 1);
+        assert_eq!(warns[0], ChainStoreWarning::BlockIndexFull);
+
+        // Third insert: same FullIndex; dedup must keep warnings at exactly one entry.
+        let r2 = store.update_block_index(3, BlockHash::from_byte_array([0x03; 32]));
+        assert!(matches!(r2, Err(FlatChainstoreError::FullIndex)));
+
+        let warns2 = store.get_warnings();
+        assert_eq!(
+            warns2.len(),
+            1,
+            "dedup: same warning must not be appended twice"
+        );
+
+        // Persistence: get_warnings must return the same set on a subsequent call.
+        let warns3 = store.get_warnings();
+        assert_eq!(
+            warns3.len(),
+            1,
+            "persistence: warning must survive get_warnings calls"
+        );
+    }
+
+    #[test]
+    fn test_warnings_header_storage_full() {
+        // only slot 0 (height 0) fits; height 1 is already out of range
+        const ONE_HEADER_SLOT: usize = 1;
+        const UNCONSTRAINED_INDEX: usize = 32_768;
+        const UNCONSTRAINED_FORK: usize = 16_384;
+
+        let mut store = make_sized_store(UNCONSTRAINED_INDEX, ONE_HEADER_SLOT, UNCONSTRAINED_FORK);
+        let header = genesis_block(Network::Regtest).header;
+
+        // Height 1 exceeds the single-slot file; must trigger FullIndex.
+        let r1 = store.save_header(&DiskBlockHeader::FullyValid(header, 1));
+        assert!(
+            matches!(r1, Err(FlatChainstoreError::FullIndex)),
+            "save_header at height 1 must fail with FullIndex when headers_file_size=1"
+        );
+
+        let warns = store.get_warnings();
+        assert_eq!(warns.len(), 1);
+        assert_eq!(warns[0], ChainStoreWarning::HeaderStorageFull);
+
+        // Second failed write: dedup must not grow the warning list.
+        let r2 = store.save_header(&DiskBlockHeader::FullyValid(header, 1));
+        assert!(matches!(r2, Err(FlatChainstoreError::FullIndex)));
+
+        let warns2 = store.get_warnings();
+        assert_eq!(
+            warns2.len(),
+            1,
+            "dedup: same warning must not be appended twice"
+        );
+
+        // Persistence: warning must survive a subsequent get_warnings call.
+        let warns3 = store.get_warnings();
+        assert_eq!(
+            warns3.len(),
+            1,
+            "persistence: warning must survive get_warnings calls"
+        );
     }
 }
