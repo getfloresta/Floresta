@@ -467,6 +467,10 @@ impl BlockchainInterface for PartialChainState {
     fn get_work(&self, _tip: BlockHash) -> Result<bitcoin::Work, Self::Error> {
         unimplemented!()
     }
+
+    fn get_warnings(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 // mainly for tests

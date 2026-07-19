@@ -1237,6 +1237,10 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         let inner = read_lock!(self);
         inner.ibd
     }
+
+    fn get_warnings(&self) -> Vec<String> {
+        read_lock!(self).chainstore.get_warnings()
+    }
 }
 
 impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedState> {

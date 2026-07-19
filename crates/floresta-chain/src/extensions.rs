@@ -462,6 +462,10 @@ mod tests {
         fn ibd_state(&self) -> IBDState {
             unimplemented!()
         }
+
+        fn get_warnings(&self) -> Vec<String> {
+            vec![]
+        }
     }
 
     fn get_genesis_header() -> Header {

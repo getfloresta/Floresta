@@ -286,6 +286,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let median_time = i64::from(latest_header.calculate_median_time_past(&self.chain)?);
         let size_on_disk = self.chain.size_on_disk().map_err(|_| JsonRpcError::Chain)?;
         let prune_height = Some(blocks + 1);
+        let warnings = self.chain.get_warnings();
 
         let chain = match self.network {
             Network::Bitcoin => "main",
@@ -315,7 +316,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             automatic_pruning: Some(true),
             prune_target_size: Some(0),
             signet_challenge: None,
-            warnings: vec![],
+            warnings,
         })
     }
 
