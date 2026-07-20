@@ -308,7 +308,20 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "max": MAX_COUNT,
                 })
             }
-            "blockchain.estimatefee" => json_rpc_res!(request, 0.0001),
+            "blockchain.estimatefee" => {
+                use std::convert::TryFrom;
+                let target = request
+                    .params
+                    .first()
+                    .and_then(|v| v.as_u64())
+                    .and_then(|t| usize::try_from(t).ok())
+                    .unwrap_or(1);
+                let fee_sat = self
+                    .chain
+                    .estimate_fee(target)
+                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                json_rpc_res!(request, (fee_sat / 100_000_000.0))
+            }
             "blockchain.headers.subscribe" => {
                 let (height, hash) = self
                     .chain
@@ -1314,7 +1327,7 @@ mod test {
 
         let batch_response = send_request(batch_req, port).await.unwrap();
 
-        assert_eq!(batch_response[0]["result"], 0.0001);
+        assert_eq!(batch_response[0]["result"], 0.00000001);
         assert_eq!(batch_response[1]["result"], 0.00001);
     }
 
