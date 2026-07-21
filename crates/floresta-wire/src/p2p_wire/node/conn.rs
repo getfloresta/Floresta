@@ -79,12 +79,7 @@ where
         }
 
         // Get the peer's `ServiceFlags`.
-        let required_services = match conn_kind {
-            ConnectionKind::Regular(services) => services,
-            ConnectionKind::Feeler | ConnectionKind::Extra | ConnectionKind::Manual => {
-                ServiceFlags::NONE
-            }
-        };
+        let required_services = conn_kind.get_required_services();
 
         // Pick the first fixed peer that we are not already connected to, or
         // fall back to fetching a new address from the address manager when no
@@ -162,9 +157,10 @@ where
 
     /// Creates a new outgoing connection with `address`.
     ///
-    /// `kind` may or may not be a [`ConnectionKind::Feeler`], a special connection type
-    /// that is used to learn about good peers, but are not kept after handshake
-    /// (others are [`ConnectionKind::Regular`], [`ConnectionKind::Manual`] and [`ConnectionKind::Extra`]).
+    /// `kind` may be a short-lived connection type, such as [`ConnectionKind::Feeler`] or
+    /// [`ConnectionKind::AddrFetch`], or a long-lived connection type, such as
+    /// [`ConnectionKind::OutboundFullRelay`], [`ConnectionKind::BlockRelayOnly`],
+    /// [`ConnectionKind::Manual`] or [`ConnectionKind::Extra`].
     ///
     /// We will always try to open a V2 connection first. If the `allow_v1_fallback` is set,
     /// we may retry the connection with the old V1 protocol if the V2 connection fails.
@@ -246,7 +242,9 @@ where
 
         match kind {
             ConnectionKind::Feeler => self.last_feeler = Instant::now(),
-            ConnectionKind::Regular(_) => self.last_connection = Instant::now(),
+            ConnectionKind::OutboundFullRelay(_) | ConnectionKind::BlockRelayOnly(_) => {
+                self.last_connection = Instant::now()
+            }
             // Note: Creating a manual peer intentionally doesn't affect the `last_connection`
             // timer, since they don't necessarily follow our connection logic, and we may still
             // need more utreexo/CBS peers
@@ -465,7 +463,7 @@ where
 
         for address in anchors {
             self.open_connection(
-                ConnectionKind::Regular(service_flags::UTREEXO.into()),
+                ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
                 address,
                 // Using V1 transport fallback as utreexo nodes have limited support
                 true,
@@ -487,7 +485,7 @@ where
             return Ok(());
         }
 
-        let connection_kind = ConnectionKind::Regular(required_service);
+        let connection_kind = ConnectionKind::OutboundFullRelay(required_service);
 
         // If the user passes in `--connect` cli arguments, we only connect with
         // those peers. Try to (re)connect as many as we are missing.
@@ -535,7 +533,7 @@ where
 
         // Use latency samples only from regular, non-protected-service peers.
         let is_eligible_peer = |peer: &LocalPeerView| {
-            peer.is_regular_peer() && !peer.has_any_service(protected_services)
+            peer.kind.is_regular() && !peer.has_any_service(protected_services)
         };
 
         let mut samples: Vec<_> = self

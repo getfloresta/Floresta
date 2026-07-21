@@ -48,7 +48,7 @@ pub struct PeerInfo {
     ///
     /// We can connect with peers for different reasons. E.g. we can connect to a peer to
     /// see if it has a block we're missing, or just to check if that address is still alive.
-    /// Possible values are: Feeler, Regular and Extra
+    /// Possible values are: outbound-full-relay, block-relay-only, manual, feeler, and addr-fetch.
     pub kind: String,
     /// The state of this peer
     ///
