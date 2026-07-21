@@ -720,10 +720,7 @@ impl Florestad {
 
     /// Setup the wallet by initializing the database and adding descriptors, xpubs, and addresses.
     fn setup_wallet(&self) -> Result<AddressCache<KvDatabase>, FlorestadError> {
-        let database = KvDatabase::new(&self.config.datadir)
-            .map_err(FlorestadError::CouldNotOpenKvDatabase)?;
-
-        let wallet = AddressCache::new(database);
+        let wallet = AddressCache::<KvDatabase>::new_default(&self.config.datadir)?;
 
         wallet
             .setup()
