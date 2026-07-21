@@ -395,7 +395,13 @@ pub enum Methods {
         node_id: Option<usize>,
     },
 
-    #[command(name = "findtxout")]
+    #[doc = include_str!("../../../doc/rpc/findtxout.md")]
+    #[command(
+        name = "findtxout",
+        about = "Finds a specific unspent transaction output in the chain",
+        long_about = Some(include_str!("../../../doc/rpc/findtxout.md")),
+        disable_help_subcommand = true
+    )]
     FindTxOut {
         txid: Txid,
         vout: u32,
