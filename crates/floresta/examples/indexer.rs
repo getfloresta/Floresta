@@ -14,13 +14,13 @@ use std::sync::atomic::Ordering;
 use bitcoin::Block;
 use bitcoin::Network;
 use bitcoin::OutPoint;
-use floresta_chain::AssumeValidArg;
-use floresta_chain::BlockConsumer;
-use floresta_chain::BlockchainInterface;
-use floresta_chain::ChainState;
-use floresta_chain::FlatChainStore;
-use floresta_chain::FlatChainStoreConfig;
-use floresta_chain::UtxoData;
+use floresta::chain::AssumeValidArg;
+use floresta::chain::BlockConsumer;
+use floresta::chain::BlockchainInterface;
+use floresta::chain::ChainState;
+use floresta::chain::FlatChainStore;
+use floresta::chain::FlatChainStoreConfig;
+use floresta::chain::UtxoData;
 
 const DATA_DIR: &str = "./tmp-db";
 
