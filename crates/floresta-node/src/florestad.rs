@@ -477,6 +477,7 @@ impl Florestad {
                 datadir.join("debug.log"),
                 self.config.user_agent.clone(),
                 proxy,
+                !self.config.allow_v1_fallback,
             ));
 
             if self.json_rpc.set(server).is_err() {
