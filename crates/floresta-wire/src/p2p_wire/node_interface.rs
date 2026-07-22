@@ -110,6 +110,15 @@ pub trait NetworkMethods {
         v2transport: bool,
     ) -> impl Future<Output = Result<bool, Self::Error>>;
 
+    /// Adds a peer to the address manager, without any connection attempt.
+    ///
+    /// This function will return a boolean indicating whether the addition was successful.
+    fn add_peer_address(
+        &self,
+        address: BitcoinSocketAddr,
+        tried: bool,
+    ) -> impl Future<Output = Result<bool, Self::Error>>;
+
     /// Removes a peer from the node's peer list.
     /// This function will return a boolean indicating whether the peer was successfully removed.
     /// It may be called multiple times, and may use hostnames or IP addresses.
