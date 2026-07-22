@@ -77,6 +77,8 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use core::mem::size_of;
 use core::num::NonZeroUsize;
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::DirBuilder;
 use std::fs::File;
@@ -103,7 +105,6 @@ use lru::LruCache;
 use memmap2::MmapMut;
 use memmap2::MmapOptions;
 use tracing::debug;
-use tracing::info;
 use twox_hash::XxHash3_64;
 
 use crate::BestChain;
@@ -118,7 +119,7 @@ use crate::DiskBlockHeader;
 const FLAT_CHAINSTORE_MAGIC: u32 = 0x74_73_6C_66; // "flst" backwards
 
 /// The version of our flat chain store
-const FLAT_CHAINSTORE_VERSION: u32 = 1;
+const FLAT_CHAINSTORE_VERSION: u32 = 2;
 
 /// We use a LRU cache to keep the last n blocks we've touched, so we don't need to do a map search
 /// again. This is the type of our cache
@@ -313,7 +314,10 @@ struct HashedDiskHeader {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// Metadata about our chainstate and the blocks we have. We need this to keep track of the
-/// network state, our local validation state and accumulator state
+/// network state, our local validation state and accumulator state.
+///
+/// V2: `alternative_tips` removed — tips are now derived dynamically from stored fork headers
+/// on startup (see [`FlatChainStore::derive_alternative_tips`]).
 struct Metadata {
     /// A magic number to make sure we're reading the right file and it was initialized correctly
     magic: u32,
@@ -329,12 +333,6 @@ struct Metadata {
 
     /// We actually validated blocks up to this point
     validation_index: BlockHash,
-
-    /// Blockchains are not fast-forward only, they might have "forks", sometimes it's useful
-    /// to keep track of them, in case they become the best one. This keeps track of some
-    /// tips we know about, but are not the best one. We don't keep tips that are too deep
-    /// or has too little work if compared to our best one
-    alternative_tips: [BlockHash; 64], // we hope to never have more than 64 alt-chains
 
     /// How many blocks we have that are not in our main chain
     fork_count: u32,
@@ -355,6 +353,17 @@ struct Metadata {
     /// We can use this to check if our database is corrupted
     checksum: DbCheckSum,
 }
+
+// Ensure the repr(C) layout has no padding — if this fires, reorder fields to eliminate gaps.
+// This helps keep the on-disk struct compact since repr(C) won't optimize layout for us.
+const _: () = assert!(
+    size_of::<Metadata>()
+        == size_of::<u32>() * 4
+            + size_of::<BlockHash>() * 2
+            + size_of::<usize>() * 4
+            + size_of::<DbCheckSum>(),
+    "Metadata has padding — reorder fields to eliminate it"
+);
 
 #[derive(Debug)]
 /// Errors that can happen whilst interacting with the [`FlatChainStore`].
@@ -657,7 +666,8 @@ impl FlatChainStore {
 
         let index_path = datadir.join("blocks_index.bin");
         let headers_path = datadir.join("headers.bin");
-        let metadata_path = datadir.join("metadata.bin");
+        let gen_filename = std::format!("metadata.bin.gen{FLAT_CHAINSTORE_VERSION}");
+        let gen_path = datadir.join(&gen_filename);
         let fork_headers_path = datadir.join("fork_headers.bin");
         let accumulator_file_path = datadir.join("accumulators.bin");
 
@@ -667,8 +677,7 @@ impl FlatChainStore {
         let headers_file_size = headers_size * size_of::<HashedDiskHeader>();
         let headers = unsafe { Self::init_file(&headers_path, headers_file_size, file_mode)? };
 
-        let metadata =
-            unsafe { Self::init_file(&metadata_path, size_of::<Metadata>(), file_mode)? };
+        let metadata = unsafe { Self::init_file(&gen_path, size_of::<Metadata>(), file_mode)? };
 
         let fork_headers_file_size = fork_size * size_of::<HashedDiskHeader>();
         let fork_headers =
@@ -688,9 +697,6 @@ impl FlatChainStore {
         _metadata.depth = 0;
         _metadata.validation_index = BlockHash::all_zeros();
         _metadata.fork_count = 0;
-        _metadata
-            .alternative_tips
-            .copy_from_slice(&[BlockHash::all_zeros(); 64]);
 
         _metadata.checksum = DbCheckSum {
             headers_checksum: FileChecksum(0),
@@ -709,6 +715,8 @@ impl FlatChainStore {
             .truncate(false)
             .open(accumulator_file_path)?;
 
+        migrations::atomic_symlink_update(datadir, &gen_filename)?;
+
         Ok(Self {
             headers,
             accumulator_file,
@@ -723,24 +731,58 @@ impl FlatChainStore {
     /// Opens a new storage. If it already exists, just load. If not, create a new one
     pub fn new(config: FlatChainStoreConfig) -> Result<Self, FlatChainstoreError> {
         let datadir = &config.path;
-        let metadata_path = datadir.join("metadata.bin");
         let file_mode = config.file_permission.unwrap_or(0o600);
 
-        // Maybe migrate our database if it's the old version 0
-        migrate_v0_to_v1::maybe_migrate(&metadata_path, file_mode)?;
+        debug!("FLAT_CHAINSTORE_VERSION: {FLAT_CHAINSTORE_VERSION}");
 
-        // Check if metadata file exists before attempting to load
-        let metadata_exists = Path::new(&metadata_path).metadata().is_ok();
+        // If metadata.bin is a plain legacy file, adopt it into the generational scheme
+        // (metadata.bin → metadata.bin.gen1 + symlink) before doing anything else.
+        migrations::ensure_generational_layout(datadir)?;
 
-        if !metadata_exists {
-            // Metadata doesn't exist, create a new chain store
-            let mut store = Self::create_chain_store(config)?;
-            store.flush()?;
-            return Ok(store);
+        // Resolve which metadata file to read, then run migrations if needed.
+        match migrations::resolve_metadata_path(datadir)? {
+            None => {
+                let mut store = Self::create_chain_store(config)?;
+                store.flush()?;
+                return Ok(store);
+            }
+            Some(metadata_path) => match Self::peek_version(&metadata_path)? {
+                Some(0) => {
+                    debug!("Peeked at existing datadir and found v0, migrating...");
+                    migrations::migrate_v0_to_v1(datadir, file_mode)?;
+                    migrations::migrate_v1_to_v2(datadir, file_mode)?;
+                }
+                Some(1) => {
+                    debug!("Peeked at existing datadir and found v1, migrating...");
+                    migrations::migrate_v1_to_v2(datadir, file_mode)?;
+                }
+                Some(FLAT_CHAINSTORE_VERSION) => {
+                    debug!("Found datadir v2, which is the latest version already")
+                }
+                Some(v) => return Err(FlatChainstoreError::UnsupportedSchema(v)),
+                None => unreachable!(
+                    "resolve_metadata_path returned Some but peek_version returned None"
+                ),
+            },
         }
 
-        let metadata_file =
-            unsafe { Self::init_file(&metadata_path, size_of::<Metadata>(), file_mode) }?;
+        // Clean up old generation files in release builds only — keep them
+        // around in debug builds for easier inspection after migrations.
+        #[cfg(not(debug_assertions))]
+        {
+            let current_gen = migrations::current_generation(datadir)?;
+            migrations::cleanup_old_generations(datadir, current_gen)?;
+        }
+
+        // metadata.bin is always a symlink to the current gen file;
+        // init_file follows symlinks, so no need to resolve the target.
+        let metadata_file = unsafe {
+            Self::init_file(
+                datadir.join("metadata.bin"),
+                size_of::<Metadata>(),
+                file_mode,
+            )
+        }?;
 
         let metadata = metadata_file.as_ptr() as *const Metadata;
         let metadata = unsafe {
@@ -749,11 +791,7 @@ impl FlatChainStore {
                 .ok_or(FlatChainstoreError::InvalidMetadataPointer)?
         };
 
-        // check the magic number and version
-        if metadata.version > FLAT_CHAINSTORE_VERSION {
-            return Err(FlatChainstoreError::UnsupportedSchema(metadata.version));
-        }
-
+        // check the magic number
         if metadata.magic != FLAT_CHAINSTORE_MAGIC {
             return Err(FlatChainstoreError::BadMagic(metadata.magic));
         }
@@ -907,6 +945,33 @@ impl FlatChainStore {
         Ok(mmap)
     }
 
+    /// Read just the `version` field from a metadata file without extending it.
+    ///
+    /// All metadata versions should share the same first two `#[repr(C)]`
+    /// fields: `magic: u32` at offset 0 and `version: u32` at offset 4. This
+    /// function reads those 8 bytes directly, avoiding [`Self::init_file`]
+    /// (which calls `set_len` and can corrupt the file size).
+    ///
+    /// Returns `Ok(None)` if the file does not exist or
+    /// Err(FlatChainstoreError::CorruptedDatabase) is too small to contain a
+    /// version header.
+    fn peek_version(metadata_path: impl AsRef<Path>) -> Result<Option<u32>, FlatChainstoreError> {
+        let mut file = match OpenOptions::new().read(true).open(metadata_path.as_ref()) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(f) => f,
+        };
+
+        let mut buf = [0u8; 8];
+        if file.read_exact(&mut buf).is_err() {
+            return Err(FlatChainstoreError::CorruptedDatabase);
+        }
+
+        let _magic = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        let version = u32::from_ne_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        Ok(Some(version))
+    }
+
     /// Returns a reference to the respective disk header from the file. Errors if nothing is found.
     unsafe fn get_disk_header(
         &self,
@@ -965,19 +1030,38 @@ impl FlatChainStore {
         metadata.depth = best_block.depth;
         metadata.validation_index = best_block.validation_index;
 
-        assert!(best_block.alternative_tips.len() <= 64);
+        Ok(())
+    }
 
-        unsafe {
-            metadata
-                .alternative_tips
-                .as_mut_ptr()
-                .copy_from_nonoverlapping(
-                    best_block.alternative_tips.as_ptr(),
-                    best_block.alternative_tips.len(),
-                );
+    /// Derives the current set of alternative chain tips by scanning stored fork headers.
+    ///
+    /// A fork header is considered a tip if no other fork header references it as its
+    /// parent (`prev_blockhash`). This mirrors how Bitcoin Core computes chain tips from
+    /// its block index rather than maintaining an explicit on-disk list.
+    ///
+    /// This is called once on startup (via `get_best_chain`) to populate the in-memory
+    /// `BestChain.alternative_tips` cache. At runtime, tips are maintained incrementally
+    /// by `ChainState::push_alt_tip`.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the memory-mapped files are valid and properly initialized.
+    unsafe fn derive_alternative_tips(&self) -> Result<Vec<BlockHash>, FlatChainstoreError> {
+        let metadata = unsafe { self.get_metadata()? };
+        let fork_count = metadata.fork_count as usize;
+
+        let mut fork_hashes = HashSet::with_capacity(fork_count);
+        let mut parent_hashes = HashSet::with_capacity(fork_count);
+
+        for i in 0..fork_count {
+            let index = Index::new_fork(i as u32)?;
+            let hdr = unsafe { self.get_disk_header(index)? };
+            fork_hashes.insert(hdr.hash);
+            parent_hashes.insert(hdr.header.prev_blockhash);
         }
 
-        Ok(())
+        // A tip is a fork header that no other fork header builds on
+        Ok(fork_hashes.difference(&parent_hashes).copied().collect())
     }
 
     unsafe fn get_best_chain(&self) -> Result<BestChain, FlatChainstoreError> {
@@ -987,11 +1071,7 @@ impl FlatChainStore {
             best_block: metadata.best_block,
             depth: metadata.depth,
             validation_index: metadata.validation_index,
-            alternative_tips: metadata
-                .alternative_tips
-                .into_iter()
-                .take_while(|tip| *tip != BlockHash::all_zeros())
-                .collect(),
+            alternative_tips: unsafe { self.derive_alternative_tips()? },
         })
     }
 
@@ -1147,12 +1227,20 @@ impl ChainStore for FlatChainStore {
             + u64::from(metadata.fork_count) * header_size;
 
         // Variable-structure files: report apparent (preallocated) length.
-        for name in ["blocks_index.bin", "metadata.bin", "accumulators.bin"] {
-            let path = self.datadir.join(name);
-            match fs::metadata(&path) {
+        // For metadata, resolve through the symlink/generation system to get the
+        // actual file on non-unix platforms where metadata.bin may be a pointer file.
+        let metadata_real_path = migrations::resolve_metadata_path(&self.datadir)?
+            .unwrap_or_else(|| self.datadir.join("metadata.bin"));
+        let metadata_files: [Cow<'_, Path>; 3] = [
+            self.datadir.join("blocks_index.bin").into(),
+            metadata_real_path.into(),
+            self.datadir.join("accumulators.bin").into(),
+        ];
+        for path in &metadata_files {
+            match fs::metadata(path.as_ref()) {
                 Ok(meta) => total += meta.len(),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    debug!("size_on_disk: {name} not found, skipping");
+                    debug!("size_on_disk: {} not found, skipping", path.display());
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -1303,17 +1391,292 @@ impl ChainStore for FlatChainStore {
     }
 }
 
-pub mod migrate_v0_to_v1 {
+mod migrations {
+    extern crate std;
+
     use std::fs;
     use std::fs::OpenOptions;
     use std::io;
     use std::path::Path;
+    use std::path::PathBuf;
 
+    use bitcoin::BlockHash;
     use memmap2::Mmap;
     use memmap2::MmapOptions;
+    use tracing::debug;
 
-    use super::*;
+    use super::FLAT_CHAINSTORE_VERSION;
+    use super::FlatChainStore;
+    use super::Metadata;
+    use crate::DbCheckSum;
+    use crate::FlatChainstoreError;
 
+    /// Initialize a read-only mmap
+    pub(super) fn init_mmap(file_path: &Path, size: usize) -> Result<Mmap, FlatChainstoreError> {
+        let file = OpenOptions::new().read(true).open(file_path)?;
+        let mmap = unsafe { MmapOptions::new().len(size).map(&file)? };
+        Ok(mmap)
+    }
+
+    /// Scan `datadir` for `metadata.bin.gen*` files and return the one with the highest
+    /// generation number.
+    pub(super) fn find_highest_generation(
+        datadir: &Path,
+    ) -> Result<Option<(u64, PathBuf)>, FlatChainstoreError> {
+        let mut best: Option<(u64, PathBuf)> = None;
+
+        let entries = match fs::read_dir(datadir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            if let Some(gen_num) = name_str
+                .strip_prefix("metadata.bin.gen")
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|g| best.as_ref().is_none_or(|(b, _)| g > b))
+            {
+                best = Some((gen_num, entry.path()));
+            }
+        }
+
+        Ok(best)
+    }
+
+    /// Read the current generation number from the symlink target, or by scanning.
+    /// Returns 0 if no generation files exist (legacy or fresh database).
+    pub(super) fn current_generation(datadir: &Path) -> Result<u64, FlatChainstoreError> {
+        let metadata_path = datadir.join("metadata.bin");
+
+        // Try reading the symlink target first
+        if let Ok(target) = fs::read_link(&metadata_path) {
+            let name = target.file_name().unwrap_or_default().to_string_lossy();
+            if let Some(gen_str) = name.strip_prefix("metadata.bin.gen") {
+                if let Ok(gen_num) = gen_str.parse::<u64>() {
+                    return Ok(gen_num);
+                }
+            }
+        }
+
+        // Fall back to scanning
+        match find_highest_generation(datadir)? {
+            Some((gen_num, _)) => Ok(gen_num),
+            None => Ok(0),
+        }
+    }
+
+    /// Resolve which metadata file to open.
+    ///
+    /// 1. If `metadata.bin` is a symlink, follow it.
+    /// 2. If `metadata.bin` is a regular file (legacy pre-symlink database), return it directly.
+    /// 3. If neither exists, scan for `metadata.bin.gen*` and pick the highest generation,
+    ///    re-creating the symlink.
+    /// 4. If nothing found, return `None` (fresh database).
+    pub(super) fn resolve_metadata_path(
+        datadir: &Path,
+    ) -> Result<Option<PathBuf>, FlatChainstoreError> {
+        let metadata_path = datadir.join("metadata.bin");
+
+        match fs::symlink_metadata(&metadata_path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                // Follow the symlink; if the target exists, use it
+                if let Ok(target) = fs::read_link(&metadata_path) {
+                    let resolved = if target.is_relative() {
+                        datadir.join(&target)
+                    } else {
+                        target
+                    };
+                    if resolved.exists() {
+                        return Ok(Some(resolved));
+                    }
+                }
+                // Broken symlink — fall through to scanning
+                debug!("metadata.bin symlink is broken, scanning for generation files");
+            }
+            Ok(_) => {
+                // Regular file (legacy layout)
+                return Ok(Some(metadata_path));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // No metadata.bin at all — fall through to scanning
+            }
+            Err(e) => return Err(e.into()),
+        }
+
+        // Scan for metadata.bin.gen* files
+        if let Some((_gen, gen_path)) = find_highest_generation(datadir)? {
+            // Re-create the symlink for next time
+            let gen_filename = gen_path
+                .file_name()
+                .expect("generation file must have a filename")
+                .to_string_lossy();
+            let _ = atomic_symlink_update(datadir, &gen_filename);
+            return Ok(Some(gen_path));
+        }
+
+        Ok(None)
+    }
+
+    /// Atomically update the `metadata.bin` symlink to point to the given target filename.
+    ///
+    /// Uses a temporary symlink + rename pattern for atomicity: the rename is guaranteed
+    /// to be atomic on both POSIX and NTFS.
+    pub(super) fn atomic_symlink_update(
+        datadir: &Path,
+        target_filename: &str,
+    ) -> Result<(), FlatChainstoreError> {
+        let symlink_path = datadir.join("metadata.bin");
+        let tmp_symlink = datadir.join("metadata.bin.symlink_tmp");
+
+        // Remove stale tmp symlink if it exists (from a previous crash)
+        let _ = fs::remove_file(&tmp_symlink);
+
+        // Create temporary symlink pointing to the target
+        symlink(target_filename, &tmp_symlink)?;
+
+        // Atomically replace the real symlink
+        fs::rename(&tmp_symlink, &symlink_path)?;
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn symlink(target: &str, link: &Path) -> Result<(), FlatChainstoreError> {
+        std::os::unix::fs::symlink(target, link)?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn symlink(target: &str, link: &Path) -> Result<(), FlatChainstoreError> {
+        std::os::windows::fs::symlink_file(target, link)?;
+        Ok(())
+    }
+
+    /// Adopt a legacy `metadata.bin` (plain file) into the generational scheme.
+    ///
+    /// If `metadata.bin` is a regular file, peek its schema version and rename it to
+    /// `metadata.bin.gen{version}`, then create a symlink `metadata.bin -> metadata.bin.gen{version}`.
+    /// If the symlink already exists or no `metadata.bin` exists at all, this is a no-op.
+    ///
+    /// Crash-safe: if a crash occurs after the rename but before the symlink is created,
+    /// [`resolve_metadata_path`] will scan for `metadata.bin.gen*` files and recover.
+    pub(super) fn ensure_generational_layout(datadir: &Path) -> Result<(), FlatChainstoreError> {
+        let metadata_path = datadir.join("metadata.bin");
+
+        match fs::symlink_metadata(&metadata_path) {
+            // Already a symlink (or pointer file on Windows) — nothing to do
+            Ok(m) if m.file_type().is_symlink() => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+            Ok(_) => {
+                // Read the schema version from the legacy file to use as the generation number,
+                // so that gen numbers always correspond to schema versions.
+                let version = FlatChainStore::peek_version(&metadata_path)?
+                    .ok_or(FlatChainstoreError::CorruptedDatabase)?;
+                let gen_filename = std::format!("metadata.bin.gen{version}");
+                let gen_path = datadir.join(&gen_filename);
+                fs::rename(&metadata_path, &gen_path)?;
+                atomic_symlink_update(datadir, &gen_filename)?;
+
+                debug!("Adopted legacy metadata.bin as {gen_filename}");
+                Ok(())
+            }
+        }
+    }
+
+    /// Remove old generation files and legacy `.old` backups. Best-effort: errors are logged
+    /// but do not cause a failure.
+    #[cfg_attr(debug_assertions, allow(dead_code))]
+    pub(super) fn cleanup_old_generations(
+        datadir: &Path,
+        current_gen: u64,
+    ) -> Result<(), FlatChainstoreError> {
+        let entries = match fs::read_dir(datadir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(()),
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            if let Some(gen_str) = name_str.strip_prefix("metadata.bin.gen") {
+                if let Ok(gen_num) = gen_str.parse::<u64>() {
+                    if gen_num < current_gen {
+                        debug!("Removing old generation file: {name_str}");
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+
+        // Also clean up legacy .old backup files
+        let old_path = datadir.join("metadata.bin.old");
+        let _ = fs::remove_file(old_path);
+
+        Ok(())
+    }
+
+    /// Generic metadata migration using the generational scheme.
+    ///
+    /// Reads the current generation file (which must be `size_of::<Old>()` bytes), creates a
+    /// new generation file of `size_of::<New>()` bytes, converts via `New::from(old)`,
+    /// flushes it, and atomically updates the symlink. The old generation is never moved or
+    /// deleted
+    ///
+    /// Returns whether a migration was performed (i.e., the current file matched the old size).
+    ///
+    /// # Safety
+    ///
+    /// `Old` and `New` must be `#[repr(C)]` structs whose memory layout matches the on-disk
+    /// format exactly.
+    unsafe fn migrate<Old: Copy, New: Copy + From<Old>>(
+        datadir: &Path,
+        mode: u32,
+    ) -> Result<bool, FlatChainstoreError> {
+        let Some(current_path) = resolve_metadata_path(datadir)? else {
+            debug!("Migration method called but no metadata file found.");
+            return Ok(false);
+        };
+
+        match fs::metadata(&current_path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+            Ok(meta) if meta.len() != size_of::<Old>() as u64 => Ok(false),
+            Ok(_) => {
+                // 1) read old struct (read-only — the old file is never modified)
+                let mmap = init_mmap(&current_path, size_of::<Old>())?;
+                let old_meta = unsafe { &*(mmap.as_ptr() as *const Old) };
+
+                // 2) create new generation file
+                let next_gen = current_generation(datadir)? + 1;
+                let next_filename = std::format!("metadata.bin.gen{next_gen}");
+                let next_path = datadir.join(&next_filename);
+
+                let mut new_mmap =
+                    unsafe { FlatChainStore::init_file(&next_path, size_of::<New>(), mode)? };
+                let new_meta = unsafe { &mut *(new_mmap.as_mut_ptr() as *mut New) };
+
+                // 3) apply the conversion via From trait
+                *new_meta = New::from(*old_meta);
+                new_mmap.flush()?;
+
+                // 4) atomically update the symlink
+                atomic_symlink_update(datadir, &next_filename)?;
+
+                Ok(true)
+            }
+        }
+    }
+
+    /// The V0 on-disk metadata layout. Kept here for migration purposes.
+    ///
+    /// Differs from `MetadataV1` by having the deprecated `assume_valid_index` field.
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     struct MetadataV0 {
@@ -1332,70 +1695,392 @@ pub mod migrate_v0_to_v1 {
         checksum: DbCheckSum,
     }
 
-    impl From<MetadataV0> for Metadata {
-        fn from(value: MetadataV0) -> Self {
+    /// The V1 on-disk metadata layout. Kept here for migration purposes.
+    ///
+    /// Differs from [`Metadata`] (V2) by having `alternative_tips: [BlockHash; 64]` and
+    /// from `MetadataV0` by not having the deprecated `assume_valid_index` field.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct MetadataV1 {
+        pub magic: u32,
+        pub version: u32,
+        pub best_block: BlockHash,
+        pub depth: u32,
+        pub validation_index: BlockHash,
+        pub alternative_tips: [BlockHash; 64],
+        pub fork_count: u32,
+        pub headers_file_size: usize,
+        pub fork_file_size: usize,
+        pub block_index_occupancy: usize,
+        pub index_capacity: usize,
+        pub checksum: DbCheckSum,
+    }
+
+    impl From<MetadataV0> for MetadataV1 {
+        fn from(old: MetadataV0) -> Self {
             Self {
-                magic: value.magic,
-                version: FLAT_CHAINSTORE_VERSION, // bump version
-                best_block: value.best_block,
-                depth: value.depth,
-                validation_index: value.validation_index,
-                alternative_tips: value.alternative_tips,
+                magic: old.magic,
+                version: 1,
+                best_block: old.best_block,
+                depth: old.depth,
+                validation_index: old.validation_index,
+                alternative_tips: old.alternative_tips,
                 // assume_valid_index is skipped
-                fork_count: value.fork_count,
-                headers_file_size: value.headers_file_size,
-                fork_file_size: value.fork_file_size,
-                block_index_occupancy: value.block_index_occupancy,
-                index_capacity: value.index_capacity,
-                checksum: value.checksum,
+                fork_count: old.fork_count,
+                headers_file_size: old.headers_file_size,
+                fork_file_size: old.fork_file_size,
+                block_index_occupancy: old.block_index_occupancy,
+                index_capacity: old.index_capacity,
+                checksum: old.checksum,
             }
         }
     }
 
-    /// If `metadata.bin` is exactly the old size, rename to `.bin.old`, mmap it as `MetadataV0`,
-    /// then create a fresh v1 file and copy all fields except the deprecated u32. Returns a bool
-    /// indicating whether a migration was performed or not.
-    pub fn maybe_migrate(
-        metadata_path: impl AsRef<Path>,
-        mode: u32,
-    ) -> Result<bool, FlatChainstoreError> {
-        let metadata_path = metadata_path.as_ref();
-
-        match fs::metadata(metadata_path) {
-            // No db found, nothing to migrate from
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-            // Propagate the rest of errors
-            Err(e) => return Err(e.into()),
-            // Found but doesn't have the v0 size
-            Ok(meta) if meta.len() != size_of::<MetadataV0>() as u64 => return Ok(false),
-            Ok(_) => {}
+    impl From<MetadataV1> for Metadata {
+        fn from(old: MetadataV1) -> Self {
+            Self {
+                magic: old.magic,
+                version: FLAT_CHAINSTORE_VERSION,
+                best_block: old.best_block,
+                depth: old.depth,
+                validation_index: old.validation_index,
+                // alternative_tips removed — derived dynamically on startup
+                fork_count: old.fork_count,
+                headers_file_size: old.headers_file_size,
+                fork_file_size: old.fork_file_size,
+                block_index_occupancy: old.block_index_occupancy,
+                index_capacity: old.index_capacity,
+                checksum: old.checksum,
+            }
         }
-
-        // 1) back up
-        let metadata_backup_path = Path::new(metadata_path).with_extension("bin.old");
-        fs::rename(metadata_path, &metadata_backup_path)?;
-
-        // 2) read old struct
-        let mmap = init_mmap(&metadata_backup_path, size_of::<MetadataV0>())?;
-        let old_meta = unsafe { &*(mmap.as_ptr() as *const MetadataV0) };
-
-        // 3) create new v1 mmap
-        let mut new_mmap =
-            unsafe { FlatChainStore::init_file(metadata_path, size_of::<Metadata>(), mode)? };
-        let new_meta = unsafe { &mut *(new_mmap.as_mut_ptr() as *mut Metadata) };
-
-        // 4) copy everything but the deprecated u32, bump version
-        *new_meta = Metadata::from(*old_meta);
-        info!("Migrated FlatChainStore from v0 to v1!");
-
-        Ok(true)
     }
 
-    /// Initialize a read-only mmap
-    pub(super) fn init_mmap(file_path: &Path, size: usize) -> Result<Mmap, FlatChainstoreError> {
-        let file = OpenOptions::new().read(true).open(file_path)?;
-        let mmap = unsafe { MmapOptions::new().len(size).map(&file)? };
-        Ok(mmap)
+    /// Migrate a V0 metadata file to V1.
+    pub(super) fn migrate_v0_to_v1(datadir: &Path, mode: u32) -> Result<bool, FlatChainstoreError> {
+        // SAFETY: MetadataV0 and MetadataV1 are #[repr(C)] structs matching the on-disk layout.
+        unsafe { migrate::<MetadataV0, MetadataV1>(datadir, mode) }
+    }
+
+    /// Migrate a V1 metadata file to V2.
+    pub(super) fn migrate_v1_to_v2(datadir: &Path, mode: u32) -> Result<bool, FlatChainstoreError> {
+        // SAFETY: MetadataV1 and Metadata are #[repr(C)] structs matching the on-disk layout.
+        unsafe { migrate::<MetadataV1, Metadata>(datadir, mode) }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::mem::size_of;
+        use std::fs;
+
+        use floresta_common::bhash;
+        use tempfile::TempDir;
+
+        use super::*;
+        use crate::DbCheckSum;
+        use crate::pruned_utreexo::flat_chain_store::FLAT_CHAINSTORE_MAGIC;
+        use crate::pruned_utreexo::flat_chain_store::FLAT_CHAINSTORE_VERSION;
+        use crate::pruned_utreexo::flat_chain_store::FileChecksum;
+
+        /// Copy a fixture into `datadir` as a generational file with symlink,
+        /// simulating a database that was already in the generational layout.
+        fn setup_gen(datadir: &std::path::Path, fixture: &str, gen_num: u32) {
+            let gen_filename = std::format!("metadata.bin.gen{gen_num}");
+            let gen_path = datadir.join(&gen_filename);
+            fs::copy(fixture, &gen_path).unwrap();
+            atomic_symlink_update(datadir, &gen_filename).unwrap();
+        }
+
+        #[test]
+        fn test_migrate_v0_to_v1() {
+            let tmp = TempDir::new().expect("Failed to create temp dir");
+
+            // Sanity check — empty dir means no migration
+            let did_migrate = migrate_v0_to_v1(tmp.path(), 0o600).unwrap();
+            assert!(!did_migrate, "Should not migrate: empty directory");
+
+            // Set up a V0 fixture as gen0
+            setup_gen(tmp.path(), "./testdata/v0_flat_metadata.bin", 0);
+
+            let did_migrate = migrate_v0_to_v1(tmp.path(), 0o600).unwrap();
+            assert!(did_migrate, "Expected a migration to happen");
+
+            // The new generation file should be V1-sized
+            let gen1 = tmp.path().join("metadata.bin.gen1");
+            assert!(gen1.exists(), "gen1 file should exist");
+            let new_len = fs::metadata(&gen1).unwrap().len();
+            assert_eq!(new_len, size_of::<MetadataV1>() as u64);
+
+            // Symlink should now point to gen1
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen1");
+
+            // Verify metadata contents
+            let mmap = init_mmap(&gen1, size_of::<MetadataV1>()).unwrap();
+            let metadata = unsafe { &*(mmap.as_ptr() as *const MetadataV1) };
+
+            assert_eq!(metadata.magic, FLAT_CHAINSTORE_MAGIC);
+            assert_eq!(metadata.version, 1);
+            assert_eq!(
+                metadata.best_block,
+                bhash!("000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161")
+            );
+            assert_eq!(metadata.depth, 10_236);
+            assert_eq!(metadata.fork_count, 0);
+            assert_eq!(metadata.headers_file_size, 32_768);
+            assert_eq!(metadata.fork_file_size, 16_384);
+            assert_eq!(metadata.block_index_occupancy, 10_236);
+            assert_eq!(metadata.index_capacity, 32_768);
+
+            // Old gen0 should still exist (cleanup is separate)
+            assert!(tmp.path().join("metadata.bin.gen0").exists());
+        }
+
+        #[test]
+        fn test_migrate_v1_to_v2() {
+            let tmp = TempDir::new().expect("Failed to create temp dir");
+
+            // Sanity check — no file means no migration
+            let did_migrate = migrate_v1_to_v2(tmp.path(), 0o600).unwrap();
+            assert!(!did_migrate, "Should not migrate: empty directory");
+
+            // Set up a V1 fixture as gen1
+            setup_gen(tmp.path(), "./testdata/v1_flat_metadata.bin", 1);
+
+            let did_migrate = migrate_v1_to_v2(tmp.path(), 0o600).unwrap();
+            assert!(did_migrate, "Expected a V1→V2 migration to happen");
+
+            // The new generation file should be V2-sized
+            let gen2 = tmp.path().join("metadata.bin.gen2");
+            assert!(gen2.exists(), "gen2 file should exist");
+            let new_len = fs::metadata(&gen2).unwrap().len();
+            assert_eq!(new_len, size_of::<Metadata>() as u64);
+
+            // Symlink should now point to gen2
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen2");
+
+            let mmap = init_mmap(&gen2, size_of::<Metadata>()).unwrap();
+            let metadata = unsafe { &*(mmap.as_ptr() as *const Metadata) };
+
+            let expected = Metadata {
+                magic: FLAT_CHAINSTORE_MAGIC,
+                version: FLAT_CHAINSTORE_VERSION,
+                best_block: bhash!(
+                    "000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161"
+                ),
+                depth: 10_236,
+                validation_index: bhash!(
+                    "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+                ),
+                fork_count: 0,
+                headers_file_size: 32_768,
+                fork_file_size: 16_384,
+                block_index_occupancy: 10_236,
+                index_capacity: 32_768,
+                checksum: DbCheckSum {
+                    headers_checksum: FileChecksum(4430534975455841125),
+                    index_checksum: FileChecksum(9017076313313378046),
+                    fork_headers_checksum: FileChecksum(10728257719073392722),
+                },
+            };
+
+            assert_eq!(metadata, &expected);
+        }
+
+        #[test]
+        fn test_migrate_v0_through_v2() {
+            // End-to-end: a V0 database gets migrated all the way to V2 via chained migrations
+            let tmp = TempDir::new().expect("Failed to create temp dir");
+
+            // Set up V0 fixture as gen0
+            setup_gen(tmp.path(), "./testdata/v0_flat_metadata.bin", 0);
+
+            // Run both migrations in sequence (same order as FlatChainStore::new)
+            let did_v0_v1 = migrate_v0_to_v1(tmp.path(), 0o600).unwrap();
+            assert!(did_v0_v1, "V0→V1 migration should fire");
+
+            let did_v1_v2 = migrate_v1_to_v2(tmp.path(), 0o600).unwrap();
+            assert!(did_v1_v2, "V1→V2 migration should fire");
+
+            // Should have gen0 (V0), gen1 (V1), gen2 (V2)
+            assert!(tmp.path().join("metadata.bin.gen0").exists());
+            assert!(tmp.path().join("metadata.bin.gen1").exists());
+            assert!(tmp.path().join("metadata.bin.gen2").exists());
+
+            // Symlink should point to gen2 (= FLAT_CHAINSTORE_VERSION)
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            let expected_gen = std::format!("metadata.bin.gen{FLAT_CHAINSTORE_VERSION}");
+            assert_eq!(target.to_str().unwrap(), expected_gen);
+
+            // Final file should be V2 size and valid
+            let final_gen = tmp.path().join(&expected_gen);
+            let new_len = fs::metadata(&final_gen).unwrap().len();
+            assert_eq!(new_len, size_of::<Metadata>() as u64);
+
+            let mmap = init_mmap(&final_gen, size_of::<Metadata>()).unwrap();
+            let metadata = unsafe { &*(mmap.as_ptr() as *const Metadata) };
+
+            assert_eq!(metadata.magic, FLAT_CHAINSTORE_MAGIC);
+            assert_eq!(metadata.version, FLAT_CHAINSTORE_VERSION);
+            assert_eq!(metadata.depth, 10_236);
+            assert_eq!(metadata.fork_count, 0);
+        }
+
+        #[test]
+        fn test_ensure_generational_layout_legacy_file() {
+            let tmp = TempDir::new().unwrap();
+            let metadata_path = tmp.path().join("metadata.bin");
+            fs::copy("./testdata/v1_flat_metadata.bin", &metadata_path).unwrap();
+
+            // V1 fixture should be adopted as gen1 (gen = schema version)
+            ensure_generational_layout(tmp.path()).unwrap();
+
+            assert!(
+                fs::symlink_metadata(&metadata_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert!(tmp.path().join("metadata.bin.gen1").exists());
+
+            let target = fs::read_link(&metadata_path).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen1");
+        }
+
+        #[test]
+        fn test_ensure_generational_layout_already_symlink() {
+            let tmp = TempDir::new().unwrap();
+            setup_gen(tmp.path(), "./testdata/v1_flat_metadata.bin", 1);
+
+            // Should be a no-op
+            ensure_generational_layout(tmp.path()).unwrap();
+
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen1");
+        }
+
+        #[test]
+        fn test_ensure_generational_layout_no_file() {
+            let tmp = TempDir::new().unwrap();
+
+            // Should be a no-op on empty directory
+            ensure_generational_layout(tmp.path()).unwrap();
+            assert!(!tmp.path().join("metadata.bin").exists());
+            assert!(!tmp.path().join("metadata.bin.gen1").exists());
+        }
+
+        #[test]
+        fn test_find_highest_generation() {
+            let tmp = TempDir::new().unwrap();
+
+            // Empty directory
+            assert!(find_highest_generation(tmp.path()).unwrap().is_none());
+
+            // Create some generation files
+            fs::write(tmp.path().join("metadata.bin.gen1"), b"x").unwrap();
+            fs::write(tmp.path().join("metadata.bin.gen3"), b"x").unwrap();
+            fs::write(tmp.path().join("metadata.bin.gen7"), b"x").unwrap();
+            // Decoy files that shouldn't match
+            fs::write(tmp.path().join("metadata.bin.old"), b"x").unwrap();
+            fs::write(tmp.path().join("other_file.gen5"), b"x").unwrap();
+
+            let (gen_num, path) = find_highest_generation(tmp.path()).unwrap().unwrap();
+            assert_eq!(gen_num, 7);
+            assert_eq!(path, tmp.path().join("metadata.bin.gen7"));
+        }
+
+        #[test]
+        fn test_resolve_metadata_path_symlink() {
+            let tmp = TempDir::new().unwrap();
+            setup_gen(tmp.path(), "./testdata/v1_flat_metadata.bin", 1);
+
+            let resolved = resolve_metadata_path(tmp.path()).unwrap().unwrap();
+            assert_eq!(resolved, tmp.path().join("metadata.bin.gen1"));
+        }
+
+        #[test]
+        fn test_resolve_metadata_path_broken_symlink_with_scan() {
+            let tmp = TempDir::new().unwrap();
+
+            // Create a broken symlink pointing to a nonexistent target
+            symlink("metadata.bin.gen99", &tmp.path().join("metadata.bin")).unwrap();
+
+            // But have a valid gen2 file
+            fs::copy(
+                "./testdata/v1_flat_metadata.bin",
+                tmp.path().join("metadata.bin.gen2"),
+            )
+            .unwrap();
+
+            // Should recover by scanning and finding gen2
+            let resolved = resolve_metadata_path(tmp.path()).unwrap().unwrap();
+            assert_eq!(resolved, tmp.path().join("metadata.bin.gen2"));
+        }
+
+        #[test]
+        fn test_resolve_metadata_path_fresh_dir() {
+            let tmp = TempDir::new().unwrap();
+            assert!(resolve_metadata_path(tmp.path()).unwrap().is_none());
+        }
+
+        #[test]
+        fn test_atomic_symlink_update() {
+            let tmp = TempDir::new().unwrap();
+
+            // Create two gen files
+            fs::write(tmp.path().join("metadata.bin.gen1"), b"old").unwrap();
+            fs::write(tmp.path().join("metadata.bin.gen2"), b"new").unwrap();
+
+            // Point symlink to gen1
+            atomic_symlink_update(tmp.path(), "metadata.bin.gen1").unwrap();
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen1");
+
+            // Update to gen2
+            atomic_symlink_update(tmp.path(), "metadata.bin.gen2").unwrap();
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen2");
+        }
+
+        #[test]
+        fn test_cleanup_old_generations() {
+            let tmp = TempDir::new().unwrap();
+
+            fs::write(tmp.path().join("metadata.bin.gen1"), b"x").unwrap();
+            fs::write(tmp.path().join("metadata.bin.gen2"), b"x").unwrap();
+            fs::write(tmp.path().join("metadata.bin.gen3"), b"x").unwrap();
+            fs::write(tmp.path().join("metadata.bin.old"), b"x").unwrap();
+
+            cleanup_old_generations(tmp.path(), 3).unwrap();
+
+            // gen1 and gen2 should be removed, gen3 kept
+            assert!(!tmp.path().join("metadata.bin.gen1").exists());
+            assert!(!tmp.path().join("metadata.bin.gen2").exists());
+            assert!(tmp.path().join("metadata.bin.gen3").exists());
+            // Legacy .old should also be removed
+            assert!(!tmp.path().join("metadata.bin.old").exists());
+        }
+
+        #[test]
+        fn test_crash_recovery_no_symlink_gen_files_exist() {
+            // Simulate a crash that happened after writing gen2 but before
+            // updating the symlink — no metadata.bin exists at all.
+            let tmp = TempDir::new().unwrap();
+
+            // Only gen2 exists, no symlink
+            fs::copy(
+                "./testdata/v1_flat_metadata.bin",
+                tmp.path().join("metadata.bin.gen2"),
+            )
+            .unwrap();
+
+            let resolved = resolve_metadata_path(tmp.path()).unwrap().unwrap();
+            assert_eq!(resolved, tmp.path().join("metadata.bin.gen2"));
+
+            // Symlink should have been re-created
+            let target = fs::read_link(tmp.path().join("metadata.bin")).unwrap();
+            assert_eq!(target.to_str().unwrap(), "metadata.bin.gen2");
+        }
     }
 }
 
@@ -1406,13 +2091,18 @@ mod tests {
 
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
+    use bitcoin::TxMerkleNode;
     use bitcoin::block::Header;
+    use bitcoin::block::Version;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
-    use floresta_common::bhash;
+    use rand::RngExt;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use tempfile::TempDir;
     use twox_hash::XxHash3_64;
 
@@ -1427,13 +2117,8 @@ mod tests {
     use crate::BestChain;
     use crate::ChainState;
     use crate::ChainStore;
-    use crate::DbCheckSum;
     use crate::DiskBlockHeader;
-    use crate::migrate_v0_to_v1::init_mmap;
-    use crate::migrate_v0_to_v1::maybe_migrate;
     use crate::pruned_utreexo::UpdatableChainstate;
-    use crate::pruned_utreexo::flat_chain_store::FileChecksum;
-    use crate::pruned_utreexo::flat_chain_store::Metadata;
 
     #[test]
     fn test_truncate_pow2() {
@@ -1462,6 +2147,55 @@ mod tests {
             FlatChainStore::truncate_to_pow2(1_073_741_825),
             2_147_483_648
         );
+    }
+
+    #[test]
+    fn test_peek_version_nonexistent_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("does_not_exist.bin");
+        assert_eq!(FlatChainStore::peek_version(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn test_peek_version_file_too_small() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("tiny.bin");
+        // Write only 4 bytes — not enough for magic + version (8 bytes)
+        fs::write(&path, [0u8; 4]).unwrap();
+        assert!(
+            matches!(
+                FlatChainStore::peek_version(&path),
+                Err(FlatChainstoreError::CorruptedDatabase)
+            ),
+            "A file too small for a valid header is corrupted"
+        );
+    }
+
+    #[test]
+    fn test_peek_version_v0_fixture() {
+        let version = FlatChainStore::peek_version("./testdata/v0_flat_metadata.bin").unwrap();
+        assert_eq!(version, Some(0));
+    }
+
+    #[test]
+    fn test_peek_version_v1_fixture() {
+        let version = FlatChainStore::peek_version("./testdata/v1_flat_metadata.bin").unwrap();
+        assert_eq!(version, Some(1));
+    }
+
+    #[test]
+    fn test_peek_version_v2_metadata() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("metadata.bin");
+
+        // Write a minimal file with magic + version=2
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&FLAT_CHAINSTORE_MAGIC.to_ne_bytes());
+        buf.extend_from_slice(&FLAT_CHAINSTORE_VERSION.to_ne_bytes());
+        fs::write(&path, &buf).unwrap();
+
+        let version = FlatChainStore::peek_version(&path).unwrap();
+        assert_eq!(version, Some(FLAT_CHAINSTORE_VERSION));
     }
 
     fn get_test_chainstore(id: Option<u64>) -> Result<FlatChainStore, FlatChainstoreError> {
@@ -1540,53 +2274,6 @@ mod tests {
                 ),
             }
         }
-    }
-
-    #[test]
-    fn test_migrate_v0_to_v1() {
-        let tmp = TempDir::new().expect("Failed to create temp dir");
-        // Sanity check
-        let did_migrate = maybe_migrate(tmp.path().to_str().unwrap(), 0o600).unwrap();
-        assert!(!did_migrate, "Should not migrate: empty directory");
-
-        // Copy the v0 metadata file to the temporal directory (we will rename it to .bin.old)
-        let src = "./testdata/v0_flat_metadata.bin";
-        let dst = tmp.path().join("metadata.bin");
-        fs::copy(src, &dst).unwrap();
-
-        let did_migrate = maybe_migrate(dst.to_str().unwrap(), 0o600).unwrap();
-        assert!(did_migrate, "Expected a migration to happen");
-
-        // Check that the length is now the expected one
-        let new_len = fs::metadata(&dst).unwrap().len();
-        assert_eq!(new_len, size_of::<Metadata>() as u64);
-
-        // Mmap the file and read the metadata
-        let mmap = init_mmap(&dst, size_of::<Metadata>()).unwrap();
-        let metadata = unsafe { &*(mmap.as_ptr() as *const Metadata) };
-
-        let expected = Metadata {
-            magic: FLAT_CHAINSTORE_MAGIC,
-            version: FLAT_CHAINSTORE_VERSION,
-            best_block: bhash!("000000004f74d42205b9d7ae1cb5c1591e723894a71358fce73b7e0919628161"),
-            depth: 10_236,
-            validation_index: bhash!(
-                "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
-            ),
-            alternative_tips: [BlockHash::all_zeros(); 64],
-            fork_count: 0,
-            headers_file_size: 32_768,
-            fork_file_size: 16_384,
-            block_index_occupancy: 10_236,
-            index_capacity: 32_768,
-            checksum: DbCheckSum {
-                headers_checksum: FileChecksum(4430534975455841125),
-                index_checksum: FileChecksum(9017076313313378046),
-                fork_headers_checksum: FileChecksum(10728257719073392722),
-            },
-        };
-
-        assert_eq!(metadata, &expected);
     }
 
     #[test]
@@ -1929,5 +2616,124 @@ mod tests {
             Err(e) => panic!("Unexpected err: {e:?}"),
             Ok(_) => panic!("Should not have been able to save roots for a block we don't have"),
         }
+    }
+
+    /// Test helper that wraps a [`FlatChainStore`] with a seeded RNG and a fork slot
+    /// counter, providing ergonomic methods for building fork topologies.
+    struct ForkBuilder {
+        store: FlatChainStore,
+        rng: StdRng,
+        next_slot: u32,
+    }
+
+    impl ForkBuilder {
+        fn new(seed: u64) -> Self {
+            let mut store = get_test_chainstore(None).unwrap();
+            // The open-addressing hash map probes slots via `get_disk_header`.
+            // Position 0 must hold a valid header so probes that land there
+            // don't fail with `HeaderNotFound`.
+            let genesis = genesis_block(Network::Regtest);
+            store
+                .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
+                .unwrap();
+            store.update_block_index(0, genesis.block_hash()).unwrap();
+            Self {
+                store,
+                rng: StdRng::seed_from_u64(seed),
+                next_slot: 0,
+            }
+        }
+
+        /// Save a single independent fork header branching off genesis and return its hash.
+        fn add_independent_fork(&mut self) -> BlockHash {
+            let genesis_hash = genesis_block(Network::Regtest).block_hash();
+            self.add_fork_child(genesis_hash)
+        }
+
+        /// Extend a fork chain: save a header whose parent is `prev` and return its hash.
+        fn add_fork_child(&mut self, prev: BlockHash) -> BlockHash {
+            let header = Header {
+                version: Version::from_consensus(2),
+                prev_blockhash: prev,
+                merkle_root: TxMerkleNode::from_byte_array(self.rng.random()),
+                time: self.rng.random(),
+                bits: CompactTarget::from_consensus(self.rng.random()),
+                nonce: self.rng.random(),
+            };
+            let hash = header.block_hash();
+            let slot = self.next_slot;
+            self.next_slot += 1;
+            self.store
+                .save_header(&DiskBlockHeader::InFork(header, slot))
+                .unwrap();
+            hash
+        }
+
+        /// Build a fork chain of `len` blocks branching off genesis and return the tip hash.
+        fn add_fork_chain(&mut self, len: usize) -> BlockHash {
+            let mut tip = genesis_block(Network::Regtest).block_hash();
+            for _ in 0..len {
+                tip = self.add_fork_child(tip);
+            }
+            tip
+        }
+
+        fn derive_tips(&self) -> std::collections::HashSet<BlockHash> {
+            unsafe { self.store.derive_alternative_tips().unwrap() }
+                .into_iter()
+                .collect()
+        }
+    }
+
+    #[test]
+    fn derive_alternative_tips_no_forks() {
+        let fb = ForkBuilder::new(0x0f10_e57a_0000);
+        assert!(fb.derive_tips().is_empty());
+    }
+
+    #[test]
+    fn derive_alternative_tips_independent_forks() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0001);
+
+        let expected: std::collections::HashSet<_> =
+            (0..5).map(|_| fb.add_independent_fork()).collect();
+
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_fork_chain() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0002);
+
+        // Chain of 3: only the tip should be returned.
+        let tip = fb.add_fork_chain(3);
+
+        let tips = fb.derive_tips();
+        assert_eq!(tips.len(), 1);
+        assert!(tips.contains(&tip));
+    }
+
+    #[test]
+    fn derive_alotof_alternative_tips() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0003);
+
+        // 300 tips, go brr and dont crash.
+        let expected: std::collections::HashSet<_> =
+            (0..300).map(|_| fb.add_independent_fork()).collect();
+
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_mixed_chains_and_independent() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0004);
+
+        // Chain A→B (tip: B), independent C (tip: C), chain D→E→F (tip: F)
+        let tip_b = fb.add_fork_chain(2);
+        let tip_c = fb.add_independent_fork();
+        let tip_f = fb.add_fork_chain(3);
+
+        let expected: std::collections::HashSet<_> = [tip_b, tip_c, tip_f].into_iter().collect();
+        assert_eq!(fb.derive_tips(), expected);
     }
 }
