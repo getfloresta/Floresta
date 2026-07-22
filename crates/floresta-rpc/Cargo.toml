@@ -20,6 +20,8 @@ categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 bitcoin = { workspace = true }
 clap = { workspace = true, optional = true }
 corepc-types = { workspace = true }
+dirs = { version = "=6.0.0", default-features = false }
+floresta-common = { workspace = true }
 jsonrpc = { version = "=0.20.0", features = ["bitreq_http"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
