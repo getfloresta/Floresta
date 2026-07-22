@@ -158,6 +158,12 @@ pub trait BlockchainInterface {
 
     /// Returns the current state of our chain.
     fn ibd_state(&self) -> IBDState;
+
+    /// Returns accumulated chain-store health warnings (e.g. index full).
+    ///
+    /// Warnings persist for the process lifetime. Mirrors the `warnings` field returned by
+    /// Bitcoin Core's `getblockchaininfo`.
+    fn get_warnings(&self) -> Vec<String>;
 }
 
 /// [UpdatableChainstate] is a contract that a is expected from a chainstate
@@ -398,6 +404,10 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn ibd_state(&self) -> IBDState {
         T::ibd_state(self)
+    }
+
+    fn get_warnings(&self) -> Vec<String> {
+        T::get_warnings(self)
     }
 }
 

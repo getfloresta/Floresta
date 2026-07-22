@@ -628,6 +628,8 @@ pub struct FlatChainStore {
 
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
+    /// Warnings accumulated when writes fail; surfaced via [`ChainStore::get_warnings`].
+    pending_warnings: Vec<String>,
 }
 
 impl FlatChainStore {
@@ -717,6 +719,7 @@ impl FlatChainStore {
             fork_headers,
             datadir: datadir.to_path_buf(),
             cache: LruCache::new(cache_size).into(),
+            pending_warnings: Vec::new(),
         })
     }
 
@@ -789,6 +792,7 @@ impl FlatChainStore {
             fork_headers,
             datadir: datadir.clone(),
             cache: LruCache::new(cache_size).into(),
+            pending_warnings: Vec::new(),
         })
     }
 
@@ -1125,6 +1129,12 @@ impl FlatChainStore {
     ) -> Result<MutexGuard<'_, CacheType>, PoisonError<MutexGuard<'_, CacheType>>> {
         self.cache.lock()
     }
+
+    fn try_push_warning(&mut self, msg: &str) {
+        if !self.pending_warnings.iter().any(|w| w == msg) {
+            self.pending_warnings.push(msg.to_owned());
+        }
+    }
 }
 
 impl ChainStore for FlatChainStore {
@@ -1272,7 +1282,7 @@ impl ChainStore for FlatChainStore {
         let cache = self.get_cache_mut();
         cache?.put(header.block_hash(), *header);
 
-        match header {
+        let result = match header {
             DiskBlockHeader::FullyValid(_, _)
             | DiskBlockHeader::HeadersOnly(_, _)
             | DiskBlockHeader::AssumedValid(_, _) => unsafe {
@@ -1281,7 +1291,13 @@ impl ChainStore for FlatChainStore {
             DiskBlockHeader::InFork(_, _)
             | DiskBlockHeader::Orphan(_)
             | DiskBlockHeader::InvalidChain(_) => unsafe { self.save_fork_block(*header) },
+        };
+
+        if matches!(result, Err(FlatChainstoreError::FullIndex)) {
+            self.try_push_warning("Warning: block index is full; new blocks cannot be stored.");
         }
+
+        result
     }
 
     fn get_block_hash(&self, height: u32) -> Result<Option<BlockHash>, Self::Error> {
@@ -1299,7 +1315,17 @@ impl ChainStore for FlatChainStore {
     fn update_block_index(&mut self, height: u32, hash: BlockHash) -> Result<(), Self::Error> {
         let index = Index::new(height)?;
 
-        unsafe { self.add_index_entry(hash, index) }
+        let result = unsafe { self.add_index_entry(hash, index) };
+
+        if matches!(result, Err(FlatChainstoreError::FullIndex)) {
+            self.try_push_warning("Warning: block index is full; new blocks cannot be stored.");
+        }
+
+        result
+    }
+
+    fn get_warnings(&self) -> Vec<String> {
+        self.pending_warnings.clone()
     }
 }
 

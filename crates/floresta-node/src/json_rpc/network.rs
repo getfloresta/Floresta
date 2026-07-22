@@ -217,7 +217,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             relay_fee: 0.0,
             incremental_fee: 0.0,
             local_addresses: Vec::new(), // Floresta doesn't track local addresses since it does not accept inbound connections
-            warnings: Vec::new(),
+            warnings: self.chain.get_warnings(),
         })
     }
 }

@@ -79,6 +79,13 @@ pub trait ChainStore {
     /// this store. Implementations should not include the size of any enclosing
     /// directory or unrelated data.
     fn size_on_disk(&self) -> Result<u64, Self::Error>;
+
+    /// Returns accumulated health warnings about this store (e.g. index full).
+    ///
+    /// Warnings persist for the process lifetime and are never cleared.
+    fn get_warnings(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
