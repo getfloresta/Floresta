@@ -47,6 +47,7 @@ use tracing::info;
 use tracing::trace;
 use tracing::warn;
 
+use super::error::Error;
 use crate::get_arg;
 use crate::json_rpc_res;
 use crate::request::Request;
@@ -263,7 +264,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         &mut self,
         client: Arc<Client>,
         request: Request,
-    ) -> Result<Value, super::error::Error> {
+    ) -> Result<Value, Error> {
         // Methods are in alphabetical order
         match request.method.as_str() {
             "blockchain.block.header" => {
@@ -271,11 +272,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = self
                     .chain
                     .get_block_hash(height)
-                    .map_err(|_| super::error::Error::InvalidParams)?;
+                    .map_err(|_| Error::InvalidParams)?;
                 let header = self
                     .chain
                     .get_block_header(&hash)
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
                 let header = serialize_hex(&header);
                 json_rpc_res!(request, header)
             }
@@ -288,7 +289,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let chain_height = self
                     .chain
                     .get_height()
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
 
                 let end_height =
                     (chain_height.saturating_add(1)).min(start_height.saturating_add(count));
@@ -313,11 +314,11 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let (height, hash) = self
                     .chain
                     .get_best_block()
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
                 let header = self
                     .chain
                     .get_block_header(&hash)
-                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                    .map_err(|e| Error::Blockchain(Box::new(e)))?;
                 let result = json!({
                     "height": height,
                     "hex": serialize_hex(&header)
@@ -328,7 +329,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "blockchain.relayfee" => json_rpc_res!(request, 0.00001),
             "blockchain.scripthash.get_balance" => {
                 let script_hash = get_arg!(request, sha256::Hash, 0);
-                let balance = self.address_cache.get_address_balance(&script_hash);
+                let balance = self.address_cache.get_address_balance(&script_hash)?;
                 let result = json!({
                     "confirmed": balance,
                     "unconfirmed": 0
@@ -337,30 +338,20 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
             "blockchain.scripthash.get_history" => {
                 let script_hash = get_arg!(request, sha256::Hash, 0);
-                self.address_cache
-                    .get_address_history(&script_hash)
-                    .map(|transactions| {
-                        let res = Self::process_history(&transactions);
-                        json_rpc_res!(request, res)
-                    })
-                    .unwrap_or_else(|| {
-                        Ok(json!({
-                            "jsonrpc": "2.0",
-                            "result": [],
-                            "id": request.id
-                        }))
-                    })
+                let transactions = self.address_cache.get_address_history(&script_hash)?;
+                let res = Self::process_history(&transactions);
+                json_rpc_res!(request, res)
             }
             "blockchain.scripthash.get_mempool" => json_rpc_res!(request, []),
             "blockchain.scripthash.listunspent" => {
                 let hash = get_arg!(request, sha256::Hash, 0);
-                let utxos = self.address_cache.get_address_utxos(&hash);
-                if utxos.is_none() {
+                let utxos = self.address_cache.get_address_utxos(&hash)?;
+                if utxos.is_empty() {
                     return json_rpc_res!(request, []);
                 }
                 let mut final_utxos = Vec::new();
-                for (utxo, prevout) in utxos.unwrap().into_iter() {
-                    let height = self.address_cache.get_height(&prevout.txid).unwrap();
+                for (utxo, prevout) in utxos.into_iter() {
+                    let height = self.address_cache.get_height(&prevout.txid)?.unwrap_or(0);
 
                     final_utxos.push(json!({
                         "height": height,
@@ -378,7 +369,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                 let history = self.address_cache.get_address_history(&hash);
                 match history {
-                    Some(transactions) if !transactions.is_empty() => {
+                    Ok(transactions) if !transactions.is_empty() => {
                         let res = get_status(transactions);
                         json_rpc_res!(request, res)
                     }
@@ -398,8 +389,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let script = get_arg!(request, ScriptBuf, 0);
                 let hash = get_spk_hash(&script);
 
-                if !self.address_cache.is_address_cached(&hash) {
-                    self.address_cache.cache_address(script.clone());
+                if !self.address_cache.is_address_cached(&hash)? {
+                    self.address_cache.cache_address(script.clone())?;
                     self.addresses_to_scan.push(script);
                     let res = json!({
                         "confirmed": 0,
@@ -408,7 +399,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     return json_rpc_res!(request, res);
                 }
 
-                let balance = self.address_cache.get_address_balance(&hash);
+                let balance = self.address_cache.get_address_balance(&hash)?;
                 let result = json!({
                     "confirmed": balance,
                     "unconfirmed": 0
@@ -419,25 +410,15 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let script = get_arg!(request, ScriptBuf, 0);
                 let hash = get_spk_hash(&script);
 
-                if !self.address_cache.is_address_cached(&hash) {
-                    self.address_cache.cache_address(script.clone());
+                if !self.address_cache.is_address_cached(&hash)? {
+                    self.address_cache.cache_address(script.clone())?;
                     self.addresses_to_scan.push(script);
                     return json_rpc_res!(request, null);
                 }
 
-                self.address_cache
-                    .get_address_history(&hash)
-                    .map(|transactions| {
-                        let res = Self::process_history(&transactions);
-                        json_rpc_res!(request, res)
-                    })
-                    .unwrap_or_else(|| {
-                        Ok(json!({
-                            "jsonrpc": "2.0",
-                            "result": null,
-                            "id": request.id
-                        }))
-                    })
+                let transactions = self.address_cache.get_address_history(&hash)?;
+                let res = Self::process_history(&transactions);
+                json_rpc_res!(request, res)
             }
             "blockchain.scriptpubkey.subscribe" => {
                 let script = get_arg!(request, ScriptBuf, 0);
@@ -446,14 +427,14 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
 
                 let history = self.address_cache.get_address_history(&hash);
                 match history {
-                    Some(transactions) if !transactions.is_empty() => {
+                    Ok(transactions) if !transactions.is_empty() => {
                         let res = get_status(transactions);
                         json_rpc_res!(request, res)
                     }
-                    Some(_) => {
+                    Ok(_) => {
                         json_rpc_res!(request, null)
                     }
-                    None => {
+                    Err(_) => {
                         self.addresses_to_scan.push(script);
                         json_rpc_res!(request, null)
                     }
@@ -469,10 +450,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             // end of experimental endpoints
             "blockchain.transaction.broadcast" => {
                 let tx = get_arg!(request, String, 0);
-                let hex: Vec<_> =
-                    Vec::from_hex(&tx).map_err(|_| super::error::Error::InvalidParams)?;
-                let tx: Transaction =
-                    deserialize(&hex).map_err(|_| super::error::Error::InvalidParams)?;
+                let hex: Vec<_> = Vec::from_hex(&tx).map_err(|_| Error::InvalidParams)?;
+                let tx: Transaction = deserialize(&hex).map_err(|_| Error::InvalidParams)?;
 
                 let txid = tx.compute_txid();
                 if let Err(e) = self
@@ -481,32 +460,36 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     .await?
                 {
                     error!("Could not broadcast transaction {txid} due to {e}");
-                    return Err(super::error::Error::Mempool(Box::new(e)));
+                    return Err(Error::Mempool(Box::new(e)));
                 };
 
-                let updated = self
-                    .address_cache
-                    .cache_mempool_transaction(&tx)
-                    .into_iter()
-                    .map(|spend| (tx.clone(), spend))
-                    .collect::<Vec<_>>();
+                let updated = match self.address_cache.cache_mempool_transaction(&tx) {
+                    Ok(coins) => coins
+                        .into_iter()
+                        .map(|spend| (tx.clone(), spend))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        error!("Error caching mempool transaction: {e}");
+                        vec![]
+                    }
+                };
 
                 self.wallet_notify(&updated);
                 json_rpc_res!(request, txid)
             }
             "blockchain.transaction.get" => {
                 let tx_id = get_arg!(request, Txid, 0);
-                let tx = self.address_cache.get_cached_transaction(&tx_id);
+                let tx = self.address_cache.get_cached_transaction(&tx_id)?;
                 if let Some(tx) = tx {
                     return json_rpc_res!(request, tx);
                 }
 
-                Err(super::error::Error::InvalidParams)
+                Err(Error::InvalidParams)
             }
             "blockchain.transaction.get_merkle" => {
                 let tx_id = get_arg!(request, Txid, 0);
-                let proof = self.address_cache.get_merkle_proof(&tx_id);
-                let height = self.address_cache.get_height(&tx_id);
+                let proof = self.address_cache.get_merkle_proof(&tx_id)?;
+                let height = self.address_cache.get_height(&tx_id)?;
                 if let Some(proof) = proof {
                     let result = json!({
                         "merkle": proof.hashes,
@@ -516,7 +499,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     return json_rpc_res!(request, result);
                 }
 
-                Err(super::error::Error::InvalidParams)
+                Err(Error::InvalidParams)
             }
             //blockchain.transaction.id_from_pos
             // TODO: Create an actual histogram
@@ -551,12 +534,18 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 [format!("Floresta {}", env!("CARGO_PKG_VERSION")), "1.4"]
             ),
 
-            _ => Err(super::error::Error::InvalidParams),
+            _ => Err(Error::InvalidParams),
         }
     }
 
     pub async fn rebroadcast_mempool_transactions(&self) {
-        let unconfirmed = self.address_cache.find_unconfirmed().unwrap();
+        let unconfirmed = match self.address_cache.find_unconfirmed() {
+            Ok(txs) => txs,
+            Err(e) => {
+                error!("Error fetching unconfirmed transactions: {e}");
+                return;
+            }
+        };
         for tx in unconfirmed {
             let txid = tx.compute_txid();
             if let Ok(Err(e)) = self.node_interface.broadcast_transaction(tx.clone()).await {
@@ -611,7 +600,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 }
 
                 self.addresses_to_scan.iter().for_each(|address| {
-                    self.address_cache.cache_address(address.clone());
+                    if let Err(e) = self.address_cache.cache_address(address.clone()) {
+                        error!("Could not cache address: {e}");
+                    }
                 });
 
                 info!("Catching up with addresses {:?}", self.addresses_to_scan);
@@ -627,10 +618,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     /// Usually, we'll rely on compact block filters to speed things up. If
     /// we don't have compact block filters, we may rescan using the older,
     /// more bandwidth-intensive method of actually downloading blocks.
-    async fn rescan_for_addresses(
-        &mut self,
-        addresses: Vec<ScriptBuf>,
-    ) -> Result<(), super::error::Error> {
+    async fn rescan_for_addresses(&mut self, addresses: Vec<ScriptBuf>) -> Result<(), Error> {
         // If compact block filters are enabled, use them. Otherwise, fallback
         // to the "old-school" rescaning.
         if let Some(cfilters) = &self.block_filters {
@@ -650,7 +638,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         start_height: Option<u32>,
         stop_height: Option<u32>,
         addresses: Vec<ScriptBuf>,
-    ) -> Result<(), super::error::Error> {
+    ) -> Result<(), Error> {
         // By default, we look from 1..tip
         let mut _addresses = addresses
             .iter()
@@ -718,10 +706,18 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }]
         });
 
-        let current_height = self.address_cache.get_cache_height();
+        let current_height = match self.address_cache.get_cache_height() {
+            Ok(h) => h,
+            Err(e) => {
+                error!("Could not get cache height: {e}");
+                0
+            }
+        };
 
         if (!self.chain.is_in_ibd() || height % 1000 == 0) && (height > current_height) {
-            self.address_cache.bump_height(height);
+            if let Err(e) = self.address_cache.bump_height(height) {
+                error!("Could not update cache height: {e}");
+            }
         }
 
         if self.chain.get_height().unwrap() == height {
@@ -730,7 +726,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
         }
 
-        let transactions = self.address_cache.block_process(&block, height);
+        let transactions = match self.address_cache.block_process(&block, height) {
+            Ok(txs) => txs,
+            Err(e) => {
+                error!("Error processing block at height {height}: {e}");
+                vec![]
+            }
+        };
 
         self.wallet_notify(&transactions);
     }
@@ -826,9 +828,15 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         for (_, out) in transactions {
             let hash = get_spk_hash(&out.script_pubkey);
             if let Some(client) = self.client_addresses.get(&hash) {
-                let history = self.address_cache.get_address_history(&hash);
+                let history = match self.address_cache.get_address_history(&hash) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        error!("{e}");
+                        continue;
+                    }
+                };
 
-                let status_hash = get_status(history.unwrap());
+                let status_hash = get_status(history);
                 let notify = json!({
                     "jsonrpc": "2.0",
                     "method": "blockchain.scripthash.subscribe",
@@ -1034,20 +1042,22 @@ mod test {
     fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
         let test_id: u32 = rand::random();
         let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
-        let cache = AddressCache::new(cache);
+        let cache = AddressCache::new(cache).unwrap();
 
         // Inserting test transactions in the wallet
         let (transaction, proof) = get_test_transaction();
-        cache.cache_transaction(
-            &transaction,
-            118511,
-            transaction.output[0].value.to_sat(),
-            proof,
-            1,
-            0,
-            false,
-            get_spk_hash(&transaction.output[0].script_pubkey),
-        );
+        cache
+            .cache_transaction(
+                &transaction,
+                118511,
+                transaction.output[0].value.to_sat(),
+                proof,
+                1,
+                0,
+                false,
+                get_spk_hash(&transaction.output[0].script_pubkey),
+            )
+            .unwrap();
 
         Arc::new(cache)
     }

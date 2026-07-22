@@ -83,26 +83,22 @@ impl AddressCacheDatabase for MemoryDatabase {
     }
 
     /// Save a [`CachedAddress`] to the [`MemoryDatabase`].
-    fn save(&self, address: &CachedAddress) {
-        self.get_inner_mut()
-            .map(|mut inner| {
-                inner
-                    .addresses
-                    .insert(address.script_hash, address.to_owned())
-            })
-            .unwrap();
+    fn save(&self, address: &CachedAddress) -> Result<()> {
+        self.get_inner_mut().map(|mut inner| {
+            inner
+                .addresses
+                .insert(address.script_hash, address.to_owned());
+        })
     }
 
     /// Update a [`CachedAddress`] in the [`MemoryDatabase`].
-    fn update(&self, address: &CachedAddress) {
-        self.get_inner_mut()
-            .map(|mut inner| {
-                inner
-                    .addresses
-                    .entry(address.script_hash)
-                    .and_modify(|addr| addr.clone_from(address));
-            })
-            .unwrap();
+    fn update(&self, address: &CachedAddress) -> Result<()> {
+        self.get_inner_mut().map(|mut inner| {
+            inner
+                .addresses
+                .entry(address.script_hash)
+                .and_modify(|addr| addr.clone_from(address));
+        })
     }
 
     /// Get the height which [`CachedAddress`]es are cached to.
@@ -129,11 +125,8 @@ impl AddressCacheDatabase for MemoryDatabase {
     }
 
     /// Get a [`CachedTransaction`] from the [`MemoryDatabase`].
-    fn get_transaction(&self, txid: &bitcoin::Txid) -> Result<CachedTransaction> {
-        if let Some(tx) = self.get_inner()?.transactions.get(txid) {
-            return Ok(tx.clone());
-        }
-        Err(MemoryDatabaseError::PoisonedLock)
+    fn get_transaction(&self, txid: &bitcoin::Txid) -> Result<Option<CachedTransaction>> {
+        Ok(self.get_inner()?.transactions.get(txid).cloned())
     }
 
     /// Save a [`CachedTransaction`] to the [`MemoryDatabase`].

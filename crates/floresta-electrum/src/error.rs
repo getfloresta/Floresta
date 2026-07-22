@@ -4,6 +4,8 @@ use core::error;
 use core::fmt;
 
 use floresta_common::impl_error_from;
+use floresta_watch_only::WatchOnlyError;
+use floresta_watch_only::kv_database::KvDatabaseError;
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
@@ -51,3 +53,9 @@ impl error::Error for Error {
 impl_error_from!(Error, serde_json::Error, Parsing);
 impl_error_from!(Error, std::io::Error, Io);
 impl_error_from!(Error, oneshot::error::RecvError, NodeHandle);
+
+impl From<WatchOnlyError<KvDatabaseError>> for Error {
+    fn from(e: WatchOnlyError<KvDatabaseError>) -> Self {
+        Self::Blockchain(Box::new(e))
+    }
+}

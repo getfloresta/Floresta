@@ -106,7 +106,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         let tx = self
             .wallet
-            .get_transaction(&tx_id)
+            .get_transaction(&tx_id)?
             .ok_or(JsonRpcError::TxNotFound)?;
 
         match verbosity {
@@ -123,7 +123,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         info!("Descriptor pushed: {descriptor}");
         debug!("Rescanning with block filters for addresses: {addresses:?}");
 
-        let addresses = self.wallet.get_cached_addresses();
+        let addresses = self.wallet.get_cached_addresses()?;
         let wallet = self.wallet.clone();
         let cfilters = self
             .block_filter_storage
@@ -160,7 +160,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::InInitialBlockDownload);
         }
 
-        let addresses = self.wallet.get_cached_addresses();
+        let addresses = self.wallet.get_cached_addresses()?;
 
         if addresses.is_empty() {
             return Err(JsonRpcError::NoAddressesToRescan);
@@ -528,7 +528,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .map_err(|_| JsonRpcError::Chain)?
                     .ok_or(JsonRpcError::BlockNotFound)?;
 
-                wallet.block_process(&block, height);
+                if let Err(e) = wallet.block_process(&block, height) {
+                    error!("Error processing block at height {height}: {e}");
+                }
             }
         }
 
