@@ -411,6 +411,34 @@ class FlorestaTestFramework:
 
         self.log.debug("All nodes are synced")
 
+    def generate_blocks_and_sync(
+        self, blocks: int, is_finished_ibd: bool = True, address: None | str = None
+    ):
+        """Generate blocks and wait for all nodes to sync."""
+        mine_node = None
+        for node in self._nodes:
+            if address is not None and node.variant == NodeType.BITCOIND:
+                mine_node = node
+                break
+
+            if address is None and node.variant in (
+                NodeType.UTREEXOD,
+                NodeType.BITCOIND,
+            ):
+                mine_node = node
+                break
+
+        if mine_node is None:
+            raise AssertionError("No suitable node found for mining blocks")
+
+        self.log.info(f"Generating {blocks} blocks with node '{mine_node.variant}'")
+        if address is not None:
+            mine_node.rpc.generate_block_to_address(blocks, address)
+        else:
+            mine_node.rpc.generate(blocks)
+
+        self.wait_for_sync_nodes(is_finished_ibd=is_finished_ibd)
+
     def add_p2p_connection(
         self,
         node: Node,

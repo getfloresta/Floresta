@@ -24,11 +24,12 @@ class ElectrumClient(BaseClient):
         """
         return self.request("blockchain.block.header", [block_hash])
 
-    def get_headers(self, start_height: int, stop_height: int):
+    def block_headers(self, start_height: int, count: int):
         """
-        Returns all headers in the best known tip.
+        Return a chunk of block headers from the main chain, starting at `start_height` and
+        returning at most `count` headers.
         """
-        return self.request("blockchain.block.headers", [start_height, stop_height])
+        return self.request("blockchain.block.headers", [start_height, count])
 
     def estimate_fee(self, target: int):
         """

@@ -45,7 +45,7 @@ class BitcoinRPC(BaseRPC):
         """
         return self.perform_request("verifytxoutproof", params=[proof])
 
-    def generate_block(self, nblocks: int) -> list:
+    def generate(self, nblocks: int) -> list:
         """
         Mine blocks immediately to a address(bcrt1q3ml87jemlfvk7lq8gfs7pthvj5678ndnxnw9ch) using
         `generate_block_to_address(nblocks, address)`
