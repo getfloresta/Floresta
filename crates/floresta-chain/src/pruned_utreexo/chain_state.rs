@@ -1370,6 +1370,27 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .any(|subscriber| subscriber.wants_spent_utxos())
             .then(|| inputs.clone());
 
+        let avg_fee_rate = {
+            let mut total_fees: u64 = 0;
+            let mut total_weight: u64 = 0;
+            for tx in block.txdata.iter().skip(1) {
+                let total_in: u64 = tx
+                    .input
+                    .iter()
+                    .filter_map(|txin| inputs.get(&txin.previous_output))
+                    .map(|utxo| utxo.txout.value.to_sat())
+                    .sum();
+                let total_out: u64 = tx.output.iter().map(|txout| txout.value.to_sat()).sum();
+
+                total_fees += total_in.saturating_sub(total_out);
+                total_weight += tx.weight().to_wu();
+            }
+            total_fees
+                .checked_div(total_weight)
+                .map(|r| r * 4000)
+                .unwrap_or(0)
+        };
+
         self.validate_block_no_acc(block, height, inputs)?;
         let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
 
@@ -1390,6 +1411,20 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
 
         // Notify others we have a new block
         self.notify(block, height, inputs_for_notifications.as_ref());
+
+        let mut inner = write_lock!(self);
+        inner.chainstore.save_block_fee_rate(height, avg_fee_rate)?;
+        let rates: Vec<u64> = (height.saturating_sub(60)..=height)
+            .filter_map(|h| inner.chainstore.get_block_fee_rate(h).ok().flatten())
+            .collect();
+        if !rates.is_empty() {
+            inner.fee_estimation = (
+                median(&rates[rates.len().saturating_sub(6)..]),
+                median(&rates[rates.len().saturating_sub(30)..]),
+                median(rates.as_slice()),
+            )
+        }
+
         Ok(height)
     }
 
@@ -1523,7 +1558,19 @@ macro_rules! write_lock {
         $obj.inner.write()
     };
 }
-
+fn median(data: &[u64]) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort();
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) as f64 / 2.0
+    } else {
+        sorted[mid] as f64
+    }
+}
 #[cfg(all(test, feature = "flat-chainstore"))]
 mod test {
     use std::format;

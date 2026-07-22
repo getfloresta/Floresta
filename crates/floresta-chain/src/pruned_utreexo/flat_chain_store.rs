@@ -628,6 +628,9 @@ pub struct FlatChainStore {
 
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
+
+    // Binary for saving fee rate
+    fee_rate_file: File,
 }
 
 impl FlatChainStore {
@@ -660,6 +663,7 @@ impl FlatChainStore {
         let metadata_path = datadir.join("metadata.bin");
         let fork_headers_path = datadir.join("fork_headers.bin");
         let accumulator_file_path = datadir.join("accumulators.bin");
+        let fee_rate_file_path = datadir.join("fee_rates.bin");
 
         let index_map_file_size = index_size * size_of::<u32>();
         let index_map = unsafe { Self::init_file(&index_path, index_map_file_size, file_mode)? };
@@ -709,9 +713,17 @@ impl FlatChainStore {
             .truncate(false)
             .open(accumulator_file_path)?;
 
+        let fee_rate_file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(fee_rate_file_path)?;
+
         Ok(Self {
             headers,
             accumulator_file,
+            fee_rate_file,
             metadata,
             block_index: BlockIndex::new(index_map, index_size),
             fork_headers,
@@ -762,6 +774,7 @@ impl FlatChainStore {
         let headers_file_path = datadir.join("headers.bin");
         let fork_file_path = datadir.join("fork_headers.bin");
         let accumulator_file_path = datadir.join("accumulators.bin");
+        let fee_rate_file_path = datadir.join("fee_rates.bin");
 
         let index_file_size = metadata.index_capacity * size_of::<u32>();
         let headers_file_size = metadata.headers_file_size * size_of::<HashedDiskHeader>();
@@ -781,9 +794,17 @@ impl FlatChainStore {
             .truncate(false)
             .open(accumulator_file_path)?;
 
+        let fee_rate_file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(fee_rate_file_path)?;
+
         Ok(Self {
             headers,
             accumulator_file,
+            fee_rate_file,
             metadata: metadata_file,
             block_index: BlockIndex::new(index_map, metadata.index_capacity),
             fork_headers,
@@ -1300,6 +1321,25 @@ impl ChainStore for FlatChainStore {
         let index = Index::new(height)?;
 
         unsafe { self.add_index_entry(hash, index) }
+    }
+
+    fn save_block_fee_rate(&mut self, height: u32, fee_rate: u64) -> Result<(), Self::Error> {
+        let pos = height as u64 * 8;
+        self.fee_rate_file.seek(SeekFrom::Start(pos))?;
+        self.fee_rate_file.write_all(&fee_rate.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn get_block_fee_rate(&mut self, height: u32) -> Result<Option<u64>, Self::Error> {
+        let pos = height as u64 * 8;
+        let file_len = self.fee_rate_file.metadata()?.len();
+        if pos + 8 > file_len {
+            return Ok(None);
+        }
+        let mut buf = [0u8; 8];
+        self.fee_rate_file.seek(SeekFrom::Start(pos))?;
+        self.fee_rate_file.read_exact(&mut buf)?;
+        Ok(Some(u64::from_le_bytes(buf)))
     }
 }
 
