@@ -5,10 +5,10 @@ use std::vec;
 
 use bitcoin::BlockHash;
 use bitcoin::Txid;
-use corepc_types::v29::GetTxOut;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetBlockchainInfo;
-use corepc_types::v30::GetDeploymentInfo;
+use corepc_types::v31::GetAddrManInfo;
+use corepc_types::v31::GetBlockchainInfo;
+use corepc_types::v31::GetDeploymentInfo;
+use corepc_types::v31::GetTxOut;
 use serde_json::Number;
 use serde_json::Value;
 

@@ -17,16 +17,18 @@ use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
+use bitcoin::hex;
 use bitcoin::hex::DisplayHex;
 use corepc_types::ScriptPubKey;
-use corepc_types::v29::GetTxOut;
-use corepc_types::v30::DeploymentInfo;
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-use corepc_types::v30::GetBlockchainInfo;
-use corepc_types::v30::GetDeploymentInfo;
-use floresta_chain::buried_deployments_for;
+use corepc_types::v31::CoinbaseTransaction;
+use corepc_types::v31::DeploymentInfo;
+use corepc_types::v31::GetBlockHeaderVerbose;
+use corepc_types::v31::GetBlockVerboseOne;
+use corepc_types::v31::GetBlockchainInfo;
+use corepc_types::v31::GetDeploymentInfo;
+use corepc_types::v31::GetTxOut;
 use floresta_chain::extensions::HeaderExt;
+use floresta_chain::extensions::NetworkExt;
 use floresta_chain::extensions::WorkExt;
 use floresta_wire::node_interface::ChainMethods;
 use miniscript::descriptor::checksum;
@@ -213,9 +215,35 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             let stripped_size_bytes = Header::SIZE + tx_count_varint_size + total_tx_base_size;
 
             let stripped_size = Some(stripped_size_bytes.try_into()?);
+            let size = block.total_size().try_into()?;
+            let weight = block.weight().to_wu();
 
-            let tx = block
-                .txdata
+            let transactions = block.txdata;
+            let coinbase = transactions
+                .first()
+                .ok_or(JsonRpcError::InvalidCoinbaseTransaction(
+                    "The received block does not have a coinbase transaction".to_string(),
+                ))?;
+            let input_coinbase = coinbase.input.first().ok_or(
+                // This scenario is impossible. A valid block must have a coinbase transaction.
+                JsonRpcError::InvalidCoinbaseTransaction(
+                    "The received block has an invalid coinbase".to_string(),
+                ),
+            )?;
+
+            let coinbase_tx = CoinbaseTransaction {
+                version: coinbase.version.0,
+                locktime: coinbase.lock_time.to_consensus_u32(),
+                witness: input_coinbase
+                    .witness
+                    .into_iter()
+                    .next()
+                    .map(|w| w.to_hex_string(hex::Case::Lower)),
+                sequence: input_coinbase.sequence.0,
+                coinbase: input_coinbase.script_sig.to_hex_string(),
+            };
+
+            let tx = transactions
                 .iter()
                 .map(|tx| tx.compute_txid().to_string())
                 .collect();
@@ -230,12 +258,13 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 merkle_root: header_fields.merkle_root,
                 nonce: header_fields.nonce,
                 previous_block_hash: header_fields.previous_block_hash,
-                size: block.total_size().try_into()?,
+                size,
                 time: header_fields.time,
+                coinbase_tx,
                 tx,
                 version: header_fields.version,
                 version_hex: header_fields.version_hex,
-                weight: block.weight().to_wu(),
+                weight,
                 median_time: Some(header_fields.median_time),
                 n_tx: header_fields.n_tx.into(),
                 next_block_hash: header_fields.next_block_hash,
@@ -379,22 +408,29 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         let mut deployments = BTreeMap::new();
 
-        for &(name, activation_height) in buried_deployments_for(self.network) {
+        for &(name, activation_height) in self.network.buried_deployments_for() {
             deployments.insert(
-                name.to_string(),
+                name.to_deployment_name().into(),
                 DeploymentInfo {
                     deployment_type: "buried".to_string(),
                     height: Some(activation_height),
-                    active: height >= activation_height,
+                    active: height + 1 >= activation_height,
                     bip9: None,
                 },
             );
         }
 
+        let script_flags = self
+            .network
+            .get_script_flags(target_hash, height)
+            .into_iter()
+            .collect();
+
         Ok(GetDeploymentInfo {
             hash: target_hash.to_string(),
             height,
             deployments,
+            script_flags,
         })
     }
 

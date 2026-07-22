@@ -10,6 +10,7 @@ use std::time::UNIX_EPOCH;
 use bitcoin::Network;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
+use floresta_chain::extensions::NetworkExt;
 use floresta_common::Ema;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
@@ -374,7 +375,7 @@ where
 
         tokio::task::spawn_blocking(move || {
             let default_port = BitcoinSocketAddr::default_p2p_port(network);
-            let dns_seeds = floresta_chain::get_chain_dns_seeds(network);
+            let dns_seeds = network.get_chain_dns_seeds();
 
             let mut addresses = Vec::new();
             for seed in &dns_seeds {
