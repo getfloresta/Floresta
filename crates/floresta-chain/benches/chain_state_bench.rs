@@ -110,7 +110,7 @@ fn initialize_chainstore_benchmark(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let test_id = rand::random::<u64>();
-                FlatChainStoreConfig::new(format!("./tmp-db/{test_id}/"))
+                FlatChainStoreConfig::new_with_path(format!("./tmp-db/{test_id}/"))
             },
             |config| FlatChainStore::new(config).unwrap(),
             BatchSize::SmallInput,
@@ -252,7 +252,7 @@ fn chainstore_checksum_benchmark(c: &mut Criterion) {
     let setup_chain = || {
         let test_id = rand::random::<u64>();
         // The default config with the big mmap sizes that we use in `florestad`
-        let config = FlatChainStoreConfig::new(format!("./tmp-db/{test_id}/"));
+        let config = FlatChainStoreConfig::new_with_path(format!("./tmp-db/{test_id}/"));
         let mut chainstore = FlatChainStore::new(config).unwrap();
 
         headers.iter().enumerate().for_each(|(i, header)| {
