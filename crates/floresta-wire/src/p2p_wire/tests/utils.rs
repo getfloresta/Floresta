@@ -9,12 +9,15 @@ use std::time::Instant;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
+use bitcoin::Transaction;
+use bitcoin::Txid;
 use bitcoin::block::Header;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::encode;
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::hex::FromHex;
 use bitcoin::p2p::ServiceFlags;
+use bitcoin::p2p::message_filter::CFHeaders;
 use derive_more::Constructor;
 use floresta_chain::AssumeValidArg;
 use floresta_chain::ChainState;
@@ -35,6 +38,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use zstd;
 
@@ -48,6 +53,8 @@ use crate::node::NodeRequest;
 use crate::node::PeerStatus;
 use crate::node::UtreexoNode;
 use crate::node::sync_ctx::SyncNode;
+use crate::node_handle::NodeHandle;
+use crate::node_interface::NetworkMethods;
 use crate::p2p_wire::block_proof::UtreexoProof;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
@@ -59,14 +66,25 @@ pub struct UtreexoRoots {
     numleaves: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 #[derive(Debug, Constructor)]
 pub struct SimulatedPeer {
     headers: Vec<Header>,
     blocks: HashMap<BlockHash, Block>,
     accs: HashMap<BlockHash, Vec<u8>>,
+    transactions: HashMap<Txid, Transaction>,
+    cfilter_headers: HashMap<BlockHash, CFHeaders>,
+    block_request_behavior: BlockRequestBehavior,
     node_tx: UnboundedSender<NodeNotification>,
     node_rx: UnboundedReceiver<NodeRequest>,
     peer_id: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BlockRequestBehavior {
+    Reply,
+    Ignore,
+    Disconnect,
 }
 
 impl SimulatedPeer {
@@ -120,6 +138,17 @@ impl SimulatedPeer {
                         .unwrap();
                 }
                 NodeRequest::GetBlock(hashes) => {
+                    if matches!(self.block_request_behavior, BlockRequestBehavior::Ignore) {
+                        continue;
+                    }
+
+                    if matches!(
+                        self.block_request_behavior,
+                        BlockRequestBehavior::Disconnect
+                    ) {
+                        break;
+                    }
+
                     for hash in hashes {
                         let block = self.blocks.get(&hash).unwrap().clone();
 
@@ -145,6 +174,22 @@ impl SimulatedPeer {
                         .send(NodeNotification::FromPeer(self.peer_id, peer_msg, now))
                         .unwrap();
                 }
+                NodeRequest::MempoolTransaction(txid) => {
+                    let tx = self.transactions.get(&txid).unwrap().clone();
+
+                    let peer_msg = PeerMessages::Transaction(tx);
+                    self.node_tx
+                        .send(NodeNotification::FromPeer(self.peer_id, peer_msg, now))
+                        .unwrap();
+                }
+                NodeRequest::GetCFHeaders { stop_hash, .. } => {
+                    let cfheaders = self.cfilter_headers.get(&stop_hash).unwrap().clone();
+
+                    let peer_msg = PeerMessages::CFHeaders(cfheaders);
+                    self.node_tx
+                        .send(NodeNotification::FromPeer(self.peer_id, peer_msg, now))
+                        .unwrap();
+                }
                 _ => {}
             }
         }
@@ -159,16 +204,30 @@ impl SimulatedPeer {
     }
 }
 
-pub fn create_peer(
+#[allow(clippy::too_many_arguments)]
+fn create_peer(
     headers: Vec<Header>,
     blocks: HashMap<BlockHash, Block>,
     accs: HashMap<BlockHash, Vec<u8>>,
+    transactions: HashMap<Txid, Transaction>,
+    cfilter_headers: HashMap<BlockHash, CFHeaders>,
+    block_request_behavior: BlockRequestBehavior,
     node_sender: UnboundedSender<NodeNotification>,
     sender: UnboundedSender<NodeRequest>,
     node_rcv: UnboundedReceiver<NodeRequest>,
     peer_id: u32,
 ) -> LocalPeerView {
-    let mut peer = SimulatedPeer::new(headers, blocks, accs, node_sender, node_rcv, peer_id);
+    let mut peer = SimulatedPeer::new(
+        headers,
+        blocks,
+        accs,
+        transactions,
+        cfilter_headers,
+        block_request_behavior,
+        node_sender,
+        node_rcv,
+        peer_id,
+    );
     task::spawn(async move {
         peer.run().await;
     });
@@ -197,6 +256,7 @@ pub fn get_node_config(
         network,
         pow_fraud_proofs,
         datadir: datadir.as_ref().into(),
+        disable_dns_seeds: true,
         user_agent: "node_test".to_string(),
         ..Default::default()
     }
@@ -284,12 +344,247 @@ pub fn mutated_block_h7() -> Block {
     ).unwrap()
 }
 
-#[derive(Clone, Constructor)]
+#[derive(Clone)]
 /// The chain data that our simulated peer will have
 pub struct PeerData {
     headers: Vec<Header>,
     blocks: HashMap<BlockHash, Block>,
     accs: HashMap<BlockHash, Vec<u8>>,
+    transactions: HashMap<Txid, Transaction>,
+    cfilter_headers: HashMap<BlockHash, CFHeaders>,
+    block_request_behavior: BlockRequestBehavior,
+}
+
+impl PeerData {
+    pub fn new(
+        headers: Vec<Header>,
+        blocks: HashMap<BlockHash, Block>,
+        accs: HashMap<BlockHash, Vec<u8>>,
+    ) -> Self {
+        Self {
+            headers,
+            blocks,
+            accs,
+            transactions: HashMap::new(),
+            cfilter_headers: HashMap::new(),
+            block_request_behavior: BlockRequestBehavior::Reply,
+        }
+    }
+
+    pub fn disconnecting_on_block_request(
+        headers: Vec<Header>,
+        blocks: HashMap<BlockHash, Block>,
+        accs: HashMap<BlockHash, Vec<u8>>,
+    ) -> Self {
+        Self {
+            headers,
+            blocks,
+            accs,
+            transactions: HashMap::new(),
+            cfilter_headers: HashMap::new(),
+            block_request_behavior: BlockRequestBehavior::Disconnect,
+        }
+    }
+
+    pub fn ignoring_block_requests(
+        headers: Vec<Header>,
+        blocks: HashMap<BlockHash, Block>,
+        accs: HashMap<BlockHash, Vec<u8>>,
+    ) -> Self {
+        Self {
+            headers,
+            blocks,
+            accs,
+            transactions: HashMap::new(),
+            cfilter_headers: HashMap::new(),
+            block_request_behavior: BlockRequestBehavior::Ignore,
+        }
+    }
+
+    pub fn with_transaction(mut self, transaction: Transaction) -> Self {
+        self.transactions
+            .insert(transaction.compute_txid(), transaction);
+        self
+    }
+
+    pub fn with_cfilter_headers(mut self, cfheaders: CFHeaders) -> Self {
+        self.cfilter_headers.insert(cfheaders.stop_hash, cfheaders);
+        self
+    }
+}
+
+pub struct NodeHandleTestHarness {
+    pub handle: NodeHandle,
+    kill_signal: Arc<RwLock<bool>>,
+    node_sender: UnboundedSender<NodeNotification>,
+    node_task: JoinHandle<()>,
+}
+
+impl NodeHandleTestHarness {
+    pub async fn wait_for_peers(&self, expected: usize) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let peers = self.handle.get_peer_info().await.unwrap();
+                if peers.len() == expected {
+                    break;
+                }
+
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    pub async fn shutdown(self) {
+        *self.kill_signal.write().await = true;
+        self.node_sender
+            .send(NodeNotification::DnsSeedAddresses(Vec::new()))
+            .unwrap();
+
+        timeout(Duration::from_secs(5), self.node_task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+async fn run_node_handle_test_node(
+    mut node: UtreexoNode<Arc<ChainState<FlatChainStore>>, SyncNode>,
+) {
+    loop {
+        let Some(notification) = node.node_rx.recv().await else {
+            break;
+        };
+
+        if *node.kill_signal.read().await {
+            break;
+        }
+
+        match notification {
+            NodeNotification::FromUser(request, responder) => {
+                node.perform_user_request(request, responder).await;
+            }
+            NodeNotification::DnsSeedAddresses(addresses) => {
+                node.address_man.push_addresses(&addresses);
+            }
+            NodeNotification::FromPeer(peer, message, time) => {
+                node.register_message_time(&message, peer, time);
+
+                let Some(unhandled) = node.handle_peer_msg_common(message, peer).unwrap() else {
+                    continue;
+                };
+
+                match unhandled {
+                    PeerMessages::Ready(version) => {
+                        node.handle_peer_ready(peer, version).unwrap();
+                    }
+                    PeerMessages::Block(block) => {
+                        node.request_block_proof(block, peer).unwrap();
+                    }
+                    PeerMessages::UtreexoProof(uproof) => {
+                        node.attach_proof(uproof, peer).unwrap();
+                    }
+                    PeerMessages::Disconnected(idx) => {
+                        let _ = node.handle_disconnection(peer, idx);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if *node.kill_signal.read().await {
+            break;
+        }
+    }
+
+    node.shutdown();
+}
+
+pub async fn setup_node_handle_test(
+    peers: Vec<PeerData>,
+    pow_fraud_proofs: bool,
+    network: Network,
+    datadir: impl AsRef<Path>,
+    num_blocks: usize,
+) -> NodeHandleTestHarness {
+    let config = FlatChainStoreConfig::new(&datadir);
+
+    let chainstore = FlatChainStore::new(config).unwrap();
+    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
+    let chain = ChainState::open(chainstore, network, AssumeValidArg::Disabled).unwrap();
+    let chain = Arc::new(chain);
+
+    let mut headers = signet_headers();
+    headers.remove(0);
+    headers.truncate(num_blocks);
+    for header in headers {
+        chain.accept_header(header).unwrap();
+    }
+
+    let config = get_node_config(&datadir, network, pow_fraud_proofs);
+    let kill_signal = Arc::new(RwLock::new(false));
+    let mut node = UtreexoNode::<Arc<ChainState<FlatChainStore>>, SyncNode>::new(
+        config,
+        chain.clone(),
+        mempool,
+        None,
+        kill_signal.clone(),
+        AddressMan::new(None, &[]),
+    )
+    .unwrap();
+
+    for (i, peer) in peers.into_iter().enumerate() {
+        let (sender, receiver) = unbounded_channel();
+        let peer_id = i as u32;
+
+        let peer = create_peer(
+            peer.headers,
+            peer.blocks,
+            peer.accs,
+            peer.transactions,
+            peer.cfilter_headers,
+            peer.block_request_behavior,
+            node.node_tx.clone(),
+            sender.clone(),
+            receiver,
+            peer_id,
+        );
+
+        if i == 0 {
+            node.fixed_peers = vec![peer.address.clone()];
+        }
+
+        node.peers.insert(peer_id, peer);
+        for service in [
+            service_flags::UTREEXO.into(),
+            ServiceFlags::COMPACT_FILTERS,
+            ServiceFlags::NETWORK,
+        ] {
+            node.peer_by_service
+                .entry(service)
+                .or_default()
+                .push(peer_id);
+        }
+
+        node.inflight.insert(
+            InflightRequests::Connect(peer_id),
+            (peer_id, Instant::now()),
+        );
+    }
+
+    node.peer_id_count = node.peers.len() as u32;
+
+    let handle = node.get_handle();
+    let node_sender = node.node_tx.clone();
+    let node_task = task::spawn(run_node_handle_test_node(node));
+
+    NodeHandleTestHarness {
+        handle,
+        kill_signal,
+        node_sender,
+        node_task,
+    }
 }
 
 pub async fn setup_node(
@@ -333,6 +628,9 @@ pub async fn setup_node(
             peer.headers,
             peer.blocks,
             peer.accs,
+            peer.transactions,
+            peer.cfilter_headers,
+            peer.block_request_behavior,
             node.node_tx.clone(),
             sender.clone(),
             receiver,
@@ -363,6 +661,8 @@ pub async fn setup_node(
             (peer_id, Instant::now()),
         );
     }
+
+    node.peer_id_count = node.peers.len() as u32;
 
     timeout(Duration::from_secs(100), node.run(|_| {}))
         .await
