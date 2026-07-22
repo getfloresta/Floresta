@@ -19,6 +19,7 @@ use bitcoin::Target;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::Txid;
+use bitcoin::absolute;
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::blockdata::Weight;
 #[cfg(feature = "bitcoinkernel")]
@@ -101,6 +102,23 @@ impl From<Network> for Consensus {
 }
 
 impl Consensus {
+    /// Returns the block-finality lock-time cutoff for a candidate block.
+    ///
+    /// Before CSV/BIP113 activation this is the block header time. After activation
+    /// it is the previous block's Median Time Past (MTP).
+    pub(crate) fn block_lock_time_cutoff<E>(
+        &self,
+        height: u32,
+        header: &BlockHeader,
+        previous_median_time_past: impl FnOnce() -> Result<u32, E>,
+    ) -> Result<u32, E> {
+        if height >= self.parameters.csv_activation_height {
+            previous_median_time_past()
+        } else {
+            Ok(header.time)
+        }
+    }
+
     /// Returns the amount of block subsidy to be paid in a block, given its height.
     ///
     /// The Bitcoin Core source can be found [here](https://github.com/bitcoin/bitcoin/blob/2b211b41e36f914b8d0487e698b619039cc3c8e2/src/validation.cpp#L1501-L1512).
@@ -168,6 +186,7 @@ impl Consensus {
     #[allow(unused)]
     pub fn verify_block_transactions(
         height: u32,
+        lock_time_cutoff: u32,
         mut utxos: HashMap<OutPoint, UtxoData>,
         transactions: &[Transaction],
         subsidy: Amount,
@@ -183,6 +202,10 @@ impl Consensus {
         let mut fee = Amount::ZERO;
 
         for (n, transaction) in transactions.iter().enumerate() {
+            if !Self::is_final_transaction(transaction, height, lock_time_cutoff) {
+                Err(BlockValidationErrors::NonFinalTransaction)?;
+            }
+
             if n == 0 {
                 if !transaction.is_coinbase() {
                     Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
@@ -628,13 +651,34 @@ impl Consensus {
         }
     }
 
-    #[allow(unused)]
-    fn validate_locktime(
-        input: &TxIn,
-        transaction: &Transaction,
-        height: u32,
-    ) -> Result<(), BlockValidationErrors> {
-        unimplemented!("validate_locktime")
+    /// Returns whether a transaction's absolute lock time is final for a candidate block.
+    ///
+    /// Zero `nLockTime` is final. Otherwise, height and time locks must be below
+    /// `height` and `lock_time_cutoff`, respectively. `nLockTime` is disabled when
+    /// every input has a final `nSequence`.
+    ///
+    /// The cutoff is the block timestamp before BIP113 and the previous block's
+    /// Median Time Past (MTP) afterward.
+    ///
+    /// Mirrors Bitcoin Core's IsFinalTx:
+    /// <https://github.com/bitcoin/bitcoin/blob/v31.0/src/consensus/tx_verify.cpp#L17-L37>
+    fn is_final_transaction(transaction: &Transaction, height: u32, lock_time_cutoff: u32) -> bool {
+        if transaction.lock_time == absolute::LockTime::ZERO {
+            return true;
+        }
+
+        let lock_time_reached = match transaction.lock_time {
+            absolute::LockTime::Blocks(lock_height) => lock_height.to_consensus_u32() < height,
+            absolute::LockTime::Seconds(lock_time) => {
+                lock_time.to_consensus_u32() < lock_time_cutoff
+            }
+        };
+
+        lock_time_reached
+            || transaction
+                .input
+                .iter()
+                .all(|input| input.sequence.is_final())
     }
 
     /// Validates the script size and the number of sigops in a prevout scriptPubKey or scriptSig.
@@ -968,7 +1012,6 @@ mod tests {
     use bitcoin::TxIn;
     use bitcoin::TxOut;
     use bitcoin::Txid;
-    use bitcoin::Witness;
     use bitcoin::absolute::LockTime;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -989,41 +1032,43 @@ mod tests {
 
     use super::*;
 
+    #[macro_export]
     /// Macro for creating a TxOut
     macro_rules! txout {
         ($sats:expr, $script:expr) => {
-            TxOut {
-                value: Amount::from_sat($sats),
+            bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat($sats),
                 script_pubkey: $script,
             }
         };
     }
 
+    #[macro_export]
     /// Macro for constructing a legacy [`TxIn`] with optional scriptSig and sequence number.
     /// Needs the outpoint and, if not provided, defaults to empty scriptSig and `Sequence::MAX`.
     macro_rules! txin {
         ($outpoint:expr) => {
-            TxIn {
+            bitcoin::TxIn {
                 previous_output: $outpoint,
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: Witness::new(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
             }
         };
         ($outpoint:expr, $script:expr) => {
-            TxIn {
+            bitcoin::TxIn {
                 previous_output: $outpoint,
                 script_sig: $script,
-                sequence: Sequence::MAX,
-                witness: Witness::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
             }
         };
         ($outpoint:expr, $script:expr, $sequence:expr) => {
-            TxIn {
+            bitcoin::TxIn {
                 previous_output: $outpoint,
                 script_sig: $script,
                 sequence: $sequence,
-                witness: Witness::new(),
+                witness: bitcoin::Witness::new(),
             }
         };
     }
@@ -1045,6 +1090,104 @@ mod tests {
             txid: Txid::all_zeros(),
             vout: 0,
         }
+    }
+
+    fn tx_with_lock_time(lock_time: LockTime, sequence: Sequence) -> Transaction {
+        Transaction {
+            version: Version::TWO,
+            lock_time,
+            input: vec![txin!(dummy_outpoint(), ScriptBuf::new(), sequence)],
+            output: vec![txout!(1, ScriptBuf::new())],
+        }
+    }
+
+    const ZERO_HEIGHT: u32 = 0;
+    const ZERO_BLOCK_TIME: u32 = 0;
+
+    #[test]
+    fn final_transaction_accepts_final_sequence() {
+        let height_locked = tx_with_lock_time(LockTime::from_height(101).unwrap(), Sequence::MAX);
+        let time_locked =
+            tx_with_lock_time(LockTime::from_time(500_000_001).unwrap(), Sequence::MAX);
+
+        assert!(Consensus::is_final_transaction(
+            &height_locked,
+            ZERO_HEIGHT,
+            ZERO_BLOCK_TIME
+        ));
+        assert!(Consensus::is_final_transaction(
+            &time_locked,
+            ZERO_HEIGHT,
+            ZERO_BLOCK_TIME
+        ));
+    }
+
+    #[test]
+    fn final_transaction_checks_height_locks_strictly() {
+        let height = 100;
+
+        let below_height = tx_with_lock_time(
+            LockTime::from_height(height - 1).unwrap(),
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let at_height = tx_with_lock_time(
+            LockTime::from_height(height).unwrap(),
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let above_height = tx_with_lock_time(
+            LockTime::from_height(height + 1).unwrap(),
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+
+        assert!(Consensus::is_final_transaction(
+            &below_height,
+            height,
+            ZERO_BLOCK_TIME
+        ));
+        assert!(!Consensus::is_final_transaction(
+            &at_height,
+            height,
+            ZERO_BLOCK_TIME
+        ));
+        assert!(!Consensus::is_final_transaction(
+            &above_height,
+            height,
+            ZERO_BLOCK_TIME
+        ));
+    }
+
+    #[test]
+    fn final_transaction_checks_time_locks_strictly() {
+        let cutoff = 500_000_100;
+
+        let below_cutoff = tx_with_lock_time(
+            LockTime::from_time(cutoff - 1).unwrap(),
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let at_cutoff = tx_with_lock_time(
+            LockTime::from_time(cutoff).unwrap(),
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+        let above_cutoff = tx_with_lock_time(
+            LockTime::from_time(cutoff + 1).unwrap(),
+            Sequence::ENABLE_LOCKTIME_NO_RBF,
+        );
+
+        assert!(Consensus::is_final_transaction(
+            &below_cutoff,
+            ZERO_HEIGHT,
+            cutoff
+        ));
+        assert!(!Consensus::is_final_transaction(
+            &at_cutoff,
+            ZERO_HEIGHT,
+            cutoff
+        ));
+        assert!(!Consensus::is_final_transaction(
+            &above_cutoff,
+            ZERO_HEIGHT,
+            cutoff
+        ));
     }
 
     #[cfg(feature = "bitcoinkernel")]

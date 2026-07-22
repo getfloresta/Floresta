@@ -143,6 +143,7 @@ pub enum BlockValidationErrors {
     BadBip34,
     InvalidUtreexoProof,
     CoinbaseNotMatured,
+    NonFinalTransaction,
     UnspendableUTXO,
     BIP94TimeWarp,
     DuplicateInput,
@@ -229,6 +230,9 @@ impl Display for BlockValidationErrors {
             Self::InvalidUtreexoProof => write!(f, "Invalid proof"),
             Self::CoinbaseNotMatured => {
                 write!(f, "Coinbase not matured yet")
+            }
+            Self::NonFinalTransaction => {
+                write!(f, "Block contains a non-final transaction")
             }
             Self::UnspendableUTXO => {
                 write!(
