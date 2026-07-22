@@ -26,11 +26,31 @@ use floresta_domain::mempool::MempoolError;
 use serde::Serialize;
 
 use super::UtreexoNodeConfig;
+use super::address_man::ReachableNetworks;
 use super::node::ConnectionKind;
 use super::node::PeerStatus;
 use super::transport::TransportProtocol;
 use crate::address_man::ConnectionStats;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+
+#[derive(Debug, Clone, Serialize)]
+/// A known peer address from the address manager.
+pub struct NodeAddress {
+    /// Last time this address was seen (unix timestamp).
+    pub time: u64,
+
+    /// Services offered by this peer.
+    pub services: u64,
+
+    /// The IP address of this peer.
+    pub address: String,
+
+    /// The port of this peer.
+    pub port: u16,
+
+    /// The network the address belongs to (e.g. "ipv4", "ipv6", "onion", "i2p", "cjdns").
+    pub network: ReachableNetworks,
+}
 
 #[derive(Debug, Clone, Serialize)]
 /// A struct representing a peer connected to the node.
@@ -110,6 +130,15 @@ pub trait NetworkMethods {
         v2transport: bool,
     ) -> impl Future<Output = Result<bool, Self::Error>>;
 
+    /// Adds a peer to the address manager, without any connection attempt.
+    ///
+    /// This function will return a boolean indicating whether the addition was successful.
+    fn add_peer_address(
+        &self,
+        address: BitcoinSocketAddr,
+        tried: bool,
+    ) -> impl Future<Output = Result<bool, Self::Error>>;
+
     /// Removes a peer from the node's peer list.
     /// This function will return a boolean indicating whether the peer was successfully removed.
     /// It may be called multiple times, and may use hostnames or IP addresses.
@@ -151,6 +180,13 @@ pub trait NetworkMethods {
 
     /// Returns address manager statistics broken down by network.
     fn get_addrman_info(&self) -> impl Future<Output = Result<ConnectionStats, Self::Error>>;
+
+    /// Returns known peer addresses from the address manager.
+    fn get_node_addresses(
+        &self,
+        count: u32,
+        network: Option<ReachableNetworks>,
+    ) -> impl Future<Output = Result<Vec<NodeAddress>, Self::Error>>;
 }
 
 /// Methods used to interact with the node's configuration.
