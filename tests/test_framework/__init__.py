@@ -123,6 +123,19 @@ class FlorestaTestFramework:
         """
         return sum(1 for node in self._nodes if node.variant == variant)
 
+    def create_logger_for_daemon(self, node_type: NodeType):
+        """
+        Create a logger for the daemon variant .
+        """
+        log_file = os.path.join(
+            Utility.get_log_path(),
+            f"{self.test_name}",
+            f"{node_type.value.lower()}{self.count_nodes_by_variant(node_type)}.log",
+        )
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+        return log_file
+
     def add_node_default_args(self, variant: NodeType) -> Node:
         """
         Add a node with default configurations.
@@ -168,6 +181,7 @@ class FlorestaTestFramework:
             targetdir=targetdir,
             tls=tls,
             log=self.log,
+            log_path=self.create_logger_for_daemon(variant),
         )
 
         self._nodes.append(node)

@@ -11,6 +11,7 @@ class ConfigP2P:
     Configuration for P2P connection
     """
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, log_path: str):
         self.host = host
         self.port = port
+        self.log_path = log_path

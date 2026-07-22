@@ -110,6 +110,7 @@ class Node:
         self._variant = variant
         self._static_values = True
         self._log = log
+        self._log_path = p2p_config.log_path
 
     @classmethod
     def create_node_default_config(
@@ -120,6 +121,7 @@ class Node:
         targetdir: str,
         tls: bool,
         log,
+        log_path: str,
     ) -> "Node":
         """
         Create a node with default arguments. this argument
@@ -128,7 +130,7 @@ class Node:
         allowing the node's arguments to be modified after creation.
         """
         config_rpc = cls.create_config_rpc_default(variant=variant)
-        config_p2p = cls.create_config_p2p_default()
+        config_p2p = cls.create_config_p2p_default(log_path=log_path)
         config_electrum = cls.create_config_electrum_default(tls=tls)
 
         node = cls(
@@ -188,6 +190,7 @@ class Node:
             raise ValueError("Cannot modify static p2p_config")
 
         self.daemon.set_p2p_config(value)
+        self._log_path = value.log_path
 
     def set_rpc_config(self, value: ConfigRPC):
         """Setter for `rpc_config` property"""
@@ -226,12 +229,14 @@ class Node:
         )
 
     @staticmethod
-    def create_config_p2p_default() -> ConfigP2P:
+    def create_config_p2p_default(log_path: str) -> ConfigP2P:
         """
         Create a default P2P configuration for nodes.
         The port is random.
         """
-        return ConfigP2P(host="127.0.0.1", port=Utility.get_random_port())
+        return ConfigP2P(
+            host="127.0.0.1", port=Utility.get_random_port(), log_path=log_path
+        )
 
     @staticmethod
     def create_config_electrum_default(tls: bool) -> ConfigElectrum:
@@ -263,7 +268,7 @@ class Node:
         configuration creation methods
         """
         new_rpc_config = self.create_config_rpc_default(self.variant)
-        new_p2p_config = self.create_config_p2p_default()
+        new_p2p_config = self.create_config_p2p_default(self._log_path)
         new_electrum_config = self.create_config_electrum_default(self._tls)
 
         # Apply the new configurations

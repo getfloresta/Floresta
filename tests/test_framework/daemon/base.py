@@ -134,13 +134,6 @@ class BaseDaemon(ABC):
         """Setter for `p2p_config` property"""
         self._p2p_config = value
 
-    def _get_logger_file_path(self) -> str | None:
-        """Extract the file path from the logger's file handler"""
-        for handler in self.log.handlers:
-            if hasattr(handler, "baseFilename"):
-                return handler.baseFilename
-        return None
-
     def settings(self) -> List[str]:
         """Getter for `settings` property"""
         setting: List[str] = self.get_cmd_network()
@@ -173,12 +166,10 @@ class BaseDaemon(ABC):
 
         cmd = [daemon] + self.settings()
 
-        log_file_path = self._get_logger_file_path()
-        if not log_file_path:
-            raise ValueError("Log file path not found")
-
         # pylint: disable=consider-using-with
-        stdout_file = open(os.path.join(log_file_path), "w", encoding="utf-8")
+        stdout_file = open(
+            os.path.join(self._p2p_config.log_path), "w", encoding="utf-8"
+        )
         # pylint: disable=consider-using-with
         self.process = Popen(cmd, text=True, stderr=PIPE, stdout=stdout_file)
 

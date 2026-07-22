@@ -76,8 +76,8 @@ def _create_logger(test_name):
         "%(asctime)s - %(levelname)s - %(pathname)s:%(lineno)d - %(message)s"
     )
 
-    git_describe = Utility.get_git_describe()
-    log_file = os.path.join(FLORESTA_TEMP_DIR, "logs", git_describe, f"{test_name}.log")
+    log_path = Utility.get_log_path()
+    log_file = os.path.join(log_path, f"{test_name}", f"{test_name}.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     file_handler = logging.FileHandler(log_file, mode="w")
     file_handler.setFormatter(formatter)
