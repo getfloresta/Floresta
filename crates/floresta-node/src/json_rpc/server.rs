@@ -4,6 +4,7 @@ use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,35 +17,26 @@ use axum::http::Method;
 use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
 use axum::routing::post;
-use bitcoin::Address;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
-use bitcoin::Transaction;
-use bitcoin::TxIn;
-use bitcoin::TxOut;
 use bitcoin::Txid;
-use bitcoin::consensus::deserialize;
-use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::ecdsa::Signature as EcdsaSignature;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::hex;
-use bitcoin::hex::DisplayHex;
 use bitcoin::taproot::Signature as TaprootSignature;
-use corepc_types::ScriptPubKey;
-use corepc_types::ScriptSig;
-use corepc_types::v30::GetRawTransactionVerbose;
-use corepc_types::v31::RawTransactionInput;
-use corepc_types::v31::RawTransactionOutput;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::NetworkExt;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
+use floresta_rpc::rpc_interfaces::BlockchainRpc;
+use floresta_rpc::rpc_interfaces::ControlRpc;
+use floresta_rpc::rpc_interfaces::NetworkRpc;
+use floresta_rpc::rpc_interfaces::RawTransactionRpc;
+use floresta_rpc::rpc_interfaces::RpcMethods;
+use floresta_rpc::rpc_interfaces::WalletRpc;
+use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_watch_only::AddressCache;
-use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
-use floresta_wire::node_interface::ChainMethods;
-use floresta_wire::node_interface::MempoolMethods;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::RwLock;
@@ -53,13 +45,11 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::GetRawTransactionRes;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
 use crate::json_rpc::request::arg_parser::get_with_default;
 use crate::json_rpc::request::arg_parser::try_into_optional;
-use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::res::jsonrpc_interface::Response;
 
 /// Expect message for `serde_json` serialization of types that implement `Serialize`.
@@ -98,111 +88,6 @@ pub struct RpcImpl<Blockchain: RpcChain> {
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
 
-impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    fn get_raw_transaction(&self, tx_id: Txid, verbosity: u8) -> Result<GetRawTransactionRes> {
-        if verbosity > 1 {
-            return Err(JsonRpcError::InvalidVerbosityLevel);
-        }
-
-        let tx = self
-            .wallet
-            .get_transaction(&tx_id)
-            .ok_or(JsonRpcError::TxNotFound)?;
-
-        match verbosity {
-            0 => Ok(GetRawTransactionRes::Zero(serialize_hex(&tx.tx))),
-            1 => Ok(GetRawTransactionRes::One(Box::new(
-                self.make_raw_transaction(tx)?,
-            ))),
-            _ => Err(JsonRpcError::InvalidVerbosityLevel),
-        }
-    }
-
-    fn load_descriptor(&self, descriptor: String) -> Result<bool> {
-        let addresses = self.wallet.push_descriptor(&descriptor)?;
-        info!("Descriptor pushed: {descriptor}");
-        debug!("Rescanning with block filters for addresses: {addresses:?}");
-
-        let addresses = self.wallet.get_cached_addresses();
-        let wallet = self.wallet.clone();
-        let cfilters = self
-            .block_filter_storage
-            .as_ref()
-            .ok_or(JsonRpcError::NoBlockFilters)?
-            .clone();
-        let node = self.node.clone();
-        let chain = self.chain.clone();
-
-        tokio::task::spawn(Self::rescan_with_block_filters(
-            addresses, chain, wallet, cfilters, node, None, None,
-        ));
-
-        Ok(true)
-    }
-
-    fn rescan_blockchain(
-        &self,
-        start: u32,
-        stop: u32,
-        use_timestamp: bool,
-        confidence: RescanConfidence,
-    ) -> Result<bool> {
-        let (start_height, stop_height) =
-            self.get_rescan_interval(use_timestamp, start, stop, confidence)?;
-
-        if stop_height != 0 && start_height >= stop_height {
-            // When stop height is a non zero value it needs atleast to be greater than start_height.
-            return Err(JsonRpcError::InvalidRescanVal);
-        }
-
-        // if we are on ibd, we don't have any filters to rescan
-        if self.chain.is_in_ibd() {
-            return Err(JsonRpcError::InInitialBlockDownload);
-        }
-
-        let addresses = self.wallet.get_cached_addresses();
-
-        if addresses.is_empty() {
-            return Err(JsonRpcError::NoAddressesToRescan);
-        }
-
-        let wallet = self.wallet.clone();
-
-        let cfilters = self
-            .block_filter_storage
-            .as_ref()
-            .ok_or(JsonRpcError::NoBlockFilters)?
-            .clone();
-
-        let node = self.node.clone();
-
-        let chain = self.chain.clone();
-
-        tokio::task::spawn(Self::rescan_with_block_filters(
-            addresses,
-            chain,
-            wallet,
-            cfilters,
-            node,
-            (start_height != 0).then_some(start_height), // Its ugly but to maintain the API here its necessary to recast to a Option.
-            (stop_height != 0).then_some(stop_height),
-        ));
-        Ok(true)
-    }
-
-    async fn send_raw_transaction(&self, tx: String) -> Result<Txid> {
-        let tx_hex = Vec::from_hex(&tx).map_err(|_| JsonRpcError::InvalidHex)?;
-        let tx: Transaction =
-            deserialize(&tx_hex).map_err(|e| JsonRpcError::Decode(e.to_string()))?;
-
-        Ok(self
-            .node
-            .broadcast_transaction(tx)
-            .await
-            .map_err(|e| JsonRpcError::Node(e.to_string()))??)
-    }
-}
-
 async fn handle_json_rpc_request(
     req: RpcRequest,
     state: Arc<RpcImpl<impl RpcChain>>,
@@ -227,194 +112,91 @@ async fn handle_json_rpc_request(
             when: Instant::now(),
         },
     );
-
-    // Methods that don't require params
-    match method.as_str() {
-        "getbestblockhash" => {
-            return state
-                .get_best_block_hash()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getblockchaininfo" => {
-            return state
-                .get_blockchain_info()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getblockcount" => {
-            return state
-                .get_block_count()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getconnectioncount" => {
-            return state
-                .get_connection_count()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getnetworkinfo" => {
-            return state
-                .get_network_info()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getpeerinfo" => {
-            return state
-                .get_peer_info()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getroots" => {
-            return state
-                .get_roots()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "getrpcinfo" => {
-            return state
-                .get_rpc_info()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "listdescriptors" => {
-            return state
-                .list_descriptors()
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "ping" => {
-            state.ping().await?;
-            return Ok(serde_json::json!(null));
-        }
-        "stop" => {
-            return state
-                .stop()
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        "uptime" => {
-            return Ok(serde_json::to_value(state.uptime()).expect(SERIALIZATION_EXPECT_MSG));
-        }
-        _ => {}
-    }
-
-    // Methods that do require parameters.
-    //
-    // Here we use `unwrap_or_default()` because there are methods with only optional
-    // parameters.
-    // Therefore, even if the request is parsed and the `params` field was omitted it's nice
-    // to turn it into `Some(Value)` so the job of gathering inputs for calling the inner
-    // rpc method goes to the getters under request.rs.
+    let method = RpcMethods::from_str(&method).map_err(|_| JsonRpcError::MethodNotFound)?;
     let params = params.unwrap_or_default();
 
-    match method.as_str() {
-        "addnode" => {
-            let node = get_at(&params, 0, "node")?;
-            let command = get_at(&params, 1, "command")?;
-            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
-
-            state
-                .add_node(node, command, v2transport)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "disconnectnode" => {
-            let node_address = get_at(&params, 0, "node_address")?;
-            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
-
-            state
-                .disconnect_node(node_address, node_id)
-                .await
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "findtxout" => {
+    match method {
+        // Blockchain
+        RpcMethods::FindTxOut => {
             let txid = get_at(&params, 0, "txid")?;
             let vout = get_at(&params, 1, "vout")?;
-            let script: String = get_at(&params, 2, "script")?;
-            let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
+            let script = get_at(&params, 2, "script")?;
             let height = get_at(&params, 3, "height")?;
 
-            state.clone().find_tx_out(txid, vout, script, height).await
+            state
+                .clone()
+                .find_tx_out(txid, vout, script, height)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "getblock" => {
+        RpcMethods::GetBestBlockHash => state
+            .get_best_block_hash()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetBlock => {
             let hash = get_at(&params, 0, "block_hash")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", 1)?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
             state
                 .get_block(hash, verbosity)
                 .await
                 .map(|v| serde_json::to_value(v).expect("GetBlockRes implements serde"))
         }
-
-        "getblockfrompeer" => {
+        RpcMethods::GetBlockFromPeer => {
             let hash = get_at(&params, 0, "block_hash")?;
 
-            state.get_block(hash, 0).await?;
+            state.get_block(hash, Some(0)).await?;
 
             Ok(Value::Null)
         }
-
-        "getblockhash" => {
+        RpcMethods::GetBlockchainInfo => state
+            .get_blockchain_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetBlockCount => state
+            .get_block_count()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetBlockHash => {
             let height = get_at(&params, 0, "block_height")?;
             state
                 .get_block_hash(height)
+                .await
                 .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
         }
 
-        "getblockheader" => {
+        RpcMethods::GetBlockHeader => {
             let hash = get_at(&params, 0, "block_hash")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", true)?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
             state
                 .get_block_header(hash, verbosity)
                 .await
                 .map(|h| serde_json::to_value(h).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "getmemoryinfo" => {
-            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
-
-            state
-                .get_memory_info(&mode)
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "getrawtransaction" => {
-            let txid = get_at(&params, 0, "txid")?;
-            let verbosity = get_with_default(&params, 1, "verbosity", 0)?;
-
-            state
-                .get_raw_transaction(txid, verbosity)
-                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
-        }
-
-        "getdeploymentinfo" => {
+        RpcMethods::GetDeploymentInfo => {
             let blockhash = try_into_optional(get_at(&params, 0, "blockhash"))?;
 
             state
                 .get_deployment_info(blockhash)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "getdifficulty" => state
+        RpcMethods::GetDifficulty => state
             .get_difficulty()
-            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-        "getaddrmaninfo" => state
-            .get_addrman_info()
             .await
             .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
-
-        "gettxout" => {
+        RpcMethods::GetTxOut => {
             let txid = get_at(&params, 0, "txid")?;
             let vout = get_at(&params, 1, "vout")?;
             let include_mempool = get_with_default(&params, 2, "include_mempool", false)?;
 
             state
                 .get_tx_out(txid, vout, include_mempool)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "gettxoutproof" => {
+        RpcMethods::GetTxOutProof => {
             let txids: Vec<Txid> = get_at(&params, 0, "txids")?;
             let block_hash = try_into_optional(get_at(&params, 1, "block_hash"))?;
 
@@ -423,35 +205,118 @@ async fn handle_json_rpc_request(
                 .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
+        RpcMethods::GetRoots => state
+            .get_roots()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
 
-        "loaddescriptor" => {
+        // Wallet
+        RpcMethods::LoadDescriptor => {
             let descriptor = get_at(&params, 0, "descriptor")?;
 
             state
                 .load_descriptor(descriptor)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
-
-        "rescanblockchain" => {
-            let start_height = get_with_default(&params, 0, "start_height", 0)?;
-            let stop_height = get_with_default(&params, 1, "stop_height", 0)?;
+        RpcMethods::ListDescriptors => {
+            return state
+                .list_descriptors()
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
+        }
+        RpcMethods::RescanBlockchain => {
+            let start_height = try_into_optional(get_at(&params, 0, "start_height"))?;
+            let stop_height = try_into_optional(get_at(&params, 1, "stop_height"))?;
             let use_timestamp = get_with_default(&params, 2, "use_timestamp", false)?;
-            let confidence = get_with_default(&params, 3, "confidence", RescanConfidence::Medium)?;
+            let confidence = try_into_optional(get_at(&params, 3, "confidence"))?;
 
             state
                 .rescan_blockchain(start_height, stop_height, use_timestamp, confidence)
+                .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
-        "sendrawtransaction" => {
+        // Network
+        RpcMethods::AddNode => {
+            let node = get_at(&params, 0, "node")?;
+            let command: String = get_at(&params, 1, "command")?;
+            let command = AddNodeCommand::from_str(&command)
+                .map_err(|_| JsonRpcError::InvalidAddnodeCommand)?;
+            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
+
+            state
+                .add_node(node, command, v2transport)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::DisconnectNode => {
+            let node_address = get_at(&params, 0, "node_address")?;
+            let node_id = try_into_optional(get_at(&params, 1, "node_id"))?;
+
+            state
+                .disconnect_node(node_address, node_id)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::GetAddrManInfo => state
+            .get_addrman_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetConnectionCount => state
+            .get_connection_count()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetNetworkInfo => state
+            .get_network_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::GetPeerInfo => state
+            .get_peer_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::Ping => {
+            state.ping().await?;
+            Ok(serde_json::json!(null))
+        }
+
+        // RawTransactions
+        RpcMethods::SendRawTransaction => {
             let tx = get_at(&params, 0, "hex")?;
             state
                 .send_raw_transaction(tx)
                 .await
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
+        RpcMethods::GetRawTransaction => {
+            let txid = get_at(&params, 0, "txid")?;
+            let verbosity = try_into_optional(get_at(&params, 1, "verbosity"))?;
 
-        _ => Err(JsonRpcError::MethodNotFound),
+            state
+                .get_raw_transaction(txid, verbosity)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
+        // Control
+        RpcMethods::Stop => state
+            .stop()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
+        RpcMethods::Uptime => {
+            Ok(serde_json::to_value(state.uptime().await?).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::GetMemoryInfo => {
+            let mode: String = get_with_default(&params, 0, "mode", "stats".into())?;
+
+            let memory_info = state.get_memory_info(mode).await?;
+
+            Ok(serde_json::to_value(memory_info).expect(SERIALIZATION_EXPECT_MSG))
+        }
+        RpcMethods::GetRpcInfo => state
+            .get_rpc_info()
+            .await
+            .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG)),
     }
 }
 
@@ -501,162 +366,6 @@ async fn cannot_get(_state: State<Arc<RpcImpl<impl RpcChain>>>) -> Json<Value> {
 }
 
 impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    async fn rescan_with_block_filters(
-        addresses: Vec<ScriptBuf>,
-        chain: Blockchain,
-        wallet: Arc<AddressCache<KvDatabase>>,
-        cfilters: Arc<NetworkFilters<FlatFiltersStore>>,
-        node: NodeHandle,
-        start_height: Option<u32>,
-        stop_height: Option<u32>,
-    ) -> Result<()> {
-        let blocks = cfilters
-            .match_any(
-                addresses.iter().map(|a| a.as_bytes()).collect(),
-                start_height,
-                stop_height,
-                chain.clone(),
-            )
-            .map_err(|e| JsonRpcError::Filters(e.to_string()))?;
-
-        info!("rescan filter hits: {blocks:?}");
-
-        for block in blocks {
-            if let Ok(Some(block)) = node.get_block(block).await {
-                let height = chain
-                    .get_block_height(&block.block_hash())
-                    .map_err(|_| JsonRpcError::Chain)?
-                    .ok_or(JsonRpcError::BlockNotFound)?;
-
-                wallet.block_process(&block, height);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn make_vin(&self, input: TxIn, is_coinbase: bool) -> RawTransactionInput {
-        let sequence = input.sequence.0;
-        let txin_witness = (!input.witness.is_empty()).then_some(
-            input
-                .witness
-                .iter()
-                .map(|w| w.to_hex_string(hex::Case::Lower))
-                .collect(),
-        );
-
-        if is_coinbase {
-            return RawTransactionInput {
-                coinbase: Some(input.script_sig.to_hex_string()),
-                sequence,
-                txin_witness,
-                script_sig: None,
-                txid: None,
-                vout: None,
-            };
-        }
-
-        let txid = Some(input.previous_output.txid.to_string());
-        let vout = Some(input.previous_output.vout);
-        let script_sig = ScriptSig {
-            asm: to_core_asm_string(&input.script_sig, true),
-            hex: input.script_sig.to_hex_string(),
-        };
-
-        RawTransactionInput {
-            coinbase: None,
-            txid,
-            vout,
-            script_sig: Some(script_sig),
-            txin_witness,
-            sequence,
-        }
-    }
-
-    fn make_vout(&self, output: TxOut, index: u64) -> RawTransactionOutput {
-        let value = output.value;
-        RawTransactionOutput {
-            value: value.to_btc(),
-            index,
-            script_pubkey: ScriptPubKey {
-                asm: to_core_asm_string(&output.script_pubkey, false),
-                hex: output.script_pubkey.to_hex_string(),
-                // `Address::from_script` can fail for nonstandard scripts. Bitcoin Core
-                // omits the `address` field entirely when `ExtractDestination` fails:
-                // https://github.com/bitcoin/bitcoin/blob/f50d53c84736f8ada8419346c4d1734d5a6686d4/src/core_io.cpp#L424
-                address: Address::from_script(&output.script_pubkey, self.network)
-                    .map(|a| a.to_string())
-                    .ok(),
-                type_: Self::get_script_type_label(&output.script_pubkey).to_string(),
-                descriptor: Some(Self::get_script_type_descriptor(
-                    &output.script_pubkey,
-                    &Address::from_script(&output.script_pubkey, self.network).ok(),
-                )),
-                required_signatures: None, // This field is deprecated in Core v22
-                addresses: None,           // This field is deprecated in Core v22
-            },
-        }
-    }
-
-    fn make_raw_transaction(&self, tx: CachedTransaction) -> Result<GetRawTransactionVerbose> {
-        let raw_tx = tx.tx;
-        let in_active_chain = tx.height != 0;
-        let hex = serialize_hex(&raw_tx);
-        let txid = raw_tx.compute_txid().to_string();
-
-        let mut block_hash = None;
-        let mut block_time = None;
-        let mut transaction_time = None;
-        let mut confirmations = Some(0);
-        if in_active_chain {
-            confirmations = self.chain.get_height().ok().and_then(|tip| {
-                if tip >= tx.height {
-                    Some((tip - tx.height + 1).into())
-                } else {
-                    None
-                }
-            });
-
-            if let Ok(hash) = self.chain.get_block_hash(tx.height) {
-                if let Ok(header) = self.chain.get_block_header(&hash) {
-                    block_hash = Some(header.block_hash().to_string());
-                    block_time = Some(header.time.into());
-                    transaction_time = Some(header.time.into());
-                }
-            }
-        }
-
-        Ok(GetRawTransactionVerbose {
-            in_active_chain: Some(in_active_chain),
-            hex,
-            txid,
-            hash: raw_tx.compute_wtxid().to_string(),
-            size: raw_tx.total_size().try_into()?,
-            vsize: raw_tx.vsize().try_into()?,
-            weight: raw_tx.weight().to_wu(),
-            version: raw_tx.version.0,
-            lock_time: raw_tx.lock_time.to_consensus_u32(),
-            inputs: raw_tx
-                .input
-                .iter()
-                .map(|input| self.make_vin(input.clone(), raw_tx.is_coinbase()))
-                .collect(),
-            outputs: raw_tx
-                .output
-                .into_iter()
-                .enumerate()
-                .map(|(i, output)| -> Result<RawTransactionOutput> {
-                    let index = i.try_into()?;
-                    Ok(self.make_vout(output, index))
-                })
-                .collect::<Result<Vec<_>>>()?,
-            block_hash,
-            confirmations,
-            block_time,
-            transaction_time,
-        })
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         chain: Blockchain,

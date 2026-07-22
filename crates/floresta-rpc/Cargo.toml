@@ -23,6 +23,7 @@ corepc-types = { workspace = true }
 jsonrpc = { version = "=0.20.0", features = ["bitreq_http"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+floresta-proc-macro = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
@@ -31,6 +32,7 @@ rcgen = { workspace = true }
 [features]
 default = ["with-jsonrpc"]
 with-jsonrpc = ["dep:jsonrpc"]
+async = ["floresta-proc-macro/async"]
 clap = ["dep:clap"]
 
 [lints]
