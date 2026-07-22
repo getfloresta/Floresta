@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ThreadSafeChain;
@@ -25,6 +27,10 @@ use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::PeerMessages;
+
+/// Mirrors Bitcoin Core's `DEFAULT_MAX_TIP_AGE` (chainparams.h): the maximum
+/// age in seconds a tip may have before the node refuses to leave IBD.
+pub(crate) const DEFAULT_MAX_TIP_AGE: u32 = 24 * 60 * 60;
 
 /// [`SyncNode`] is a node that downloads and validates the blockchain.
 /// This node implements:
@@ -235,16 +241,51 @@ where
             .get_validation_index()
             .expect("validation index block should present");
 
-        let best_block = self
+        let (best_block, tip_hash) = self
             .chain
             .get_best_block()
-            .expect("best block should present")
-            .0;
+            .expect("best block is always present");
 
+        // Bitcoin Core's UpdateIBDStatus gates the IBD exit on two conditions:
+        // cumulative chain work >= MinimumChainWork, and tip age <= max_tip_age.
+        // Floresta's ChainStore does not track cumulative chain work today, so
+        // only the age gate is implemented here. The age check is a proxy: a tip
+        // older than max_tip_age_secs is treated as stale regardless of cause
+        // (stuck store, old snapshot, low-activity chain). This matches Core's
+        // steady-state behavior -- a genuinely old tip stays in IBD there too.
         if validation_index == best_block {
-            info!("IBD is finished, switching to normal operation mode");
-            self.chain.update_ibd(IBDState::Done);
-            return LoopControl::Break;
+            // Skip the age check at genesis: the genesis timestamp (~2009) always
+            // looks stale and would trap a genesis-only node in IBD indefinitely.
+            let tip_is_stale = if best_block > 0 {
+                let tip_time = self
+                    .chain
+                    .get_block_header(&tip_hash)
+                    .expect("tip header is always present")
+                    .time;
+                let now: u32 = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system clock is after UNIX_EPOCH")
+                    .as_secs()
+                    .try_into()
+                    .expect("unix timestamp fits in u32 until year 2106");
+                let tip_age = now.saturating_sub(tip_time);
+                let stale = tip_age > self.config.max_tip_age_secs;
+                if stale {
+                    debug!(
+                        tip_age,
+                        "validation caught up to a stale tip; chain store may be stuck, staying in IBD"
+                    );
+                }
+                stale
+            } else {
+                false
+            };
+
+            if !tip_is_stale {
+                info!("IBD is finished, switching to normal operation mode");
+                self.chain.update_ibd(IBDState::Done);
+                return LoopControl::Break;
+            }
         }
 
         periodic_job!(

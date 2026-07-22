@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use bitcoin::Network;
 use floresta_chain::AssumeUtreexoValue;
 
+use self::node::sync_ctx::DEFAULT_MAX_TIP_AGE;
+
 #[derive(Debug, Clone)]
 /// Configuration for the Utreexo node.
 pub struct UtreexoNodeConfig {
@@ -66,6 +68,11 @@ pub struct UtreexoNodeConfig {
     pub allow_v1_fallback: bool,
     /// Whether to disable DNS seeds. Defaults to false.
     pub disable_dns_seeds: bool,
+    /// Maximum age in seconds that the best-block timestamp may have before
+    /// the node considers the tip stale and refuses to exit IBD. Defaults to
+    /// `DEFAULT_MAX_TIP_AGE` (24 hours). Set to `u32::MAX` to disable the
+    /// check (e.g. in tests with historical block fixtures).
+    pub max_tip_age_secs: u32,
 }
 
 impl Default for UtreexoNodeConfig {
@@ -84,6 +91,7 @@ impl Default for UtreexoNodeConfig {
             filter_start_height: None,
             user_agent: format!("floresta:{}", env!("CARGO_PKG_VERSION")),
             allow_v1_fallback: true,
+            max_tip_age_secs: DEFAULT_MAX_TIP_AGE,
         }
     }
 }
