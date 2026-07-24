@@ -293,18 +293,29 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let end_height =
                     (chain_height.saturating_add(1)).min(start_height.saturating_add(count));
 
-                let heights = start_height..end_height;
-                let count = heights.len();
+                // Walk the range contiguously, stopping at the first height that
+                // fails to resolve. `count` must reflect the headers actually
+                // serialized into `hex` (Electrum clients reject a response where
+                // `len(hex) / 160 != count`), and breaking on the first gap keeps
+                // `hex` a contiguous chunk instead of silently splicing out a
+                // header and shifting every one after it.
+                let mut hex = String::new();
+                let mut count: u32 = 0;
 
-                let headers = heights.filter_map(|height| {
-                    let hash = self.chain.get_block_hash(height).ok()?;
-                    let header = self.chain.get_block_header(&hash).ok()?;
-                    Some(serialize_hex(&header))
-                });
+                for height in start_height..end_height {
+                    let Ok(hash) = self.chain.get_block_hash(height) else {
+                        break;
+                    };
+                    let Ok(header) = self.chain.get_block_header(&hash) else {
+                        break;
+                    };
+                    hex.push_str(&serialize_hex(&header));
+                    count += 1;
+                }
 
                 json_rpc_res!(request, {
                     "count": count,
-                    "hex": String::from_iter(headers),
+                    "hex": hex,
                     "max": MAX_COUNT,
                 })
             }
