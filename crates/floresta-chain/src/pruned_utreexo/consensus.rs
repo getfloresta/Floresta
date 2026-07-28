@@ -173,7 +173,7 @@ impl Consensus {
         subsidy: Amount,
         verify_script: bool,
         flags: c_uint,
-    ) -> Result<(), BlockchainError> {
+    ) -> Result<Vec<(Amount, Amount)>, BlockchainError> {
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
             Err(BlockValidationErrors::EmptyBlock)?;
@@ -181,6 +181,9 @@ impl Consensus {
 
         // Total block fees that the miner can claim in the coinbase
         let mut fee = Amount::ZERO;
+
+        // Store in_value and out_value as Vector for return
+        let mut tx_fee_values = Vec::new();
 
         for (n, transaction) in transactions.iter().enumerate() {
             if n == 0 {
@@ -195,7 +198,7 @@ impl Consensus {
             // Actually verify the transaction
             let (in_value, out_value) =
                 Self::verify_transaction(transaction, &mut utxos, height, verify_script, flags)?;
-
+            tx_fee_values.push((in_value, out_value));
             // Fee is the difference between inputs and outputs. In the above function call we have
             // verified that `out_value <= in_value` (no underflow risk).
             fee = fee
@@ -214,7 +217,7 @@ impl Consensus {
             Err(BlockValidationErrors::BadCoinbaseOutValue)?;
         }
 
-        Ok(())
+        Ok(tx_fee_values)
     }
 
     /// Performs all transaction checks that are independent of the spent outputs and produces

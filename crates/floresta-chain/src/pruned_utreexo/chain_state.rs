@@ -24,6 +24,7 @@ use alloc::fmt::format;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use bitcoin::Amount;
 use core::cell::UnsafeCell;
 use core::cmp::min;
 use core::ops::Add;
@@ -70,6 +71,8 @@ use crate::pruned_utreexo::IBDState;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
 use crate::write_lock;
+
+const SATS_PER_KILO_VBYTE: u64 = bitcoin::Weight::WITNESS_SCALE_FACTOR as u64 * 1000;
 
 /// Trait for components that need to receive notifications about new blocks.
 pub trait BlockConsumer: Sync + Send + 'static {
@@ -1002,7 +1005,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         block: &Block,
         height: u32,
         inputs: HashMap<OutPoint, UtxoData>,
-    ) -> Result<(), BlockchainError> {
+    ) -> Result<Vec<(Amount, Amount)>, BlockchainError> {
         read_lock!(self).consensus.check_block(block, height)?;
 
         // Validate block transactions
@@ -1022,8 +1025,21 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             subsidy,
             verify_script,
             flags,
-        )?;
-        Ok(())
+        )
+    }
+    fn compute_avg_fee_rate(tx_values: &[(Amount, Amount)], block: &Block) -> u64 {
+        let mut total_fees: u64 = 0;
+        let mut total_weight: u64 = 0;
+
+        for (tx, &(in_val, out_val)) in block.txdata.iter().skip(1).zip(tx_values.iter()) {
+            total_fees += in_val.to_sat().saturating_sub(out_val.to_sat());
+            total_weight += tx.weight().to_wu();
+        }
+
+        total_fees
+            .checked_div(total_weight)
+            .map(|r| r * SATS_PER_KILO_VBYTE)
+            .unwrap_or(0)
     }
 }
 
@@ -1096,6 +1112,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
             .try_height()?;
 
         self.validate_block_no_acc(block, height, inputs)
+            .map(|_| ())
     }
 
     fn get_block_locator_for_tip(&self, tip: BlockHash) -> Result<Vec<BlockHash>, BlockchainError> {
@@ -1370,28 +1387,9 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .any(|subscriber| subscriber.wants_spent_utxos())
             .then(|| inputs.clone());
 
-        let avg_fee_rate = {
-            let mut total_fees: u64 = 0;
-            let mut total_weight: u64 = 0;
-            for tx in block.txdata.iter().skip(1) {
-                let total_in: u64 = tx
-                    .input
-                    .iter()
-                    .filter_map(|txin| inputs.get(&txin.previous_output))
-                    .map(|utxo| utxo.txout.value.to_sat())
-                    .sum();
-                let total_out: u64 = tx.output.iter().map(|txout| txout.value.to_sat()).sum();
+        let tx_values = self.validate_block_no_acc(block, height, inputs)?;
+        let avg_fee_rate = Self::compute_avg_fee_rate(&tx_values, block);
 
-                total_fees += total_in.saturating_sub(total_out);
-                total_weight += tx.weight().to_wu();
-            }
-            total_fees
-                .checked_div(total_weight)
-                .map(|r| r * 4000)
-                .unwrap_or(0)
-        };
-
-        self.validate_block_no_acc(block, height, inputs)?;
         let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
 
         self.update_view(height, &block.header, acc)?;
