@@ -1050,12 +1050,26 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .collect();
         if !rates.is_empty() {
             inner.fee_estimation = (
-                median(&rates[rates.len().saturating_sub(6)..]),
-                median(&rates[rates.len().saturating_sub(30)..]),
-                median(rates.as_slice()),
+                Self::median(&rates[rates.len().saturating_sub(6)..]),
+                Self::median(&rates[rates.len().saturating_sub(30)..]),
+                Self::median(rates.as_slice()),
             );
         }
         Ok(())
+    }
+
+    fn median(data: &[u64]) -> f64 {
+        if data.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = data.to_vec();
+        sorted.sort();
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] + sorted[mid]) as f64 / 2.0
+        } else {
+            sorted[mid] as f64
+        }
     }
 }
 
@@ -1561,19 +1575,7 @@ macro_rules! write_lock {
         $obj.inner.write()
     };
 }
-fn median(data: &[u64]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
-    let mut sorted = data.to_vec();
-    sorted.sort();
-    let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
-        (sorted[mid - 1] + sorted[mid]) as f64 / 2.0
-    } else {
-        sorted[mid] as f64
-    }
-}
+
 #[cfg(all(test, feature = "flat-chainstore"))]
 mod test {
     use std::format;
