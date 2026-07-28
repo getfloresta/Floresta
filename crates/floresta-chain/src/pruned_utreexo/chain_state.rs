@@ -1041,6 +1041,22 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .map(|r| r * SATS_PER_KILO_VBYTE)
             .unwrap_or(0)
     }
+
+    fn update_fee_estimation(&self, height: u32, avg_fee_rate: u64) -> Result<(), BlockchainError> {
+        let mut inner = write_lock!(self);
+        inner.chainstore.save_block_fee_rate(height, avg_fee_rate)?;
+        let rates: Vec<u64> = (height.saturating_sub(60)..=height)
+            .filter_map(|h| inner.chainstore.get_block_fee_rate(h).ok().flatten())
+            .collect();
+        if !rates.is_empty() {
+            inner.fee_estimation = (
+                median(&rates[rates.len().saturating_sub(6)..]),
+                median(&rates[rates.len().saturating_sub(30)..]),
+                median(rates.as_slice()),
+            );
+        }
+        Ok(())
+    }
 }
 
 impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedState> {
@@ -1410,18 +1426,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         // Notify others we have a new block
         self.notify(block, height, inputs_for_notifications.as_ref());
 
-        let mut inner = write_lock!(self);
-        inner.chainstore.save_block_fee_rate(height, avg_fee_rate)?;
-        let rates: Vec<u64> = (height.saturating_sub(60)..=height)
-            .filter_map(|h| inner.chainstore.get_block_fee_rate(h).ok().flatten())
-            .collect();
-        if !rates.is_empty() {
-            inner.fee_estimation = (
-                median(&rates[rates.len().saturating_sub(6)..]),
-                median(&rates[rates.len().saturating_sub(30)..]),
-                median(rates.as_slice()),
-            )
-        }
+        self.update_fee_estimation(height, avg_fee_rate)?;
 
         Ok(height)
     }
