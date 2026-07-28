@@ -24,11 +24,11 @@ use alloc::fmt::format;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use bitcoin::Amount;
 use core::cell::UnsafeCell;
 use core::cmp::min;
 use core::ops::Add;
 
+use bitcoin::Amount;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
