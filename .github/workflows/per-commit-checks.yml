@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: Checks for each commit
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  per-commit-checks:
+    name: Per-commit Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nightly Rust Toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt,clippy --no-self-update
+          rustup default nightly
+
+      # see more at
+      # https://docs.astral.sh/uv/guides/integration/github/
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Prepare Python environment
+        run: uv sync --all-extras --dev
+
+      - name: Install Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
+
+      - name: Run per-commit checks
+        run: bash contrib/check_each_commit.sh
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Log tests on failure
+        if: failure()
+        run: |
+          functional_logs=()
+          while IFS= read -r line; do
+            functional_logs+=("$line")
+          done < <(find /tmp/floresta-func-tests* -type f -path "*/logs/*.log" 2>/dev/null || true)
+
+          for logfile in "${functional_logs[@]}"; do
+            echo "::group::$logfile"
+            cat "$logfile" || echo "Failed to read $logfile"
+            echo "::endgroup::"
+          done
+
+      - name: Log per-commit failures
+        if: failure()
+        shell: bash
+        run: |
+          logs=()
+          while IFS= read -r line; do
+            logs+=("$line")
+          done < <(find /tmp/floresta-commits-logs -type f -name "*.log" 2>/dev/null || true)
+
+          for logfile in "${logs[@]}"; do
+            commit_dir="$(dirname "$logfile")"
+            commit_sha="$(basename "$commit_dir")"
+            echo "::group::commit $commit_sha :: $logfile"
+            cat "$logfile" 2>/dev/null || echo "Failed to read $logfile"
+            echo "::endgroup::"
+          done

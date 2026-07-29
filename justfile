@@ -130,13 +130,18 @@ lint-features arg="":
 clean-data:
     ./contrib/clean_data.sh
 
+# Check each commit between BASE (default: origin/master) and HEAD individually.
+# Each commit must build, pass lint, and pass unit tests individually.
+check-atomic base="origin/master":
+    ./contrib/check_each_commit.sh {{ base }}
+
 # Run all needed checks before contributing code (pre-commit check)
 pcc:
     @just check-command "cargo-hack" "pcc" "cargo install cargo-hack --locked --version 0.6.34"
 
     just lint-features '-- -D warnings'
     just test-features
-    just test-functional
+    just check-atomic
     just check-flake
 
 # Run nix flake check if nix is available and flake files were modified
