@@ -18,7 +18,12 @@ tempfile = { workspace = true }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
+floresta-node = { workspace = true }
 floresta-wire = { workspace = true }
+
+[features]
+default = ["json-rpc"]
+json-rpc = ["floresta-node/json-rpc"]
 
 [[bin]]
 name = "local_address_str"
@@ -93,6 +98,13 @@ bench = false
 [[bin]]
 name = "onion_address_str_parse"
 path = "fuzz_targets/onion_address_str_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "basic_auth_parse_header"
+path = "fuzz_targets/basic_auth_parse_header.rs"
 test = false
 doc = false
 bench = false

@@ -97,6 +97,11 @@ pub mod service_flags {
 pub trait NetworkExt {
     /// Returns the default RPC port for the given network.
     fn default_rpc_port(&self) -> u16;
+
+    /// Returns the data-directory subdirectory used for this network, or
+    /// `None` for mainnet (which sits at the datadir root). Mirrors Bitcoin
+    /// Core's `<datadir>/[<net>/]` layout.
+    fn data_subdir(&self) -> Option<&'static str>;
 }
 
 impl NetworkExt for Network {
@@ -107,6 +112,16 @@ impl NetworkExt for Network {
             Self::Testnet => 18332,
             Self::Testnet4 => 48332,
             Self::Regtest => 18442,
+        }
+    }
+
+    fn data_subdir(&self) -> Option<&'static str> {
+        match self {
+            Self::Bitcoin => None,
+            Self::Signet => Some("signet"),
+            Self::Testnet => Some("testnet3"),
+            Self::Testnet4 => Some("testnet4"),
+            Self::Regtest => Some("regtest"),
         }
     }
 }
@@ -241,5 +256,14 @@ mod tests {
         assert_eq!(Network::Testnet4.default_rpc_port(), 48332);
         assert_eq!(Network::Signet.default_rpc_port(), 38332);
         assert_eq!(Network::Regtest.default_rpc_port(), 18442);
+    }
+
+    #[test]
+    fn test_data_subdir() {
+        assert_eq!(Network::Bitcoin.data_subdir(), None);
+        assert_eq!(Network::Signet.data_subdir(), Some("signet"));
+        assert_eq!(Network::Testnet.data_subdir(), Some("testnet3"));
+        assert_eq!(Network::Testnet4.data_subdir(), Some("testnet4"));
+        assert_eq!(Network::Regtest.data_subdir(), Some("regtest"));
     }
 }
