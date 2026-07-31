@@ -23,11 +23,8 @@ use bitcoin::ScriptBuf;
 use bitcoin::VarInt;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::encode;
-use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
 use bitcoin::p2p::ServiceFlags;
-use sha2::Digest;
-
 #[cfg(feature = "std")]
 mod ema;
 pub mod macros;
@@ -41,8 +38,9 @@ pub use spsc::Channel;
 ///
 /// [Hash]: https://docs.rs/bitcoin_hashes/latest/bitcoin_hashes/sha256/struct.Hash.html
 pub fn get_hash_from_u8(data: &[u8]) -> sha256::Hash {
-    let hash = sha2::Sha256::new().chain_update(data).finalize();
-    sha256::Hash::from_byte_array(hash.into())
+    use bitcoin::hashes::Hash;
+    use bitcoin::hashes::sha256;
+    sha256::Hash::hash(data)
 }
 
 /// Computes the SHA-256 digest of a script, reverses its bytes, and returns a [Hash] from
@@ -54,12 +52,14 @@ pub fn get_hash_from_u8(data: &[u8]) -> sha256::Hash {
 /// [documentation]: https://electrum-protocol.readthedocs.io/en/latest/protocol-basics.html#script-hashes
 /// [Hash]: https://docs.rs/bitcoin_hashes/latest/bitcoin_hashes/sha256/struct.Hash.html
 pub fn get_spk_hash(spk: &ScriptBuf) -> sha256::Hash {
-    let data = spk.as_bytes();
-    let mut hash = sha2::Sha256::new().chain_update(data).finalize();
-    hash.reverse();
-    sha256::Hash::from_byte_array(hash.into())
-}
+    use bitcoin::hashes::Hash;
+    use bitcoin::hashes::sha256;
 
+    let data = spk.as_bytes();
+    let mut bytes = sha256::Hash::hash(data).to_byte_array();
+    bytes.reverse();
+    sha256::Hash::from_byte_array(bytes)
+}
 /// Reads a VarInt from the given reader and ensures it is less than or equal to `max`.
 ///
 /// Returns an error if the VarInt is larger than `max`.

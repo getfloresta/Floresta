@@ -1040,7 +1040,6 @@ version = "0.5.0"
 dependencies = [
  "bitcoin",
  "hashbrown 0.17.1",
- "sha2",
  "spin",
  "tracing",
 ]
