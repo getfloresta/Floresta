@@ -10,9 +10,10 @@ use bitcoin::consensus;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
+use bitcoin::hashes::HashEngine;
 use bitcoin::hashes::sha256;
-use sha2::Digest;
-use sha2::Sha512_256;
+
+use bitcoin::hashes::sha512_256;
 
 use crate::prelude::Box;
 use crate::prelude::Vec;
@@ -48,17 +49,19 @@ impl LeafData {
             .consensus_encode(&mut ser_utxo)
             .expect("serializing TxOut never fails: Vec<u8>::Write always returns Ok");
 
-        let leaf_hash = Sha512_256::new()
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(self.block_hash)
-            .chain_update(self.prevout.txid)
-            .chain_update(self.prevout.vout.to_le_bytes())
-            .chain_update(self.header_code.to_le_bytes())
-            .chain_update(ser_utxo)
-            .finalize();
+        let mut engine = sha512_256::Hash::engine();
 
-        sha256::Hash::from_byte_array(leaf_hash.into())
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&self.block_hash[..]);
+        engine.input(&self.prevout.txid[..]);
+        engine.input(&self.prevout.vout.to_le_bytes());
+        engine.input(&self.header_code.to_le_bytes());
+        engine.input(&ser_utxo);
+
+        let leaf_hash = sha512_256::Hash::from_engine(engine);
+
+        sha256::Hash::from_byte_array(leaf_hash.to_byte_array())
     }
 }
 
@@ -202,11 +205,11 @@ pub mod proof_util {
     use bitcoin::blockdata::script::Instruction;
     use bitcoin::consensus::Encodable;
     use bitcoin::hashes::Hash;
+    use bitcoin::hashes::HashEngine;
     use bitcoin::hashes::sha256;
+    use bitcoin::hashes::sha512_256;
     use floresta_common::impl_error_from;
     use rustreexo::node_hash::BitcoinNodeHash;
-    use sha2::Digest;
-    use sha2::Sha512_256;
 
     use super::LeafData;
     use crate::BlockchainError;
@@ -335,17 +338,19 @@ pub mod proof_util {
             height << 1
         };
 
-        let leaf_hash = Sha512_256::new()
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(block_hash)
-            .chain_update(txid)
-            .chain_update(vout.to_le_bytes())
-            .chain_update(header_code.to_le_bytes())
-            .chain_update(ser_utxo)
-            .finalize();
+        let mut engine = sha512_256::Hash::engine();
 
-        sha256::Hash::from_byte_array(leaf_hash.into())
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&block_hash[..]);
+        engine.input(&txid[..]);
+        engine.input(&vout.to_le_bytes());
+        engine.input(&header_code.to_le_bytes());
+        engine.input(&ser_utxo);
+
+        let leaf_hash = sha512_256::Hash::from_engine(engine);
+
+        sha256::Hash::from_byte_array(leaf_hash.to_byte_array())
     }
 
     /// From a block, gets the roots that will be included on the acc, certifying
