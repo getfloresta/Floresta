@@ -23,7 +23,7 @@ use bitcoin::ScriptBuf;
 use bitcoin::VarInt;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::encode;
-use bitcoin::hashes::sha256;
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::p2p::ServiceFlags;
 #[cfg(feature = "std")]
 mod ema;
@@ -38,8 +38,6 @@ pub use spsc::Channel;
 ///
 /// [Hash]: https://docs.rs/bitcoin_hashes/latest/bitcoin_hashes/sha256/struct.Hash.html
 pub fn get_hash_from_u8(data: &[u8]) -> sha256::Hash {
-    use bitcoin::hashes::Hash;
-    use bitcoin::hashes::sha256;
     sha256::Hash::hash(data)
 }
 
@@ -52,9 +50,6 @@ pub fn get_hash_from_u8(data: &[u8]) -> sha256::Hash {
 /// [documentation]: https://electrum-protocol.readthedocs.io/en/latest/protocol-basics.html#script-hashes
 /// [Hash]: https://docs.rs/bitcoin_hashes/latest/bitcoin_hashes/sha256/struct.Hash.html
 pub fn get_spk_hash(spk: &ScriptBuf) -> sha256::Hash {
-    use bitcoin::hashes::Hash;
-    use bitcoin::hashes::sha256;
-
     let data = spk.as_bytes();
     let mut bytes = sha256::Hash::hash(data).to_byte_array();
     bytes.reverse();
