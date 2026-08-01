@@ -12,7 +12,6 @@ use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::HashEngine;
 use bitcoin::hashes::sha256;
-
 use bitcoin::hashes::sha512_256;
 
 use crate::prelude::Box;
@@ -737,5 +736,38 @@ mod test {
         )
         .unwrap();
         assert_eq!(leaf, reconstructed);
+    }
+    #[test]
+    fn test_leaf_hash_known_vector() {
+        use bitcoin::BlockHash;
+        use bitcoin::OutPoint;
+        use bitcoin::ScriptBuf;
+        use bitcoin::TxOut;
+        use bitcoin::amount::Amount;
+        use bitcoin::hashes::Hash;
+        use bitcoin::hashes::sha256;
+
+        let block_hash = BlockHash::from_byte_array([0xAA; 32]);
+        let txid = bitcoin::Txid::from_byte_array([0xBB; 32]);
+        let outpoint = OutPoint::new(txid, 42);
+        let header_code = 0xDEADBEEF;
+        let utxo = TxOut {
+            value: Amount::from_sat(100_000_000),
+            script_pubkey: ScriptBuf::new(),
+        };
+        let leaf = LeafData {
+            block_hash,
+            prevout: outpoint,
+            header_code,
+            utxo,
+        };
+
+        let hash = leaf._get_leaf_hashes();
+        let expected: sha256::Hash =
+            "faa30cef15141c86d3066850efdbc4c67690c513c465fb97c67a0ed56f4b05ec"
+                .parse()
+                .unwrap();
+
+        assert_eq!(hash, expected, "Leaf hash changed unexpectedly!");
     }
 }
