@@ -589,10 +589,18 @@ where
                 }
                 PeerCheck::UnresponsivePeer(dead_peer) => {
                     self.disconnect_and_ban(dead_peer)?;
+                    if dead_peer == peer1 {
+                        invalid_accs.insert(peer[0].1.clone());
+                    } else {
+                        invalid_accs.insert(peer[1].1.clone());
+                    }
                 }
                 PeerCheck::BothUnresponsivePeers => {
                     self.disconnect_and_ban(peer1)?;
                     self.disconnect_and_ban(peer2)?;
+
+                    invalid_accs.insert(peer[0].1.clone());
+                    invalid_accs.insert(peer[1].1.clone());
                 }
                 PeerCheck::BothLying => {
                     self.disconnect_and_ban(peer1)?;
@@ -606,7 +614,9 @@ where
         //filter out the invalid accs
         candidate_accs.retain(|acc| !invalid_accs.contains(&acc.1));
         //we should have only one candidate left
-        assert_eq!(candidate_accs.len(), 1);
+        if candidate_accs.len() != 1 {
+            return Err(WireError::PeerTimeout);
+        }
 
         Self::parse_acc(&candidate_accs.pop().unwrap().1)
     }
