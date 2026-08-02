@@ -37,7 +37,7 @@ metrics = { workspace = true,  optional = true }
 
 [dev-dependencies]
 bitcoin = { workspace = true, features = ["serde"] }
-criterion = { version = "=0.7.0" }
+criterion = { version = "=0.8.2" }
 hex = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
