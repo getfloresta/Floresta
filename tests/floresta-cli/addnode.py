@@ -5,6 +5,7 @@
 import pytest
 
 from test_framework.node import NodeType
+from test_framework.rpc.exceptions import JSONRPCError
 
 
 @pytest.mark.rpc
@@ -101,10 +102,11 @@ class AddNodeTest:
         self.verify_peer_connection_state(is_connected=True)
 
         self.log.info(
-            "===== Verify Floresta does not add the same persistent peer twice"
+            "===== Verify Floresta rejects re-adding the same persistent peer"
         )
-        self.floresta_addnode_with_command("add")
-        # This function expects 1 peer connected to florestad
+        with pytest.raises(JSONRPCError):
+            self.floresta_addnode_with_command("add")
+        # Nothing should have changed: still only 1 peer connected
         self.verify_peer_connection_state(is_connected=True)
 
         self.floresta_addnode_with_command("onetry")
@@ -131,3 +133,17 @@ class AddNodeTest:
 
         self.node_manager.run_node(self.bitcoind)
         self.verify_peer_connection_state(is_connected=False)
+
+
+@pytest.mark.rpc
+def test_add_node_remove_unknown_peer_fails(
+    setup_logging, node_manager, florestad_node, add_node_with_extra_args
+):
+    """`addnode remove` on a peer that was never added should return an error,
+    not silently report success."""
+    log = setup_logging
+    bitcoind = add_node_with_extra_args(NodeType.BITCOIND, ["-v2transport=0"])
+
+    log.info("===== 'remove' on a peer that was never added should fail")
+    with pytest.raises(JSONRPCError):
+        node_manager.connect_nodes(florestad_node, bitcoind, "remove", False)

@@ -36,6 +36,7 @@ use crate::node_interface::MempoolMethods;
 use crate::node_interface::NetworkMethods;
 use crate::node_interface::NodeConfigMethods;
 use crate::node_interface::PeerInfo;
+use crate::p2p_wire::error::WireError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A request that can be made to the node.
@@ -133,16 +134,16 @@ pub enum NodeResponse {
     GetConnectionCount(usize),
 
     /// A response indicating whether a peer was successfully added.
-    Add(bool),
+    Add(Result<(), WireError>),
 
     /// A response indicating whether a peer was successfully removed.
-    Remove(bool),
+    Remove(Result<(), WireError>),
 
     // A response indicating whether a peer was successfully disconnected from.
     Disconnect(bool),
 
     /// A response indicating whether a peer was successfully connected once.
-    Onetry(bool),
+    Onetry(Result<(), WireError>),
 
     /// A response indicating whether the ping was successful.
     Ping(bool),
@@ -255,7 +256,7 @@ impl NetworkMethods for NodeHandle {
         &self,
         addr: BitcoinSocketAddr,
         v2transport: bool,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<Result<(), WireError>, Self::Error> {
         let val = self
             .send_request(UserRequest::Add((addr, v2transport)))
             .await?;
@@ -263,7 +264,10 @@ impl NetworkMethods for NodeHandle {
         extract_variant!(Add, val);
     }
 
-    async fn remove_peer(&self, addr: BitcoinSocketAddr) -> Result<bool, Self::Error> {
+    async fn remove_peer(
+        &self,
+        addr: BitcoinSocketAddr,
+    ) -> Result<Result<(), WireError>, Self::Error> {
         let val = self.send_request(UserRequest::Remove(addr)).await?;
         extract_variant!(Remove, val);
     }
@@ -278,7 +282,7 @@ impl NetworkMethods for NodeHandle {
         &self,
         addr: BitcoinSocketAddr,
         v2transport: bool,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<Result<(), WireError>, Self::Error> {
         let val = self
             .send_request(UserRequest::Onetry((addr, v2transport)))
             .await?;

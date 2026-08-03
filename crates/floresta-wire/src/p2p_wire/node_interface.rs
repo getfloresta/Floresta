@@ -31,6 +31,7 @@ use super::node::PeerStatus;
 use super::transport::TransportProtocol;
 use crate::address_man::ConnectionStats;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+use crate::p2p_wire::error::WireError;
 
 #[derive(Debug, Clone, Serialize)]
 /// A struct representing a peer connected to the node.
@@ -102,21 +103,21 @@ pub trait NetworkMethods {
     type Error: core::error::Error;
 
     /// Connects to a specified address and port.
-    /// This function will return a boolean indicating whether the connection was successful. It
-    /// may be called multiple times, and may use hostnames or IP addresses.
+    /// Returns `Ok(Ok(()))` if the peer was added, or `Ok(Err(WireError))` describing why it
+    /// wasn't (e.g. already added). May be called multiple times, and may use hostnames or IPs.
     fn add_peer(
         &self,
         addr: BitcoinSocketAddr,
         v2transport: bool,
-    ) -> impl Future<Output = Result<bool, Self::Error>>;
+    ) -> impl Future<Output = Result<Result<(), WireError>, Self::Error>>;
 
     /// Removes a peer from the node's peer list.
-    /// This function will return a boolean indicating whether the peer was successfully removed.
-    /// It may be called multiple times, and may use hostnames or IP addresses.
+    /// Returns `Ok(Ok(()))` if the peer was removed, or `Ok(Err(WireError))` describing why it
+    /// wasn't (e.g. not found). May be called multiple times, and may use hostnames or IPs.
     fn remove_peer(
         &self,
         addr: BitcoinSocketAddr,
-    ) -> impl Future<Output = Result<bool, Self::Error>>;
+    ) -> impl Future<Output = Result<Result<(), WireError>, Self::Error>>;
 
     /// Immediately disconnect from a peer.
     ///
@@ -129,13 +130,13 @@ pub trait NetworkMethods {
     /// Attempts to connect to a peer once.
     ///
     /// This function will try to connect to the peer once, but will not add it to the node's
-    /// peer list. It will return a boolean indicating whether the connection was successful.
-    /// It may be called multiple times, and may use hostnames or IP addresses.
+    /// peer list. Returns `Ok(Ok(()))` on success, or `Ok(Err(WireError))` describing why the
+    /// attempt failed. May be called multiple times, and may use hostnames or IP addresses.
     fn onetry_peer(
         &self,
         addr: BitcoinSocketAddr,
         v2transport: bool,
-    ) -> impl Future<Output = Result<bool, Self::Error>>;
+    ) -> impl Future<Output = Result<Result<(), WireError>, Self::Error>>;
 
     /// Gets information about all connected peers.
     ///

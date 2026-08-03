@@ -100,11 +100,11 @@ where
                 let node_response = match self.handle_addnode_add_peer(addr.clone(), v2transport) {
                     Ok(_) => {
                         info!("Added peer {addr}");
-                        NodeResponse::Add(true)
+                        NodeResponse::Add(Ok(()))
                     }
                     Err(err) => {
                         warn!("{err:?}");
-                        NodeResponse::Add(false)
+                        NodeResponse::Add(Err(err))
                     }
                 };
 
@@ -116,11 +116,11 @@ where
                 let node_response = match self.handle_addnode_remove_peer(addr.clone()) {
                     Ok(_) => {
                         info!("Removed peer {addr}");
-                        NodeResponse::Remove(true)
+                        NodeResponse::Remove(Ok(()))
                     }
                     Err(err) => {
                         warn!("{err:?}");
-                        NodeResponse::Remove(false)
+                        NodeResponse::Remove(Err(err))
                     }
                 };
 
@@ -133,11 +133,11 @@ where
                 {
                     Ok(_) => {
                         info!("Connected to peer {addr}");
-                        NodeResponse::Onetry(true)
+                        NodeResponse::Onetry(Ok(()))
                     }
                     Err(err) => {
                         warn!("{err:?}");
-                        NodeResponse::Onetry(false)
+                        NodeResponse::Onetry(Err(err))
                     }
                 };
 

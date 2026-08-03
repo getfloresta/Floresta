@@ -186,17 +186,15 @@ class BaseRPC(ABC):
         self.log.debug(self.log_msg(logmsg))
 
         resp = self.noraise_request(method, params)
-
-        if resp["status_code"] != 200:
-            self.log.error(
-                f"RPC request failed with status code {resp['status_code']}: {resp['body']}"
-            )
-            raise HTTPError
-
         result = resp["body"]
+
         # Error could be None or a str
         # If in the future this change,
         # cast the resulted error to str
+        #
+        # The server may return a non-200 HTTP status alongside a JSON-RPC error
+        # body (see `http_code()` on the Rust side), so check for a JSON-RPC error
+        # in the body before falling back to a generic HTTP-level failure.
         if "error" in result and result["error"] is not None:
             raise JSONRPCError(
                 data=result["error"] if isinstance(result["error"], str) else None,
@@ -204,6 +202,12 @@ class BaseRPC(ABC):
                 code=result["error"]["code"],
                 message=result["error"]["message"],
             )
+
+        if resp["status_code"] != 200:
+            self.log.error(
+                f"RPC request failed with status code {resp['status_code']}: {resp['body']}"
+            )
+            raise HTTPError
 
         self.log.debug(self.log_msg(result["result"]))
         return result["result"]
