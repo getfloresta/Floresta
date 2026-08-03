@@ -253,6 +253,12 @@ pub mod jsonrpc_interface {
 
         /// The provided net address is invalid
         InvalidNetAddress(InvalidAddressError),
+
+        /// The user sent an invalid proof
+        InvalidProof(String),
+
+        /// Accumulator not found for block.
+        UnknownUtreexoAcc(String),
     }
 
     impl_error_from!(JsonRpcError, MempoolError, MempoolAccept);
@@ -280,6 +286,8 @@ pub mod jsonrpc_interface {
                 | Self::InvalidParameterStructure(_)
                 | Self::MissingParameter(_)
                 | Self::InvalidNetAddress(_)
+                | Self::InvalidProof(_)
+                | Self::UnknownUtreexoAcc(_)
                 | Self::Wallet(_) => StatusCode::BAD_REQUEST,
 
                 // 404 Not Found - resource/method doesn't exist
@@ -336,6 +344,11 @@ pub mod jsonrpc_interface {
                     message: "Invalid script".into(),
                     data: None,
                 },
+                Self::UnknownUtreexoAcc(block) => RpcError {
+                    code: INVALID_METHOD_PARAMETERS,
+                    message: format!("Utreexo accumulator for {block} is unknown"),
+                    data: None,
+                },
                 Self::InvalidDescriptor(e) => RpcError {
                     code: INVALID_METHOD_PARAMETERS,
                     message: "Invalid descriptor".into(),
@@ -349,6 +362,11 @@ pub mod jsonrpc_interface {
                 Self::InvalidTimestamp => RpcError {
                     code: INVALID_METHOD_PARAMETERS,
                     message: "Invalid timestamp".into(),
+                    data: None,
+                },
+                Self::InvalidProof(proof) => RpcError {
+                    code: INVALID_METHOD_PARAMETERS,
+                    message: format!("Invalid proof:{proof}"),
                     data: None,
                 },
                 Self::InvalidMemInfoMode => RpcError {
@@ -585,3 +603,41 @@ pub enum GetBlockHeaderRes {
 /// by Bitcoin Core.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetTxOutProof(pub String);
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+/// Return type for `verifyutxochaintipinclusionproof`, supports both its verbose version and non-verbose.
+///
+/// The non-verbose version tells whether a proof is valid given the internal utreexo accumulator.
+pub enum VerifyUtxoChainTipInclusionProofRes {
+    /// No verbosity, tells whether a proof is valid.
+    Zero(bool),
+
+    /// Verbosity one, with more detailed information about the proof
+    One(VerifyUtxoChainTipInclusionProofVerbose),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// Return type for `verifyutxochaintipinclusionproof`
+///
+/// Field names match utreexod's `proveutxochaintipinclusion` response.
+pub struct VerifyUtxoChainTipInclusionProofVerbose {
+    /// Whether this proof is valid
+    pub valid: bool,
+
+    /// The block hash that this proof was proved.
+    #[serde(rename = "provedathash")]
+    pub proved_at_hash: String,
+
+    /// The targets that this proof is proving.
+    #[serde(rename = "prooftargets")]
+    pub targets: Vec<u64>,
+
+    /// Proof hashes.
+    #[serde(rename = "proofhashes")]
+    pub proof_hashes: Vec<String>,
+
+    /// Which of the hashes were proven.
+    #[serde(rename = "hashesproven")]
+    pub hashes_proven: Vec<String>,
+}

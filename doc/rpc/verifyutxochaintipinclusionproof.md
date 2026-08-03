@@ -1,0 +1,76 @@
+# `verifyutxochaintipinclusionproof`
+
+Verifies a Utreexo accumulator inclusion proof for the chain tip.
+
+## Usage
+
+### Synopsis
+
+```bash
+floresta-cli verifyutxochaintipinclusionproof <proof> [verbosity] [blockhash]
+```
+
+### Examples
+
+```bash
+# Verify a valid proof
+floresta-cli verifyutxochaintipinclusionproof "7be8d37f896c5679fc370f78618352758f8313267f1ad3348e32fa7d7fdb411501000678463e22379a90e33854981d711045382f5a897d578944a32625a4676472b87ea7b27aa09d99d88888dc70af5cf032afd4d3b92a77db2501ff133a46bf11780afe345534cc16c23330a6eb00f8bcc8fef9c2c48237bf6ce35cb9474a6ca93556e6b07d99729145a9eff0b40ab0401c0b38136b20498753e109fcdc869587b4565236f49e081ba525b9e100d0a73d6c734a4b7c89dcff97646f5f30f95974aaefdef19c978c859a62f3885a22424c34e657fd8170a63b13a72e3202b044d65399010000006e6d53328389a2ebf90239ee0a9884fd46fa03c471bebf37cde90f6dd49812c9"
+
+# Verify an invalid proof (returns false)
+floresta-cli verifyutxochaintipinclusionproof "7be8d37f896c5679fc370f78618352758f8313267f1ad3348e32fa7d7fdb411501000678463e22379a90e33854981d711045382f5a897d578944a32625a4676472b87ea7b27aa09d99d88888dc70af5cf032afd4d3b92a77db2501ff133a46bf11780afe345534cc16c23330a6eb00f8bcc8fef9c2c48237bf6ce35cb9474a6ca93556e6b07d99729145a9eff0b40ab0401c0b38136b20498753e109fcdc869587b4565236f49e081ba525b9e100d0a73d6c734a4b7c89dcff97646f5f30f95974aaefdef19c978c859a62f3885a22424c34e657fd8170a63b13a72e3202b044d65399010000006e6d53328389a2ebf90239ee0a9884fd46fa03c471bebf37cde90f6dd4981210"
+
+# Verify with detailed output (verbosity 1 — returns JSON object)
+floresta-cli verifyutxochaintipinclusionproof "7be8d37f...c9" 1
+```
+
+## Arguments
+
+`proof` - (String, required) Hex-encoded Utreexo chain-tip inclusion proof. The binary format is:
+
+- **proved_at_hash** (32 bytes): The block hash at which the proof was generated (little-endian).
+- **targets** (varint count + varint[]): Accumulator leaf positions being proven.
+- **proof_hashes** (varint count + 32-byte hashes): Sibling hashes needed to reconstruct the path to the roots.
+- **hashes_proven** (u32 LE count + 32-byte hashes): The leaf hashes whose inclusion is being proven.
+
+`verbosity` - (u32, optional, default=0) Level of detail in the response:
+
+- `0`: Returns `true` or `false`.
+- `1`: Returns a JSON object with `valid`, `provedathash`, `prooftargets`, `proofhashes` and `hashesproven`.
+
+`blockhash` - (String, optional) Block hash to check the proof against. Defaults to the current chain tip. Useful for testing and debugging with proofs generated at a specific block height, should not be used when you need to validate if a proof is canonically valid.
+
+## Returns
+
+### Ok Response
+
+### Verbosity 0 (default)
+
+- `true|false` - (boolean) Returns `true` if the proof is cryptographically valid, `false` if the proof is logically invalid but well-formed.
+
+### Verbosity 1
+
+```json
+{
+  "valid": true,
+  "provedathash": "6d11188b...",
+  "prooftargets": [0],
+  "proofhashes": ["a6b5a202...", "4bc79324...", "590d644e..."],
+  "hashesproven": ["e1e92857..."]
+}
+```
+
+### Error Enum
+
+- `JsonRpcError::InvalidHex` - The proof is not valid hexadecimal.
+- `JsonRpcError::Decode` - Malformed proof: too large, too short, truncated data, invalid varints, or trailing bytes.
+- `JsonRpcError::InvalidProof` - Well-formed proof but invalid: stale (wrong block height) or cryptographic verification failed.
+- `JsonRpcError::InvalidVerbosityLevel` - Verbosity value is not 0 or 1.
+- `JsonRpcError::UnknownUtreexoAcc` - A block without known utreexo acc was requested.
+
+## Notes
+
+- The proof must match the expected block hash: the current chain tip by default, or the `blockhash` argument if provided. Mismatched proofs will return `InvalidProof` error.
+- To generate a proof, use the `proveutxochaintipinclusion` RPC from `utreexod` with transaction IDs and output index.
+- Related RPCs: `getbestblockhash` (to verify current chain tip hash).
+- The blockhash argument is useful for testing, debugging and precise understanding of the internal utreexo accumulator and to understand how much staled a stale proof is, and should not be used to validate if a proof is canonically valid, each proof is only valid given a unique set of utreexo roots, each block have its own set of roots.
+- A proof not being valid means that its cryptographically invalid, a possibly stale proof can be updated to become valid again.

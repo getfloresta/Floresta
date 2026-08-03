@@ -9,6 +9,10 @@ edition.workspace = true
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+default = ["json-rpc"]
+json-rpc = ["floresta-node/json-rpc"]
+
 [dependencies]
 # All dependencies MUST be pinned precisely with `X.Y.z`
 arbitrary = { version = "=1.4.2", features = ["derive"] }
@@ -18,7 +22,9 @@ tempfile = { workspace = true }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
+floresta-node = { workspace = true }
 floresta-wire = { workspace = true }
+rustreexo = { workspace = true }
 
 [[bin]]
 name = "local_address_str"
@@ -96,6 +102,30 @@ path = "fuzz_targets/onion_address_str_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tip_proof_des"
+path = "fuzz_targets/tip_proof_des.rs"
+test = false
+doc = false
+bench = false
+required-features = ["json-rpc"]
+
+[[bin]]
+name = "tip_proof_from_str"
+path = "fuzz_targets/tip_proof_from_str.rs"
+test = false
+doc = false
+bench = false
+required-features = ["json-rpc"]
+
+[[bin]]
+name = "tip_proof_roundtrip"
+path = "fuzz_targets/tip_proof_roundtrip.rs"
+test = false
+doc = false
+bench = false
+required-features = ["json-rpc"]
 
 [lints]
 workspace = true

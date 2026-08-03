@@ -17,6 +17,7 @@ use axum::http::Response as HttpResponse;
 use axum::http::StatusCode;
 use axum::routing::post;
 use bitcoin::Address;
+use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
@@ -53,12 +54,13 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use super::res::GetRawTransactionRes;
+use super::request::TipProof;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
 use crate::json_rpc::request::arg_parser::get_at;
 use crate::json_rpc::request::arg_parser::get_with_default;
 use crate::json_rpc::request::arg_parser::try_into_optional;
+use crate::json_rpc::res::GetRawTransactionRes;
 use crate::json_rpc::res::RescanConfidence;
 use crate::json_rpc::res::jsonrpc_interface::Response;
 
@@ -448,6 +450,18 @@ async fn handle_json_rpc_request(
             state
                 .send_raw_transaction(tx)
                 .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
+        "verifyutxochaintipinclusionproof" => {
+            let proof: TipProof = get_at(&params, 0, "proof")?;
+
+            let verbosity: u8 = get_with_default(&params, 1, "verbosity", 0)?;
+
+            let blockhash: Option<BlockHash> = try_into_optional(get_at(&params, 2, "blockhash"))?;
+
+            state
+                .verify_utxo_chain_tip_inclusion_proof(proof, verbosity, blockhash)
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 

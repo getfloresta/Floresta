@@ -147,8 +147,11 @@ pub trait BlockchainInterface {
     /// Returns this chain's params
     fn get_params(&self) -> bitcoin::params::Params;
 
-    /// Returns our current acc
-    fn acc(&self) -> Stump;
+    /// Returns the acc for the current tip. For arbitrary accumulator retrieval, see `get_acc`.
+    fn get_tip_acc(&self) -> Stump;
+
+    /// Returns the acc for the given block. If you only needs the tip accumulator, see `get_tip_acc`.
+    fn get_acc(&self, block: BlockHash) -> Result<Option<Stump>, Self::Error>;
 
     /// Returns the amount of [`Work`] associated with a given chain tip
     fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error>;
@@ -218,8 +221,6 @@ pub trait UpdatableChainstate {
     /// This mimics the behaviour of checking every block before this block, and continues
     /// from this point
     fn mark_chain_as_assumed(&self, acc: Stump, tip: BlockHash) -> Result<bool, BlockchainError>;
-    /// Returns the current accumulator
-    fn get_acc(&self) -> Stump;
 }
 
 #[derive(Debug, Clone)]
@@ -233,10 +234,6 @@ pub enum Notification {
 impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
     fn flush(&self) -> Result<(), BlockchainError> {
         T::flush(self)
-    }
-
-    fn get_acc(&self) -> Stump {
-        T::get_acc(self)
     }
 
     fn update_ibd(&self, ibd_state: IBDState) {
@@ -306,8 +303,12 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::get_params(self)
     }
 
-    fn acc(&self) -> Stump {
-        T::acc(self)
+    fn get_acc(&self, block: BlockHash) -> Result<Option<Stump>, Self::Error> {
+        T::get_acc(self, block)
+    }
+
+    fn get_tip_acc(&self) -> Stump {
+        T::get_tip_acc(self)
     }
 
     fn get_block(&self, hash: &BlockHash) -> Result<Block, Self::Error> {

@@ -16,7 +16,6 @@ use bitcoin::p2p::address::AddrV2Message;
 use floresta_chain::ThreadSafeChain;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
-use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
@@ -266,7 +265,7 @@ where
 
                 // we haven't finished the backfill yet, save the current state for the next run
                 if chain.is_in_ibd() {
-                    let acc = chain.get_acc();
+                    let acc = chain.get_tip_acc();
                     let tip = chain.get_height().unwrap();
                     let mut ser_acc = Vec::new();
                     acc.serialize(&mut ser_acc).unwrap();

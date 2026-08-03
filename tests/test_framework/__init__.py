@@ -380,15 +380,23 @@ class FlorestaTestFramework:
         for node in self._nodes:
             block_count = node.rpc.get_block_count()
 
-            if (
-                node.variant == NodeType.FLORESTAD
-                and is_finished_ibd
-                and node.rpc.get_blockchain_info()["initialblockdownload"]
-            ):
-                self.log.debug(
-                    f"Node '{node.variant}' has not finished IBD. Block count: {block_count}"
-                )
-                return False
+            if node.variant == NodeType.FLORESTAD and is_finished_ibd:
+                info = node.rpc.get_blockchain_info()
+                if info["initialblockdownload"]:
+                    self.log.debug(
+                        f"Node '{node.variant}' has not finished IBD. "
+                        f"Block count: {block_count}"
+                    )
+                    return False
+                # Ensure validation has caught up to the header tip.
+                # headers = best-known header height, blocks = last validated height.
+                # They diverge while blocks are still being validated.
+                if info["blocks"] < info["headers"]:
+                    self.log.debug(
+                        f"Node '{node.variant}' validation behind: "
+                        f"blocks={info['blocks']}, headers={info['headers']}"
+                    )
+                    return False
 
             if block_count != expected_block:
                 self.log.debug(

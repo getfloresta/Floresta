@@ -63,7 +63,7 @@ mod tests {
             ]
             .to_vec(),
         };
-        assert_eq!(chain.acc(), expected_acc);
+        assert_eq!(chain.get_tip_acc(), expected_acc);
     }
 
     #[tokio::test]
@@ -112,6 +112,6 @@ mod tests {
             ]
             .to_vec(),
         };
-        assert_eq!(chain.acc(), expected_acc);
+        assert_eq!(chain.get_tip_acc(), expected_acc);
     }
 }
