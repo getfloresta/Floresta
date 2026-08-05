@@ -615,6 +615,23 @@ where
         candidate_accs.retain(|acc| !invalid_accs.contains(&acc.1));
         //we should have only one candidate left
         if candidate_accs.len() != 1 {
+            // No single trusted candidate remains (e.g. we might be eclipsed). If the user
+            // configured an assumeutreexo checkpoint, fall back to it instead of bailing out,
+            // mirroring the fallback in `empty_headers_message`.
+            if let Some(assume_utreexo) = self.common.config.assume_utreexo.as_ref() {
+                info!(
+                    "Could not find a single trusted accumulator candidate; falling back to \
+                     assumeutreexo checkpoint at height={} tip={}",
+                    assume_utreexo.height, assume_utreexo.block_hash
+                );
+                let acc = Stump {
+                    leaves: assume_utreexo.leaves,
+                    roots: assume_utreexo.roots.clone(),
+                };
+                self.chain
+                    .mark_chain_as_assumed(acc.clone(), assume_utreexo.block_hash)?;
+                return Ok(acc);
+            }
             return Err(WireError::PeerTimeout);
         }
 
