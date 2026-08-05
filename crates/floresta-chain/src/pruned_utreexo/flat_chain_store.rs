@@ -1324,19 +1324,19 @@ impl ChainStore for FlatChainStore {
     }
 
     fn save_block_fee_rate(&mut self, height: u32, fee_rate: u64) -> Result<(), Self::Error> {
-        let pos = height as u64 * 8;
+        let pos = height as u64 * size_of::<u64>() as u64;
         self.fee_rate_file.seek(SeekFrom::Start(pos))?;
         self.fee_rate_file.write_all(&fee_rate.to_le_bytes())?;
         Ok(())
     }
 
     fn get_block_fee_rate(&mut self, height: u32) -> Result<Option<u64>, Self::Error> {
-        let pos = height as u64 * 8;
+        let pos = height as u64 * size_of::<u64>() as u64;
         let file_len = self.fee_rate_file.metadata()?.len();
-        if pos + 8 > file_len {
+        if pos + size_of::<u64>() as u64 > file_len {
             return Ok(None);
         }
-        let mut buf = [0u8; 8];
+        let mut buf = [0u8; size_of::<u64>()];
         self.fee_rate_file.seek(SeekFrom::Start(pos))?;
         self.fee_rate_file.read_exact(&mut buf)?;
         Ok(Some(u64::from_le_bytes(buf)))

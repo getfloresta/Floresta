@@ -72,7 +72,7 @@ use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
 use crate::write_lock;
 
-const SATS_PER_KILO_VBYTE: u64 = bitcoin::Weight::WITNESS_SCALE_FACTOR as u64 * 1000;
+const SATS_PER_KILO_VBYTE: u64 = bitcoin::Weight::WITNESS_SCALE_FACTOR * 1000;
 
 /// Trait for components that need to receive notifications about new blocks.
 pub trait BlockConsumer: Sync + Send + 'static {
