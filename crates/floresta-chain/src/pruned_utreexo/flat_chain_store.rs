@@ -1871,6 +1871,38 @@ mod tests {
     }
 
     #[test]
+    fn test_fee_rate_save_and_get() {
+        let mut store = get_test_chainstore(None).unwrap();
+
+        // save and get
+        store.save_block_fee_rate(0, 12345).unwrap();
+        store.save_block_fee_rate(1, 67890).unwrap();
+        store.save_block_fee_rate(100, u64::MAX).unwrap();
+
+        assert_eq!(store.get_block_fee_rate(0).unwrap(), Some(12345));
+        assert_eq!(store.get_block_fee_rate(1).unwrap(), Some(67890));
+        assert_eq!(store.get_block_fee_rate(100).unwrap(), Some(u64::MAX));
+    }
+
+    #[test]
+    fn test_fee_rate_missing_block_returns_none() {
+        let mut store = get_test_chainstore(None).unwrap();
+
+        // not saved
+        assert_eq!(store.get_block_fee_rate(2).unwrap(), None);
+        assert_eq!(store.get_block_fee_rate(99999).unwrap(), None);
+    }
+
+    #[test]
+    fn test_fee_rate_overwrite() {
+        let mut store = get_test_chainstore(None).unwrap();
+
+        store.save_block_fee_rate(5, 111).unwrap();
+        store.save_block_fee_rate(5, 222).unwrap();
+        assert_eq!(store.get_block_fee_rate(5).unwrap(), Some(222));
+    }
+
+    #[test]
     fn accept_first_signet_headers() {
         // Accepts the first 2016 signet headers
         let file = include_bytes!("../../testdata/signet_headers.zst");
