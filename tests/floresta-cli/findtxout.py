@@ -13,8 +13,6 @@ from test_framework.constants import (
 )
 from test_framework.util import compare_fields, wait_until
 
-IGNORE_FIELDS = ["bestblock", "confirmations"]
-
 BLOCKS = 20
 
 # Utreexod pays every coinbase to the same address, so the scan below ends up
@@ -31,12 +29,24 @@ def find_coinbase_output(florestad, bitcoind, height: int) -> tuple[str, str, di
     """
     Return the `(txid, scriptPubKey hex, gettxout result)` of the coinbase
     output of the block at `height`, using bitcoind as the reference node.
+
+    Both `bestblock` and `confirmations` are relative to the chain tip, so
+    the nodes must agree on it for the reference to be comparable. Nothing is
+    mined while the test runs, which keeps that true for every later call.
     """
+    tip = florestad.rpc.get_bestblockhash()
+    assert tip == bitcoind.rpc.get_bestblockhash(), "Nodes disagree on the chain tip."
+
     block_hash = florestad.rpc.get_blockhash(height)
     txid = florestad.rpc.get_block(block_hash)["tx"][0]
 
     reference = bitcoind.rpc.get_txout(txid, vout=0, include_mempool=False)
     assert reference is not None, f"Txout for tx {txid} is None in Bitcoind."
+
+    # Pin what the tip-relative fields are expected to hold, so a mismatch
+    # points at the value itself instead of at a node lagging behind.
+    assert reference["bestblock"] == tip
+    assert reference["confirmations"] == florestad.rpc.get_block_count() - height + 1
 
     return txid, reference["scriptPubKey"]["hex"], reference
 
@@ -97,12 +107,12 @@ def test_find_txout(
         error_msg=f"findtxout didn't find {txid}:0",
     )
 
-    compare_fields(found["txout"], reference, ignore_fields=IGNORE_FIELDS)
+    compare_fields(found["txout"], reference)
 
     log.info("The scanned output should now be cached on the wallet...")
     txout_cached = florestad.rpc.get_txout(txid, vout=0, include_mempool=False)
     assert txout_cached is not None, f"Txout for tx {txid} wasn't cached in Floresta."
-    compare_fields(txout_cached, reference, ignore_fields=IGNORE_FIELDS)
+    compare_fields(txout_cached, reference)
 
     log.info(f"An output that doesn't exist on {txid} shouldn't be found...")
     assert florestad.rpc.find_txout(txid, MISSING_VOUT, script, height) is None
@@ -131,8 +141,4 @@ def test_find_txout(
     )
 
     log.info("...while the output we cached still comes back, from the wallet")
-    compare_fields(
-        florestad.rpc.find_txout(txid, 0, script, height),
-        reference,
-        ignore_fields=IGNORE_FIELDS,
-    )
+    compare_fields(florestad.rpc.find_txout(txid, 0, script, height), reference)
