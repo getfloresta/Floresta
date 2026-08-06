@@ -40,3 +40,15 @@ class FlorestaRPC(BaseRPC):
         Load a script descriptor into the wallet.
         """
         return self.perform_request("loaddescriptor", params=[descriptor])
+
+    def find_txout(self, txid: str, vout: int, script: str, height_hint: int):
+        """
+        Find a transaction output that our wallet doesn't track, scanning the
+        compact block filters from `height_hint` onwards.
+
+        Returns the same structure as `gettxout`, or `None` if the output
+        can't be found.
+        """
+        return self.perform_request(
+            "findtxout", params=[txid, vout, script, height_hint]
+        )
