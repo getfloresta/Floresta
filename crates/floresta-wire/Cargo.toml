@@ -48,6 +48,7 @@ floresta-mempool = { workspace = true }
 
 [features]
 default = []
+fuzzing = []
 metrics = ["dep:metrics"]
 
 [lints]

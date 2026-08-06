@@ -20,5 +20,7 @@ Available fuzz targets:
 - `local_address_str`
 - `onion_address_rtt`
 - `onion_address_str_parse`
+- `p2p_v1_peer`
 - `p2p_v2_message`
+- `p2p_v2_peer`
 - `utreexo_proof_des`
