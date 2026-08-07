@@ -629,7 +629,7 @@ pub struct FlatChainStore {
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
 
-    // Binary for saving fee rate
+    /// Per-block fee rate store, one little-endian u64 per height (offset = height * 8)
     fee_rate_file: File,
 }
 
