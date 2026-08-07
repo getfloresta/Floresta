@@ -28,6 +28,9 @@ use floresta_watch_only::CachedTransaction;
 use floresta_watch_only::kv_database::KvDatabase;
 use floresta_wire::node_handle::NodeHandle;
 use floresta_wire::node_interface::ChainMethods;
+
+/// Number of satoshis in one bitcoin
+const SATS_PER_BTC: f64 = 100_000_000.0;
 use floresta_wire::node_interface::MempoolMethods;
 use serde_json::Value;
 use serde_json::json;
@@ -320,7 +323,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     .chain
                     .estimate_fee(target)
                     .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
-                json_rpc_res!(request, (fee_sat / 100_000_000.0))
+                json_rpc_res!(request, (fee_sat / SATS_PER_BTC))
             }
             "blockchain.headers.subscribe" => {
                 let (height, hash) = self
