@@ -16,6 +16,7 @@ use bitcoin::block::Version as HeaderVersion;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::deserialize;
 use bitcoin::constants::genesis_block;
+use bitcoin::merkle_tree;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::SamplingMode;
@@ -27,6 +28,7 @@ use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
+use floresta_chain::pruned_utreexo::merkle;
 use floresta_chain::pruned_utreexo::utxo_data::UtxoData;
 use rustreexo::proof::Proof;
 
@@ -162,7 +164,7 @@ fn check_merkle_root_benchmark(c: &mut Criterion) {
     let block_bytes = zstd::decode_all(block_file).unwrap();
     let block: Block = deserialize(&block_bytes).unwrap();
 
-    // Both are equivalent: sanity check both before the benchmark
+    // Both implementations agree on this valid block.
     assert!(block.check_merkle_root());
     Consensus::check_merkle_root(&block).unwrap();
 
@@ -172,6 +174,20 @@ fn check_merkle_root_benchmark(c: &mut Criterion) {
 
     c.bench_function("Consensus::check_merkle_root", |b| {
         b.iter(|| black_box(Consensus::check_merkle_root(&block)))
+    });
+
+    // Now benchmark merkle reduction only, given this txid list.
+    let txids: Vec<_> = block.txdata.iter().map(|tx| tx.compute_txid()).collect();
+
+    c.bench_function("bitcoin::merkle_tree::calculate_root", |b| {
+        b.iter(|| {
+            let hash_iter = black_box(&txids).iter().map(|txid| txid.to_raw_hash());
+            black_box(merkle_tree::calculate_root(hash_iter))
+        })
+    });
+
+    c.bench_function("floresta::merkle::calculate_root", |b| {
+        b.iter(|| black_box(merkle::calculate_root(black_box(&txids))))
     });
 }
 
