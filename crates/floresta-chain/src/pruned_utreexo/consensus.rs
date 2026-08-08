@@ -26,7 +26,6 @@ use bitcoin::blockdata::Weight;
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
-use bitcoin::merkle_tree;
 use bitcoin::script;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoinkernel::PrecomputedTransactionData;
@@ -571,25 +570,6 @@ impl Consensus {
         }
 
         Ok(txids)
-    }
-
-    /// Checks if the merkle root of the header matches the merkle root of the transaction list.
-    ///
-    /// Unlike [`Block::check_merkle_root`], this function returns the list of computed [`Txid`]s
-    /// if the merkle roots matched, or `None` otherwise.
-    ///
-    /// The merkle root is computed in the same way as [`Block::compute_merkle_root`].
-    pub fn check_merkle_root(block: &Block) -> Option<Vec<Txid>> {
-        let txids: Vec<_> = block.txdata.iter().map(|obj| obj.compute_txid()).collect();
-
-        // Copy the hashes into an iterator, as `calculate_root` requires ownership
-        let hashes_iter = txids.iter().copied().map(|txid| txid.to_raw_hash());
-
-        let calculated = merkle_tree::calculate_root(hashes_iter).map(|h| h.into());
-        match calculated {
-            Some(merkle_root) if block.header.merkle_root == merkle_root => Some(txids),
-            _ => None,
-        }
     }
 
     /// Validates a block under AssumeValid SwiftSync, where previous outputs are unavailable,
@@ -1317,6 +1297,32 @@ mod tests {
                 panic!("merkle roots shouldn't match");
             }
         }
+    }
+
+    #[test]
+    fn rejects_cve_2012_2459_duplicate_subtree_mutation() {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata.truncate(6);
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        assert!(Consensus::check_merkle_root(&block).is_some());
+
+        // CVE-2012-2459:
+        // `[1, 2, 3, 4, 5, 6]` and `[1, 2, 3, 4, 5, 6, 5, 6]` have the same Merkle root.
+        block.txdata.extend_from_within(4..6);
+        assert_eq!(block.txdata.len(), 8);
+
+        // A root-only check accepts it, but consensus mutation detection must reject it.
+        assert!(block.check_merkle_root());
+        assert!(Consensus::check_merkle_root(&block).is_none());
+
+        let consensus = Consensus::from(Network::Bitcoin);
+        assert!(matches!(
+            consensus.check_block(&block, 866_342),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::BadMerkleRoot
+            ))
+        ));
     }
 
     /// Modifies historical block at height 866,342 by adding one extra transaction so that the

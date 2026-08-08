@@ -19,6 +19,7 @@ pub mod error;
 pub mod consensus;
 #[cfg(feature = "flat-chainstore")]
 pub mod flat_chain_store;
+pub mod merkle;
 pub mod partial_chain;
 pub mod udata;
 
