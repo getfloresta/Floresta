@@ -151,8 +151,8 @@ impl PartialChainStateInner {
         self.median_time_past(height.saturating_sub(1))
     }
 
-    /// Process a block, given the proof, inputs, and deleted hashes. If we find an error,
-    /// we save it.
+    /// Process a block, given the proof, inputs, and deleted hashes.
+    /// If we find an error that proves the assumed chain invalid, we save it.
     pub fn process_block(
         &mut self,
         block: &bitcoin::Block,
@@ -164,7 +164,14 @@ impl PartialChainStateInner {
 
         if let Err(BlockchainError::BlockValidation(e)) = self.validate_block(block, height, inputs)
         {
-            self.error = Some(e.clone());
+            // These errors may describe a mutated payload for an otherwise valid header.
+            // Another peer can still provide the valid block, so don't poison this chain.
+            if !matches!(
+                e,
+                BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment
+            ) {
+                self.error = Some(e.clone());
+            }
             return Err(BlockchainError::BlockValidation(e));
         }
 
@@ -532,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_with_invalid_block() {
-        fn run(block: &str, reason: BlockValidationErrors) {
+        fn run(block: &str, reason: BlockValidationErrors, caches_error: bool) {
             let genesis = parse_block(
                 "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f20020000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000",
             );
@@ -542,17 +549,21 @@ mod tests {
             let res = chainstate.connect_block(&block, Proof::default(), HashMap::new(), vec![]);
 
             match res {
-                Err(BlockchainError::BlockValidation(_e)) if matches!(reason, _e) => {}
-                _ => panic!("unexpected {res:?}"),
+                Err(BlockchainError::BlockValidation(error)) if error == reason => {}
+                other => panic!("unexpected {other:?}"),
             };
+
+            assert_eq!(chainstate.has_invalid_blocks(), caches_error);
         }
         run(
             "0000002000226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f39adbcd7823048d34357bdca86cd47172afe2a4af8366b5b34db36df89386d49b23ec964ffff7f20000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff165108feddb99c6b8435060b2f503253482f627463642fffffffff0100f2052a01000000160014806cef41295922d32ddfca09c26cc4acd36c3ed000000000",
             BlockValidationErrors::BlockExtendsAnOrphanChain,
+            true,
         );
         run(
             "0000002000226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f40adbcd7823048d34357bdca86cd47172afe2a4af8366b5b34db36df89386d49b23ec964ffff7f20000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff165108feddb99c6b8435060b2f503253482f627463642fffffffff0100f2052a01000000160014806cef41295922d32ddfca09c26cc4acd36c3ed000000000",
             BlockValidationErrors::BadMerkleRoot,
+            false, // Potentially mutated block, original txdata may be valid
         );
     }
     fn parse_block(hex: &str) -> Block {
