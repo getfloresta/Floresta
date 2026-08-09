@@ -166,7 +166,7 @@ where
     /// If we get an empty headers message, we'll check what to do next, depending on
     /// our current state. We may poke our peers to see if they have an alternative tip,
     /// or we may just finish the IBD, if no one have an alternative tip.
-    async fn handle_headers(
+    pub(crate) async fn handle_headers(
         &mut self,
         peer: PeerId,
         headers: Vec<Header>,
