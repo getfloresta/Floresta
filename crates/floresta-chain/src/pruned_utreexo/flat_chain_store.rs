@@ -1539,6 +1539,9 @@ mod tests {
         );
     }
 
+    /// A far-future timestamp so test blocks are never considered too far in the future.
+    const MOCK_TIME: u32 = u32::MAX;
+
     fn get_test_chainstore(id: Option<u64>) -> Result<FlatChainStore, FlatChainstoreError> {
         let test_id = id.unwrap_or_else(rand::random::<u64>);
 

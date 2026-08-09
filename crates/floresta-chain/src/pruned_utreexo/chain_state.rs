@@ -69,6 +69,8 @@ use crate::extensions::HeaderExt;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::IBDState;
+use crate::pruned_utreexo::WallTime;
+use crate::pruned_utreexo::consensus::MAX_FUTURE_BLOCK_TIME;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
 use crate::write_lock;
@@ -221,7 +223,11 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(())
     }
 
-    fn validate_header(&self, block_header: &BlockHeader) -> Result<BlockHash, BlockchainError> {
+    fn validate_header(
+        &self,
+        block_header: &BlockHeader,
+        current_time: WallTime,
+    ) -> Result<BlockHash, BlockchainError> {
         let prev_block = self.get_disk_block_header(&block_header.prev_blockhash)?;
         let height = prev_block
             .height()
@@ -236,11 +242,23 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             Err(BlockValidationErrors::NotEnoughPow)?;
         }
 
-        self.check_bip94_block(block_header, height)?;
-
         let block_hash = block_header
             .validate_pow(actual_target)
             .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
+
+        self.check_bip94_block(block_header, height)?;
+
+        let previous_mtp = self.median_time_past(*prev_block)?;
+        if block_header.time <= previous_mtp {
+            Err(BlockValidationErrors::TimeTooOld)?;
+        }
+
+        // Check time
+        if u64::from(block_header.time) > u64::from(current_time) + u64::from(MAX_FUTURE_BLOCK_TIME)
+        {
+            Err(BlockValidationErrors::TimeTooNew(block_header.block_hash()))?;
+        }
+
         Ok(block_hash)
     }
 
@@ -1435,7 +1453,11 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         Ok(())
     }
 
-    fn accept_header(&self, header: BlockHeader) -> Result<(), BlockchainError> {
+    fn accept_header(
+        &self,
+        header: BlockHeader,
+        current_time: WallTime,
+    ) -> Result<(), BlockchainError> {
         let disk_header = self.get_disk_block_header(&header.block_hash());
 
         match disk_header {
@@ -1456,7 +1478,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         let best_block = self.get_best_block()?;
 
         // Do validation in this header
-        let block_hash = self.validate_header(&header)?;
+        let block_hash = self.validate_header(&header, current_time)?;
 
         // Update our current tip
         if header.prev_blockhash == best_block.1 {

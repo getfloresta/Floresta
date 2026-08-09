@@ -53,6 +53,9 @@ use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
 use crate::p2p_wire::transport::TransportProtocol;
 
+/// A far-future timestamp so test blocks are never considered too far in the future.
+pub const MOCK_TIME: u32 = u32::MAX;
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UtreexoRoots {
     roots: Option<Vec<String>>,
