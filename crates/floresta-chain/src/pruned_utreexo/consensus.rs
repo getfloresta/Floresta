@@ -84,6 +84,12 @@ pub const UNSPENDABLE_BIP30_UTXO_91812: [u8; 32] = [
     0xa5, 0x40, 0x30, 0x83, 0xc3, 0x9e, 0xe3, 0x43, 0xb9, 0x85, 0xd5, 0x1f, 0xd0, 0x29, 0x5a, 0xd8,
 ];
 
+/// Maximum amount of time that a block timestamp is allowed to exceed the
+/// current time before the block will be accepted.
+///
+/// Ref: <https://github.com/bitcoin/bitcoin/blob/v31.0/src/chain.h#L29>
+pub const MAX_FUTURE_BLOCK_TIME: u32 = 2 * 60 * 60; // two hours
+
 /// This struct contains all the information and methods needed to validate a block,
 /// it is used by the [ChainState](crate::ChainState) to validate blocks and transactions.
 #[derive(Debug, Clone)]
