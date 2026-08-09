@@ -7,6 +7,7 @@ use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::HashEngine;
 use bitcoin::hashes::sha256d;
+use floresta_chain::pruned_utreexo::merkle::calculate_branch;
 use floresta_common::prelude::*;
 use serde::Deserialize;
 use serde::Serialize;
@@ -56,7 +57,8 @@ impl MerkleProof {
     /// this only proves one tx at the time.
     pub fn from_block_hashes(tx_list: Vec<sha256d::Hash>, target: u64) -> Self {
         let target_hash = tx_list[target as usize];
-        let (_, proof) = Self::transverse(tx_list, Vec::new(), target);
+        let proof =
+            calculate_branch(&tx_list, target as usize).expect("target is in transaction list");
         Self {
             target: target_hash.into(),
             pos: target,
@@ -92,17 +94,6 @@ impl MerkleProof {
         Ok(root == computed)
     }
 
-    /// Returns the position of a node's parent
-    fn get_parent(pos: u64) -> u64 {
-        (pos ^ 1) / 2
-    }
-
-    /// Returns a node's sibling. This is useful because we have to copy a node's sibling
-    /// to proof, so we can compute it's parent.
-    fn get_sibling(pos: u64) -> u64 {
-        pos ^ 1
-    }
-
     /// Computes the hash of two node's parent, by taking sha256d(left_child | right_child), where |
     /// means byte-wise concatenation.
     fn parent_hash(left: &[u8], right: &[u8]) -> sha256d::Hash {
@@ -110,58 +101,6 @@ impl MerkleProof {
         engine.input(left);
         engine.input(right);
         sha256d::Hash::from_engine(engine)
-    }
-
-    /// Iterates over the tree, collecting required nodes for proof, internally we compute
-    /// all intermediate nodes, but don't keep them.
-    fn transverse(
-        nodes: Vec<sha256d::Hash>,
-        mut proof: Vec<sha256d::Hash>,
-        target: u64,
-    ) -> (Vec<sha256d::Hash>, Vec<sha256d::Hash>) {
-        // We reached a root. This is the recursion base
-        if nodes.len() == 1 {
-            return (nodes, proof);
-        }
-        // Here we store all nodes for the next row
-        let mut new_nodes = Vec::new();
-        // Grab a node's sibling. In a Merkle Tree, our target nodes are given, and its parent
-        // can be computed using available data. We must only provide a node's sibling, so verifier
-        // can get a parent hash.
-        let sibling = Self::get_sibling(target);
-
-        // This if catches an edge case where we try to get a sibling from the last node
-        // in a non-perfect tree. This yields an out-of-bound read from nodes.
-        if sibling != nodes.len() as u64 {
-            proof.push(nodes[sibling as usize]);
-        } else {
-            proof.push(nodes[target as usize]);
-        }
-        // If the row has a odd number of nodes, we must repeat the last node to force it
-        // even.
-        let node_count = nodes.len();
-
-        let pairs = if node_count % 2 == 0 {
-            node_count / 2
-        } else {
-            // (node_count + 1) / 2
-            node_count.div_ceil(2)
-        };
-
-        for idx in 0..pairs {
-            if (2 * idx + 1) >= node_count {
-                new_nodes.push(Self::parent_hash(
-                    nodes[2 * idx].as_ref(),
-                    nodes[2 * idx].as_ref(),
-                ));
-            } else {
-                new_nodes.push(Self::parent_hash(
-                    nodes[2 * idx].as_ref(),
-                    nodes[2 * idx + 1].as_ref(),
-                ));
-            }
-        }
-        Self::transverse(new_nodes, proof, Self::get_parent(target))
     }
 }
 
@@ -209,9 +148,12 @@ impl Encodable for MerkleProof {
 mod test {
     use core::str::FromStr;
 
+    use bitcoin::Txid;
     use bitcoin::consensus::deserialize;
+    use bitcoin::hashes::Hash;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256d;
+    use floresta_chain::pruned_utreexo::merkle::calculate_root;
     use floresta_common::prelude::*;
 
     use super::MerkleProof;
@@ -235,6 +177,23 @@ mod test {
         let proof = MerkleProof::from_block_hashes(hashes, 2);
         assert_eq!(Ok(true), proof.verify(root));
     }
+
+    #[test]
+    fn all_branches_match_calculated_root() {
+        for count in 1..=16 {
+            let txids: Vec<_> = (0..count)
+                .map(|value| Txid::from_byte_array([value; 32]))
+                .collect();
+            let root = calculate_root(&txids).unwrap().0;
+            let hashes: Vec<_> = txids.iter().map(|txid| txid.to_raw_hash()).collect();
+
+            for position in 0..u64::from(count) {
+                let proof = MerkleProof::from_block_hashes(hashes.clone(), position);
+                assert_eq!(proof.verify(*root.as_raw_hash()), Ok(true));
+            }
+        }
+    }
+
     #[test]
     fn test_serialization() {
         use bitcoin::consensus::serialize;
