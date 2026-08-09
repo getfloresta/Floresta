@@ -41,6 +41,7 @@ use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
 use crate::extensions::HeaderExt;
 use crate::pruned_utreexo::IBDState;
+use crate::pruned_utreexo::WallTime;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 
 #[doc(hidden)]
@@ -327,7 +328,11 @@ impl UpdatableChainstate for PartialChainState {
 
     // these are unimplemented, and will panic if called
 
-    fn accept_header(&self, _header: BlockHeader) -> Result<(), BlockchainError> {
+    fn accept_header(
+        &self,
+        _header: BlockHeader,
+        _current_time: WallTime,
+    ) -> Result<(), BlockchainError> {
         unimplemented!("partialChainState shouldn't be used to accept new headers")
     }
 

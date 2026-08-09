@@ -69,6 +69,8 @@ use crate::extensions::HeaderExt;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::IBDState;
+use crate::pruned_utreexo::WallTime;
+use crate::pruned_utreexo::consensus::MAX_FUTURE_BLOCK_TIME;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
 use crate::write_lock;
@@ -221,7 +223,11 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(())
     }
 
-    fn validate_header(&self, block_header: &BlockHeader) -> Result<BlockHash, BlockchainError> {
+    fn validate_header(
+        &self,
+        block_header: &BlockHeader,
+        current_time: WallTime,
+    ) -> Result<BlockHash, BlockchainError> {
         let prev_block = self.get_disk_block_header(&block_header.prev_blockhash)?;
         let height = prev_block
             .height()
@@ -236,11 +242,23 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             Err(BlockValidationErrors::NotEnoughPow)?;
         }
 
-        self.check_bip94_block(block_header, height)?;
-
         let block_hash = block_header
             .validate_pow(actual_target)
             .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
+
+        self.check_bip94_block(block_header, height)?;
+
+        let previous_mtp = self.median_time_past(*prev_block)?;
+        if block_header.time <= previous_mtp {
+            Err(BlockValidationErrors::TimeTooOld)?;
+        }
+
+        // Check time
+        if u64::from(block_header.time) > u64::from(current_time) + u64::from(MAX_FUTURE_BLOCK_TIME)
+        {
+            Err(BlockValidationErrors::TimeTooNew(block_header.block_hash()))?;
+        }
+
         Ok(block_hash)
     }
 
@@ -1440,7 +1458,11 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         Ok(())
     }
 
-    fn accept_header(&self, header: BlockHeader) -> Result<(), BlockchainError> {
+    fn accept_header(
+        &self,
+        header: BlockHeader,
+        current_time: WallTime,
+    ) -> Result<(), BlockchainError> {
         let disk_header = self.get_disk_block_header(&header.block_hash());
 
         match disk_header {
@@ -1461,7 +1483,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         let best_block = self.get_best_block()?;
 
         // Do validation in this header
-        let block_hash = self.validate_header(&header)?;
+        let block_hash = self.validate_header(&header, current_time)?;
 
         // Update our current tip
         if header.prev_blockhash == best_block.1 {
@@ -2498,7 +2520,7 @@ mod test {
         // first four blocks. The fork point, block 5, is left as `HeadersOnly`, which is the
         // ordinary state during IBD: headers run ahead of block validation.
         for block in &short_chain {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
         }
 
         for block in short_chain.iter().take(4) {
@@ -2515,7 +2537,7 @@ mod test {
         // The long chain forks at block 5, above our validation index, so the reorg doesn't
         // undo any validated block and must leave the accumulator alone.
         for block in &long_chain {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
         }
 
         assert_eq!(chain.get_validation_index().unwrap(), 4);
@@ -2544,7 +2566,7 @@ mod test {
         let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded, None);
 
         for block in &short_chain {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
         }
 
         for block in short_chain.iter().take(4) {
@@ -2572,7 +2594,7 @@ mod test {
         // it looks for the accumulator that goes with the new validation index.
         let error = long_chain
             .iter()
-            .find_map(|block| chain.accept_header(block.header).err());
+            .find_map(|block| chain.accept_header(block.header, MOCK_TIME).err());
 
         assert!(
             matches!(error, Some(BlockchainError::BadValidationIndex)),
@@ -2624,7 +2646,7 @@ mod test {
         .unwrap();
 
         for block in &chain_blocks {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
         }
 
         let assumed_hash = chain_blocks[9].block_hash();
