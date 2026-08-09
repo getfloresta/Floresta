@@ -13,7 +13,7 @@ cargo-fuzz = true
 # All dependencies MUST be pinned precisely with `X.Y.z`
 arbitrary = { version = "=1.4.2", features = ["derive"] }
 bitcoin = { workspace = true }
-libfuzzer-sys = { version = "=0.4.12" }
+libfuzzer-sys = { version = "=0.4.13" }
 tempfile = { workspace = true }
 
 # Local dependencies
