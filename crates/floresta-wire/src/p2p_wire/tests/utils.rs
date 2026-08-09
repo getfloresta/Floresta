@@ -357,7 +357,7 @@ where
         _ => panic!("unavailable headers for net: {net}"),
     };
     for header in headers.into_iter().skip(1).take(args.num_blocks) {
-        chain.accept_header(header).unwrap();
+        chain.accept_header(header, MOCK_TIME).unwrap();
     }
 
     // Create `UtreexoNode` and spawn the simulated peers

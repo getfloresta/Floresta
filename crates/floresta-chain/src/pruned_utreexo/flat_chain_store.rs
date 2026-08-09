@@ -1904,7 +1904,7 @@ mod tests {
         let mut buffer = uncompressed.as_slice();
 
         while let Ok(header) = Header::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
         }
     }
 
@@ -1918,7 +1918,7 @@ mod tests {
         let mut buffer = uncompressed.as_slice();
 
         while let Ok(header) = Header::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
         }
     }
 
