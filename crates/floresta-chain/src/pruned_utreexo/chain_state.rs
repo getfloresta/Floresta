@@ -1615,6 +1615,8 @@ mod test {
     const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
     const TEST_FORK_FILE_SIZE: usize = 10_000;
     const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
+    // A fixed timestamp far past all the test data timestamps
+    const MOCK_TIME: u32 = 2_000_000_000;
     fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
@@ -1977,7 +1979,7 @@ mod test {
         let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Hardcoded, None);
 
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
             headers.push(header);
         }
         assert_eq!(headers.len(), 10_237);
@@ -2038,7 +2040,7 @@ mod test {
 
         let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded, None);
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
         }
     }
 
@@ -2087,7 +2089,9 @@ mod test {
 
         // Connect the first 10 blocks after genesis
         for block in short_chain {
-            chain.accept_header(block.header).unwrap();
+            chain
+                .accept_header(block.header, MOCK_TIME)
+                .unwrap();
             chain
                 .connect_block(&block, Proof::default(), HashMap::new(), Vec::new())
                 .unwrap();
@@ -2109,7 +2113,9 @@ mod test {
 
         // Then accept a fork chain with 11 new blocks, building on the previous height 5 block
         for fork_block in long_chain.iter() {
-            chain.accept_header(fork_block.header).unwrap();
+            chain
+                .accept_header(fork_block.header, MOCK_TIME)
+                .unwrap();
         }
 
         let expected = (
@@ -2174,7 +2180,7 @@ mod test {
         // Accept 10 headers; accept_header updates inner.best_block
         let mut count = 0;
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
             count += 1;
             if count == 10 {
                 break;
@@ -2222,7 +2228,9 @@ mod test {
 
         // Accept all 10 main-chain headers
         for block in &short_chain {
-            chain.accept_header(block.header).unwrap();
+            chain
+                .accept_header(block.header, MOCK_TIME)
+                .unwrap();
         }
 
         // Only one tip so far (the main chain)
@@ -2231,7 +2239,9 @@ mod test {
 
         // Accept only 4 fork headers (less work than main chain: 4 < 5 blocks after fork point)
         for block in &long_chain[..4] {
-            chain.accept_header(block.header).unwrap();
+            chain
+                .accept_header(block.header, MOCK_TIME)
+                .unwrap();
         }
 
         // Now we should have 2 tips: main chain + fork
