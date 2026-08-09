@@ -8,15 +8,20 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::BlockHash;
 use bitcoin::bip158::BlockFilter;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::address::AddrV2Message;
+use floresta_chain::BlockValidationErrors;
+use floresta_chain::BlockchainError;
 use floresta_chain::ThreadSafeChain;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
+use floresta_chain::pruned_utreexo::WallTime;
 use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
@@ -785,7 +790,28 @@ where
                                 return Ok(());
                             }
 
-                            self.chain.accept_header(*header)?;
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time went backwards")
+                                .as_secs() as WallTime;
+
+                            if let Err(e) = self.chain.accept_header(*header, now) {
+                                // A header too far in the future may become valid later, and
+                                // our own clock may be the one at fault, so don't punish the
+                                // peer. Stop processing the batch, as the next headers would
+                                // fail as orphans and trigger a ban.
+                                if let BlockchainError::BlockValidation(
+                                    BlockValidationErrors::TimeTooNew(hash),
+                                ) = e
+                                {
+                                    warn!(
+                                        "Header {hash} time is too far in the future, please check your system clock"
+                                    );
+                                    break;
+                                }
+
+                                return Err(e.into());
+                            }
 
                             // Call it again, since `accept_header` might reorg the chain
                             let (_, best_hash) = self.chain.get_best_block()?;

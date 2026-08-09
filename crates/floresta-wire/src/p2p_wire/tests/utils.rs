@@ -321,7 +321,7 @@ pub async fn setup_node(
     headers.remove(0);
     headers.truncate(num_blocks);
     for header in headers {
-        chain.accept_header(header).unwrap();
+        chain.accept_header(header, MOCK_TIME).unwrap();
     }
 
     let config = get_node_config(&datadir, network, pow_fraud_proofs);

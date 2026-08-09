@@ -202,7 +202,7 @@ fn accept_mainnet_headers_benchmark(c: &mut Criterion) {
             |chain| {
                 headers
                     .iter()
-                    .for_each(|header| chain.accept_header(*header).unwrap())
+                    .for_each(|header| chain.accept_header(*header, MOCK_TIME).unwrap())
             },
             BatchSize::SmallInput,
         )
@@ -218,7 +218,7 @@ fn accept_headers_benchmark(c: &mut Criterion) {
             |chain| {
                 blocks
                     .iter()
-                    .for_each(|block| chain.accept_header(block.header).unwrap());
+                    .for_each(|block| chain.accept_header(block.header, MOCK_TIME).unwrap());
             },
             BatchSize::SmallInput,
         )
@@ -233,7 +233,7 @@ fn connect_blocks_benchmark(c: &mut Criterion) {
         // We need to accept the headers before connecting blocks
         blocks
             .iter()
-            .for_each(|block| chain.accept_header(block.header).unwrap());
+            .for_each(|block| chain.accept_header(block.header, MOCK_TIME).unwrap());
 
         chain
     };
