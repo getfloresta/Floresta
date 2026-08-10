@@ -261,6 +261,11 @@ impl HeadersSyncState {
             .is_some_and(|header| header.prev_blockhash == self.presync_tip_hash())
     }
 
+    /// Whether PRESYNC hasn't accepted any header yet.
+    pub fn is_fresh(&self) -> bool {
+        self.state == PresyncPhase::Presync && self.presync_last_header.is_none()
+    }
+
     fn presync_tip_hash(&self) -> BlockHash {
         self.presync_last_header
             .as_ref()

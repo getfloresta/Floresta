@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -222,7 +223,7 @@ where
             match self.send_to_fast_peer_excluding(
                 NodeRequest::GetBlock(vec![block_hash], WitnessMode::Full),
                 ServiceFlags::NETWORK,
-                peer,
+                &HashSet::from([peer]),
             ) {
                 Ok(new_peer) => {
                     let now = Instant::now();
