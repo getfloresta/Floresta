@@ -94,6 +94,7 @@ pub mod block_proof;
 pub mod error;
 #[cfg(feature = "fuzzing")]
 pub mod fuzz;
+pub(crate) mod headers_sync;
 pub mod network_message_ext;
 pub mod node;
 pub mod node_context;
