@@ -394,6 +394,10 @@ impl BlockchainInterface for PartialChainState {
             .ok_or(BlockchainError::BlockNotPresent)
     }
 
+    fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error> {
+        self.inner().median_time_past(height)
+    }
+
     fn get_best_block(&self) -> Result<(u32, bitcoin::BlockHash), Self::Error> {
         Ok((
             self.inner().final_height,

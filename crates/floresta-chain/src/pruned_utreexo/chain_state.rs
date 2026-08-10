@@ -1068,6 +1068,11 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         Ok(read_lock!(self).chainstore.size_on_disk()?)
     }
 
+    fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error> {
+        let header = *self.get_header_by_height(height)?;
+        self.median_time_past(header)
+    }
+
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
         let fork_point = self.find_fork_point(&self.get_block_header(&block)?)?;
         Ok(fork_point.block_hash())

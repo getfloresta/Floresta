@@ -24,7 +24,11 @@ use bitcoin::blockdata::Weight;
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
+use bitcoin::locktime::relative;
+use bitcoin::locktime::relative::Height;
+use bitcoin::locktime::relative::Time;
 use bitcoin::script;
+use bitcoin::transaction::Version;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoinkernel::PrecomputedTransactionData;
 #[cfg(feature = "bitcoinkernel")]
@@ -100,6 +104,56 @@ impl From<Network> for Consensus {
     }
 }
 
+/// The lock-time cutoff for a candidate block: before CSV/BIP113 activation this is the
+/// block's own header time, and after activation it is the previous block's Median Time
+/// Past (MTP). Used to check both BIP113 (absolute lock-time) and BIP68 (relative
+/// lock-time) transaction finality.
+///
+/// BIP68 only applies once CSV has activated: Bitcoin Core only enforces relative
+/// lock-times once CSV is active, since before that `nSequence` had different
+/// (RBF-signaling) semantics. The `Mtp` variant implies BIP68 is enforced; `HeaderTime`
+/// implies it isn't.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockTimeCutoff {
+    /// Pre-CSV-activation: the candidate block's own header time.
+    HeaderTime(u32),
+    /// Post-CSV-activation: the previous block's Median Time Past.
+    Mtp(u32),
+}
+
+impl LockTimeCutoff {
+    /// Returns the cutoff value, regardless of variant. Used for the BIP113 check, which
+    /// applies at every height, just against a different cutoff before/after activation.
+    fn value(self) -> u32 {
+        match self {
+            Self::HeaderTime(value) | Self::Mtp(value) => value,
+        }
+    }
+
+    /// Returns whether a BIP68 relative `lock` is satisfied, given the number of blocks
+    /// elapsed since the spent UTXO's creation height and the UTXO's creation time.
+    ///
+    /// Always satisfied before CSV activation, since BIP68 isn't enforced yet.
+    fn relative_locktime_satisfied(
+        self,
+        lock: relative::LockTime,
+        elapsed_height: u32,
+        creation_time: u32,
+    ) -> bool {
+        let Self::Mtp(value) = self else {
+            return true;
+        };
+
+        let elapsed_intervals = value.saturating_sub(creation_time) / 512;
+
+        let h = Height::from(u16::try_from(elapsed_height).unwrap_or(u16::MAX));
+        let t =
+            Time::from_512_second_intervals(u16::try_from(elapsed_intervals).unwrap_or(u16::MAX));
+
+        lock.is_satisfied_by(h, t)
+    }
+}
+
 impl Consensus {
     /// Returns the block-finality lock-time cutoff for a candidate block.
     ///
@@ -110,11 +164,11 @@ impl Consensus {
         height: u32,
         header: &BlockHeader,
         previous_median_time_past: impl FnOnce() -> Result<u32, E>,
-    ) -> Result<u32, E> {
+    ) -> Result<LockTimeCutoff, E> {
         if height >= self.parameters.csv_activation_height {
-            previous_median_time_past()
+            previous_median_time_past().map(LockTimeCutoff::Mtp)
         } else {
-            Ok(header.time)
+            Ok(LockTimeCutoff::HeaderTime(header.time))
         }
     }
 
@@ -186,7 +240,7 @@ impl Consensus {
     #[allow(unused)]
     pub fn verify_block_transactions(
         height: u32,
-        lock_time_cutoff: u32,
+        lock_time_cutoff: LockTimeCutoff,
         mut utxos: HashMap<OutPoint, UtxoData>,
         transactions: &[Transaction],
         subsidy: Amount,
@@ -216,8 +270,14 @@ impl Consensus {
             }
 
             // Actually verify the transaction
-            let (in_value, out_value) =
-                Self::verify_transaction(transaction, &mut utxos, height, verify_script, flags)?;
+            let (in_value, out_value) = Self::verify_transaction(
+                transaction,
+                &mut utxos,
+                height,
+                lock_time_cutoff,
+                verify_script,
+                flags,
+            )?;
 
             // Fee is the difference between inputs and outputs. In the above function call we have
             // verified that `out_value <= in_value` (no underflow risk).
@@ -382,6 +442,7 @@ impl Consensus {
         transaction: &Transaction,
         utxos: &mut HashMap<OutPoint, UtxoData>,
         height: u32,
+        lock_time_cutoff: LockTimeCutoff,
         _verify_script: bool,
         _flags: u32,
     ) -> Result<(Amount, Amount), BlockchainError> {
@@ -401,6 +462,23 @@ impl Consensus {
             // A coinbase output created at height n can only be spent at height >= n + 100
             if utxo.is_coinbase && (height < utxo.creation_height + 100) {
                 Err(tx_err!(txid, CoinbaseNotMatured))?;
+            }
+
+            // BIP68: relative lock-time only applies to version >= 2 transactions, and only
+            // to inputs whose sequence number doesn't have the disable flag set.
+            // TODO(jaoleal): remove this when https://github.com/rust-bitcoin/rust-bitcoin/pull/4040 lands in a release.
+            if transaction.version.0 as u32 >= Version::TWO.0 as u32 {
+                if let Some(lock) = input.sequence.to_relative_lock_time() {
+                    let elapsed_height = height.saturating_sub(utxo.creation_height);
+
+                    if !lock_time_cutoff.relative_locktime_satisfied(
+                        lock,
+                        elapsed_height,
+                        utxo.creation_time,
+                    ) {
+                        Err(tx_err!(txid, BadRelativeLockTime))?;
+                    }
+                }
             }
 
             // Check script sizes (spent txo pubkey, inputs are covered already)
@@ -646,7 +724,11 @@ impl Consensus {
     ///
     /// Mirrors Bitcoin Core's IsFinalTx:
     /// <https://github.com/bitcoin/bitcoin/blob/v31.0/src/consensus/tx_verify.cpp#L17-L37>
-    fn is_final_transaction(transaction: &Transaction, height: u32, lock_time_cutoff: u32) -> bool {
+    fn is_final_transaction(
+        transaction: &Transaction,
+        height: u32,
+        lock_time_cutoff: LockTimeCutoff,
+    ) -> bool {
         if transaction.lock_time == absolute::LockTime::ZERO {
             return true;
         }
@@ -654,7 +736,7 @@ impl Consensus {
         let lock_time_reached = match transaction.lock_time {
             absolute::LockTime::Blocks(lock_height) => lock_height.to_consensus_u32() < height,
             absolute::LockTime::Seconds(lock_time) => {
-                lock_time.to_consensus_u32() < lock_time_cutoff
+                lock_time.to_consensus_u32() < lock_time_cutoff.value()
             }
         };
 
@@ -1097,12 +1179,12 @@ mod tests {
         assert!(Consensus::is_final_transaction(
             &height_locked,
             ZERO_HEIGHT,
-            ZERO_BLOCK_TIME
+            LockTimeCutoff::Mtp(ZERO_BLOCK_TIME)
         ));
         assert!(Consensus::is_final_transaction(
             &time_locked,
             ZERO_HEIGHT,
-            ZERO_BLOCK_TIME
+            LockTimeCutoff::Mtp(ZERO_BLOCK_TIME)
         ));
     }
 
@@ -1126,17 +1208,17 @@ mod tests {
         assert!(Consensus::is_final_transaction(
             &below_height,
             height,
-            ZERO_BLOCK_TIME
+            LockTimeCutoff::Mtp(ZERO_BLOCK_TIME)
         ));
         assert!(!Consensus::is_final_transaction(
             &at_height,
             height,
-            ZERO_BLOCK_TIME
+            LockTimeCutoff::Mtp(ZERO_BLOCK_TIME)
         ));
         assert!(!Consensus::is_final_transaction(
             &above_height,
             height,
-            ZERO_BLOCK_TIME
+            LockTimeCutoff::Mtp(ZERO_BLOCK_TIME)
         ));
     }
 
@@ -1160,17 +1242,17 @@ mod tests {
         assert!(Consensus::is_final_transaction(
             &below_cutoff,
             ZERO_HEIGHT,
-            cutoff
+            LockTimeCutoff::Mtp(cutoff)
         ));
         assert!(!Consensus::is_final_transaction(
             &at_cutoff,
             ZERO_HEIGHT,
-            cutoff
+            LockTimeCutoff::Mtp(cutoff)
         ));
         assert!(!Consensus::is_final_transaction(
             &above_cutoff,
             ZERO_HEIGHT,
-            cutoff
+            LockTimeCutoff::Mtp(cutoff)
         ));
     }
 
@@ -1440,8 +1522,14 @@ mod tests {
                 },
             );
 
-            let spend_result =
-                Consensus::verify_transaction(spending_tx, &mut utxos, spending_height, true, 0);
+            let spend_result = Consensus::verify_transaction(
+                spending_tx,
+                &mut utxos,
+                spending_height,
+                LockTimeCutoff::Mtp(0),
+                true,
+                0,
+            );
 
             if expected_ok {
                 assert_ok!(spend_result);
@@ -1498,6 +1586,80 @@ mod tests {
     }
 
     #[test]
+    fn test_relative_locktime() {
+        let outpoint = dummy_outpoint();
+        let tx = build_tx(
+            vec![txin!(outpoint, ScriptBuf::new(), Sequence::from_height(10))],
+            vec![txout!(1, ScriptBuf::new())],
+        );
+
+        let mut utxos = HashMap::new();
+        utxos.insert(
+            outpoint,
+            UtxoData {
+                txout: txout!(1, ScriptBuf::new()),
+                is_coinbase: false,
+                creation_height: 100,
+                creation_time: 0,
+            },
+        );
+
+        // 10 blocks have passed since creation: the relative lock-time is satisfied
+        // (script verification is skipped since this test only exercises BIP68, and the
+        // dummy scripts here aren't valid to evaluate)
+        assert_ok!(Consensus::verify_transaction(
+            &tx,
+            &mut utxos.clone(),
+            110,
+            LockTimeCutoff::Mtp(0),
+            false,
+            0
+        ));
+
+        // Only 5 blocks have passed: the relative lock-time is not satisfied
+        let txid = || tx.compute_txid();
+        match Consensus::verify_transaction(&tx, &mut utxos, 105, LockTimeCutoff::Mtp(0), false, 0)
+        {
+            Err(BlockchainError::TransactionError(e)) => {
+                assert_eq!(e, tx_err!(txid, BadRelativeLockTime));
+            }
+            other => panic!("Expected a TransactionError, but got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_relative_locktime_not_enforced_before_csv_activation() {
+        // Same as `test_relative_locktime`'s not-satisfied case (only 5 of the required 10
+        // blocks have passed), but with `bip68_active = false`: before CSV activation,
+        // `nSequence` doesn't carry relative lock-time semantics, so this must pass.
+        let outpoint = dummy_outpoint();
+        let tx = build_tx(
+            vec![txin!(outpoint, ScriptBuf::new(), Sequence::from_height(10))],
+            vec![txout!(1, ScriptBuf::new())],
+        );
+
+        let mut utxos = HashMap::new();
+        utxos.insert(
+            outpoint,
+            UtxoData {
+                txout: txout!(1, ScriptBuf::new()),
+                is_coinbase: false,
+                creation_height: 100,
+                creation_time: 0,
+            },
+        );
+
+        assert_ok!(Consensus::verify_transaction(
+            &tx,
+            &mut utxos,
+            105,
+            LockTimeCutoff::HeaderTime(0),
+            false,
+            0
+        ));
+    }
+
+    #[test]
     #[cfg(feature = "bitcoinkernel")]
     fn script_verified_transaction_consumes_inputs() {
         // Transaction extracted from https://learnmeabitcoin.com/explorer/tx/0094492b6f010a5e39c2aacc97396ce9b6082dc733a7b4151ccdbd580f789278
@@ -1523,7 +1685,7 @@ mod tests {
             },
         );
         let flags = bitcoinkernel::VERIFY_P2SH;
-        Consensus::verify_transaction(&tx, &mut utxos, 0, true, flags)
+        Consensus::verify_transaction(&tx, &mut utxos, 0, LockTimeCutoff::Mtp(0), true, flags)
             .expect("Transaction should be valid");
 
         // Script verification uses the transaction-local UTXOs, while the block-wide map retains
@@ -1533,7 +1695,8 @@ mod tests {
         // Trying to verify again with an empty UTXO map must fail with this error
         let expected = tx_err!(txid, UtxoNotFound, outpoint);
 
-        match Consensus::verify_transaction(&tx, &mut utxos, 0, true, flags) {
+        match Consensus::verify_transaction(&tx, &mut utxos, 0, LockTimeCutoff::Mtp(0), true, flags)
+        {
             Err(BlockchainError::TransactionError(e)) => assert_eq!(e, expected),
             other => panic!("Expected TransactionError, got: {other:?}"),
         }
@@ -1557,14 +1720,21 @@ mod tests {
 
         // Block validation carries this scratch map from one transaction to the next, including
         // when script checks are skipped during AssumeValid validation.
-        Consensus::verify_transaction(&first, &mut utxos, 0, false, 0)
+        Consensus::verify_transaction(&first, &mut utxos, 0, LockTimeCutoff::Mtp(0), false, 0)
             .expect("first spend should be valid");
         assert!(utxos.is_empty(), "spent input must leave the UTXO map");
 
         // Trying to verify again with an empty UTXO map must fail with this error
         let expected = tx_err!(|| second.compute_txid(), UtxoNotFound, outpoint);
 
-        match Consensus::verify_transaction(&second, &mut utxos, 0, false, 0) {
+        match Consensus::verify_transaction(
+            &second,
+            &mut utxos,
+            0,
+            LockTimeCutoff::Mtp(0),
+            false,
+            0,
+        ) {
             Err(BlockchainError::TransactionError(e)) => assert_eq!(e, expected),
             other => panic!("Expected TransactionError, got: {other:?}"),
         }
@@ -1642,7 +1812,7 @@ mod tests {
 
         let tx = build_tx(vec![txin!(outpoint)], vec![txout!(1, ScriptBuf::new())]);
 
-        match Consensus::verify_transaction(&tx, &mut utxos, 0, false, 0) {
+        match Consensus::verify_transaction(&tx, &mut utxos, 0, LockTimeCutoff::Mtp(0), false, 0) {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManyCoins)) => (),
             other => panic!("Expected TooManyCoins, got: {other:?}"),
         }
@@ -1699,6 +1869,7 @@ mod tests {
                 &transaction,
                 &mut utxos,
                 dummy_height,
+                LockTimeCutoff::Mtp(0),
                 true,
                 bitcoinkernel::VERIFY_ALL_PRE_TAPROOT,
             );
@@ -1751,8 +1922,15 @@ mod tests {
         let oversized_out = txout!(0, oversized_script());
         let tx_with_oversized = build_tx(vec![dummy_in], vec![oversized_out.clone()]);
 
-        Consensus::verify_transaction(&tx_with_oversized, &mut utxos, dummy_height, false, flags)
-            .unwrap();
+        Consensus::verify_transaction(
+            &tx_with_oversized,
+            &mut utxos,
+            dummy_height,
+            LockTimeCutoff::Mtp(0),
+            false,
+            flags,
+        )
+        .unwrap();
 
         // 2. Register the oversized output as an available UTXO.
         let prevout = OutPoint::new(tx_with_oversized.compute_txid(), 0);
@@ -1769,9 +1947,15 @@ mod tests {
         // 3. Attempt to spend the oversized output.
         let spending_in = txin!(prevout);
         let spending_tx = build_tx(vec![spending_in], vec![txout!(0, true_script())]);
-        let err =
-            Consensus::verify_transaction(&spending_tx, &mut utxos, dummy_height, false, flags)
-                .unwrap_err();
+        let err = Consensus::verify_transaction(
+            &spending_tx,
+            &mut utxos,
+            dummy_height,
+            LockTimeCutoff::Mtp(0),
+            false,
+            flags,
+        )
+        .unwrap_err();
 
         // Check that the error is exactly what we expect.
         match err {
