@@ -28,6 +28,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "merkle_root"
+path = "fuzz_targets/merkle_root.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "utreexo_proof_des"
 path = "fuzz_targets/utreexo_proof_des.rs"
 test = false
