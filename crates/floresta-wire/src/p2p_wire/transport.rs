@@ -521,6 +521,7 @@ pub(crate) mod test_transport {
     use std::collections::VecDeque;
     use std::io;
     use std::io::ErrorKind;
+    use std::num::NonZeroUsize;
     use std::pin::Pin;
     use std::task::Context;
     use std::task::Poll;
@@ -571,29 +572,55 @@ pub(crate) mod test_transport {
         #[default]
         All,
 
-        /// Hand over at most `n` bytes per poll.
+        /// Hand over at most `n` bytes per poll. Build with [`ChunkPolicy::fixed`].
         ///
-        /// `Fixed(1)` is the harshest setting and the most useful one: it forces the
+        /// One byte is the harshest setting and the most useful one: it forces the
         /// parser through a separate poll for every single byte.
-        Fixed(usize),
+        Fixed(NonZeroUsize),
 
-        /// Walk a scripted sequence of chunk sizes, one entry per poll.
+        /// Walk a scripted sequence of per-poll size limits, one entry per poll. Build
+        /// with [`ChunkPolicy::scripted`].
         ///
         /// Use this to cut at specific offsets, e.g. in the middle of the 24-byte V1
         /// header. Once the script runs out, the reader falls back to [`ChunkPolicy::All`].
-        Scripted(VecDeque<usize>),
+        ///
+        /// Each entry is an upper bound, not an exact size: the caller's `ReadBuf` and any
+        /// pending fault can cut a poll shorter than its scripted entry, and the entry is
+        /// consumed either way.
+        Scripted(VecDeque<NonZeroUsize>),
     }
 
     impl ChunkPolicy {
-        /// Returns the size limit for the next poll, consuming one scripted entry.
+        /// Hand over at most `n` bytes per poll.
         ///
-        /// Sizes are clamped to at least 1: a zero-byte read means EOF in the
-        /// [`AsyncRead`] contract, and that is expressed by [`EndBehavior`] instead.
+        /// # Panics
+        ///
+        /// If `n` is zero. A poll that delivers zero bytes means end of stream in the
+        /// [`AsyncRead`] contract, so a zero-sized chunk cannot mean "a very short read";
+        /// end of stream is expressed by [`EndBehavior`] instead.
+        pub fn fixed(n: usize) -> Self {
+            Self::Fixed(Self::non_zero(n))
+        }
+
+        /// Walk `sizes` as per-poll upper bounds, one entry per poll.
+        ///
+        /// # Panics
+        ///
+        /// If any entry is zero; see [`ChunkPolicy::fixed`].
+        pub fn scripted(sizes: impl IntoIterator<Item = usize>) -> Self {
+            Self::Scripted(sizes.into_iter().map(Self::non_zero).collect())
+        }
+
+        fn non_zero(n: usize) -> NonZeroUsize {
+            NonZeroUsize::new(n).expect("a chunk size of zero would signal EOF, not a short read")
+        }
+
+        /// Returns the size limit for the next poll, consuming one scripted entry.
         fn next_limit(&mut self) -> usize {
             match self {
                 Self::All => usize::MAX,
-                Self::Fixed(n) => (*n).max(1),
-                Self::Scripted(script) => script.pop_front().unwrap_or(usize::MAX).max(1),
+                Self::Fixed(n) => n.get(),
+                Self::Scripted(script) => script.pop_front().map_or(usize::MAX, NonZeroUsize::get),
             }
         }
     }
@@ -635,7 +662,7 @@ pub(crate) mod test_transport {
     /// ```ignore
     /// // Feed a message one byte at a time, then close cleanly.
     /// let reader = Reader::new(bytes)
-    ///     .with_chunking(ChunkPolicy::Fixed(1))
+    ///     .with_chunking(ChunkPolicy::fixed(1))
     ///     .with_end_behavior(EndBehavior::CleanEof);
     /// ```
     #[derive(Debug, Default)]
@@ -792,7 +819,6 @@ pub(crate) mod test_transport {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::io::ErrorKind;
     use std::time::Duration;
 
@@ -908,7 +934,7 @@ mod tests {
     #[tokio::test]
     async fn test_valid_message_one_byte_per_poll() {
         let data = valid_ping_bytes();
-        let reader = Reader::new(data).with_chunking(ChunkPolicy::Fixed(1));
+        let reader = Reader::new(data).with_chunking(ChunkPolicy::fixed(1));
         let mut transport_reader = create_reader_v1_with(reader);
 
         let res = transport_reader
@@ -928,8 +954,7 @@ mod tests {
     #[tokio::test]
     async fn test_valid_message_scripted_chunks_split_header() {
         let data = valid_ping_bytes();
-        let script = VecDeque::from(vec![5, 3, 20, 1, 3]);
-        let reader = Reader::new(data).with_chunking(ChunkPolicy::Scripted(script));
+        let reader = Reader::new(data).with_chunking(ChunkPolicy::scripted([5, 3, 20, 1, 3]));
         let mut transport_reader = create_reader_v1_with(reader);
 
         let res = transport_reader
@@ -948,7 +973,7 @@ mod tests {
         data.truncate(20); // cut inside the 24-byte header
 
         let reader = Reader::new(data)
-            .with_chunking(ChunkPolicy::Fixed(8))
+            .with_chunking(ChunkPolicy::fixed(8))
             .with_end_behavior(EndBehavior::CleanEof);
         let mut transport_reader = create_reader_v1_with(reader);
 
@@ -1004,6 +1029,18 @@ mod tests {
         }
     }
 
+    #[test]
+    #[should_panic(expected = "chunk size of zero")]
+    fn test_chunk_policy_rejects_zero_fixed() {
+        let _ = ChunkPolicy::fixed(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk size of zero")]
+    fn test_chunk_policy_rejects_zero_in_script() {
+        let _ = ChunkPolicy::scripted([4, 0, 2]);
+    }
+
     #[tokio::test]
     async fn test_reader_chunk_policy_all_delivers_everything() {
         let mut reader = Reader::new(vec![1, 2, 3, 4, 5]);
@@ -1015,7 +1052,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reader_chunk_policy_fixed_caps_each_poll() {
-        let mut reader = Reader::new(vec![1, 2, 3, 4, 5]).with_chunking(ChunkPolicy::Fixed(2));
+        let mut reader = Reader::new(vec![1, 2, 3, 4, 5]).with_chunking(ChunkPolicy::fixed(2));
         let mut buf = [0_u8; 8];
 
         assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
@@ -1031,9 +1068,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_reader_chunk_policy_scripted_then_falls_back_to_all() {
-        let script = VecDeque::from(vec![1, 3]);
         let mut reader =
-            Reader::new(vec![1, 2, 3, 4, 5, 6]).with_chunking(ChunkPolicy::Scripted(script));
+            Reader::new(vec![1, 2, 3, 4, 5, 6]).with_chunking(ChunkPolicy::scripted([1, 3]));
         let mut buf = [0_u8; 8];
 
         assert_eq!(reader.read(&mut buf).await.unwrap(), 1);
@@ -1127,7 +1163,7 @@ mod tests {
     /// bytes into 2 bytes of space, which would panic inside `put_slice`.
     #[tokio::test]
     async fn test_reader_respects_remaining_not_capacity() {
-        let mut reader = Reader::new((0..100).collect()).with_chunking(ChunkPolicy::Fixed(8));
+        let mut reader = Reader::new((0..100).collect()).with_chunking(ChunkPolicy::fixed(8));
         let mut buf = [0_u8; 10];
 
         reader
