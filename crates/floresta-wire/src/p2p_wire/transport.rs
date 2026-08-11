@@ -523,6 +523,8 @@ pub(crate) mod test_transport {
     use std::io::ErrorKind;
     use std::num::NonZeroUsize;
     use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::Mutex;
     use std::task::Context;
     use std::task::Poll;
 
@@ -781,7 +783,40 @@ pub(crate) mod test_transport {
         ReadTransport::V1(reader, Network::Regtest)
     }
 
-    pub struct Writer;
+    /// An [`AsyncWrite`] that swallows everything, optionally keeping a copy of the bytes.
+    ///
+    /// A no-op sink is enough for most peer tests. A test that needs to prove *what* went
+    /// out on the wire — rather than only that some code path was taken — needs the bytes
+    /// back, which is what [`Writer::recording`] is for.
+    #[derive(Debug, Default)]
+    pub struct Writer {
+        sink: Option<Arc<Mutex<Vec<u8>>>>,
+    }
+
+    impl Writer {
+        /// A writer that discards everything.
+        pub fn new() -> Self {
+            Self { sink: None }
+        }
+
+        /// A writer that discards everything but keeps a copy, returning the shared buffer.
+        pub fn recording() -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let sink = Arc::new(Mutex::new(Vec::new()));
+            let writer = Self {
+                sink: Some(Arc::clone(&sink)),
+            };
+
+            (writer, sink)
+        }
+
+        fn record(&self, bytes: &[u8]) {
+            if let Some(sink) = &self.sink {
+                sink.lock()
+                    .expect("the recording sink is never held across a panic")
+                    .extend_from_slice(bytes);
+            }
+        }
+    }
 
     impl AsyncWrite for Writer {
         fn poll_write(
@@ -789,7 +824,9 @@ pub(crate) mod test_transport {
             _cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
-            // No-op writer
+            // Discarded, but recorded first if this writer is a recording one.
+            self.record(buf);
+
             Poll::Ready(Ok(buf.len()))
         }
 
@@ -811,7 +848,14 @@ pub(crate) mod test_transport {
             bufs: &[io::IoSlice<'_>],
         ) -> Poll<io::Result<usize>> {
             let len = bufs.iter().map(|buf| buf.len()).sum();
-            // No-op writer
+
+            // Discarded, but recorded first if this writer is a recording one. Every slice
+            // is accepted, so every slice has to be recorded to keep the capture in step
+            // with the byte count we report back.
+            for buf in bufs {
+                self.record(buf);
+            }
+
             Poll::Ready(Ok(len))
         }
     }

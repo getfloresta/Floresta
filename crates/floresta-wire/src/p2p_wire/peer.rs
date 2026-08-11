@@ -373,9 +373,11 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 }
             }
 
-            // Send a ping to check if this peer is still good.
-            // Only ping if nothing is in flight; otherwise, let the ping-timeout loop
-            // recycle and check the handshake deadline while we wait.
+            // Send a ping to check if this peer is still good. If one is already in flight
+            // we simply let it be — the deadline above is what gives up on it. This used to
+            // `continue`, which also skipped every check below, most notably the handshake
+            // deadline: a peer that never answered our `version` but stayed quiet long
+            // enough to earn a ping would never be re-checked against `handshake_timeout`.
             let last_message = self.last_message.elapsed();
             if last_message > self.timeouts.send_ping_timeout && self.last_ping.is_none() {
                 let nonce = rand::random();
@@ -960,6 +962,7 @@ pub enum PeerMessages {
 mod tests {
     use std::net::Ipv4Addr;
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -989,6 +992,7 @@ mod tests {
     use crate::p2p_wire::peer::peer_utils;
     use crate::p2p_wire::transport::WriteTransport;
     use crate::p2p_wire::transport::test_transport::Writer;
+    use crate::p2p_wire::transport::test_transport::create_reader_v1;
 
     /// All the data needed to run a test.
     struct SetupData {
@@ -1033,7 +1037,7 @@ mod tests {
         let peer = Peer {
             address,
             our_best_block: 0,
-            writer: WriteTransport::V1(Writer, Network::Regtest),
+            writer: WriteTransport::V1(Writer::new(), Network::Regtest),
             state: State::Connected,
             kind: ConnectionKind::Manual,
             id: 0,
@@ -1067,6 +1071,31 @@ mod tests {
             node_sender,
             node_receiver,
         }
+    }
+
+    /// Same as [`create_peer_with`], but the peer's writer keeps a copy of every byte it
+    /// sends, so a test can decode what actually went out on the wire.
+    fn create_recording_peer_with(timeouts: PeerTimeouts) -> (SetupData, Arc<StdMutex<Vec<u8>>>) {
+        let (writer, sent) = Writer::recording();
+        let mut setup = create_peer_with(timeouts);
+        setup.peer.writer = WriteTransport::V1(writer, Network::Regtest);
+
+        (setup, sent)
+    }
+
+    /// Decodes everything a recording [`Writer`] captured, so a test can assert on the
+    /// actual wire traffic rather than on a side effect of the code path.
+    ///
+    /// Stops at the first decoding failure, which is how the end of the captured bytes
+    /// shows up.
+    async fn decode_sent_messages(bytes: Vec<u8>) -> Vec<NetworkMessage> {
+        let mut transport = create_reader_v1(bytes);
+        let mut messages = Vec::new();
+        while let Ok(message) = transport.read_message().await {
+            messages.push(message);
+        }
+
+        messages
     }
 
     fn send_to_peer(
@@ -1188,7 +1217,8 @@ mod tests {
         // `create_peer_with` leaves a ping in flight, which we will never answer.
         assert!(peer.last_ping.is_some());
 
-        // Re-stamp the deadline after setup, so the deadline floor can never predate this instant.
+        // Re-stamped after `start` so the assertion below is sound: the deadline's reference
+        // instant must not predate `start`, or the error can surface just under 200ms.
         let start = Instant::now();
         peer.last_ping = Some(Instant::now());
 
@@ -1207,7 +1237,8 @@ mod tests {
         );
         assert!(
             start.elapsed() >= Duration::from_millis(200),
-            "deadline fired too early"
+            "the ping deadline fired early, after {:?}",
+            start.elapsed()
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
@@ -1268,17 +1299,23 @@ mod tests {
     /// Exercises the other half of the liveness exchange: *we* ping *them*.
     ///
     /// The peer starts with nothing in flight and the remote goes quiet. After
-    /// `send_ping_timeout` the loop must send its own ping, and then, with no pong coming
-    /// back, give up after `ping_timeout`. Arriving at `PingTimeout` at all is what proves
-    /// the ping was sent: the test writer is a no-op sink and cannot be inspected.
+    /// `send_ping_timeout` the loop must put a ping on the wire, and then, with no pong
+    /// coming back, give up after `ping_timeout`.
+    ///
+    /// Decoding what the writer captured is what makes the first half real: `last_ping` is
+    /// stamped *before* the write, so reaching `PingTimeout` would still hold if the ping
+    /// were never actually sent. Only the bytes tell those two apart.
     #[tokio::test]
     async fn test_silent_peer_is_pinged_then_times_out() {
-        let SetupData {
-            mut peer,
-            mut actor_sender,
-            node_receiver,
-            node_sender,
-        } = create_peer_with(PeerTimeouts {
+        let (
+            SetupData {
+                mut peer,
+                mut actor_sender,
+                node_receiver,
+                node_sender,
+            },
+            sent,
+        ) = create_recording_peer_with(PeerTimeouts {
             send_ping_timeout: Duration::from_millis(100),
             ping_timeout: Duration::from_millis(200),
             ..fast_timeouts()
@@ -1288,7 +1325,8 @@ mod tests {
         // Nothing in flight: the loop itself has to decide to send a ping.
         peer.last_ping = None;
 
-        // Re-stamp the deadline after setup, so the deadline floor can never predate this instant.
+        // Re-stamped after `start` so the assertion below is sound; see
+        // `test_unanswered_ping_disconnects`.
         let start = Instant::now();
         peer.last_message = Instant::now();
 
@@ -1307,7 +1345,23 @@ mod tests {
         );
         assert!(
             start.elapsed() >= Duration::from_millis(300),
-            "deadline fired too early"
+            "the ping went out or timed out early, after {:?}",
+            start.elapsed()
+        );
+
+        // Clone the bytes out before awaiting: holding a std `MutexGuard` across an await
+        // is exactly what `clippy::await_holding_lock` is there to catch.
+        let bytes = sent
+            .lock()
+            .expect("the recording sink is never held across a panic")
+            .clone();
+        let messages = decode_sent_messages(bytes).await;
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, NetworkMessage::Ping(_))),
+            "the peer never put a ping on the wire; it sent {messages:?}"
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
@@ -1333,7 +1387,6 @@ mod tests {
         peer.last_ping = None;
 
         let start = Instant::now();
-
         let fut = tokio::spawn(peer.read_loop());
 
         // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
@@ -1349,7 +1402,8 @@ mod tests {
         );
         assert!(
             start.elapsed() >= Duration::from_millis(200),
-            "deadline fired too early"
+            "the handshake deadline fired early, after {:?}",
+            start.elapsed()
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
@@ -1374,27 +1428,26 @@ mod tests {
             node_receiver,
             node_sender,
         } = create_peer_with(PeerTimeouts {
-            handshake_timeout: Duration::from_millis(300),
-            send_ping_timeout: Duration::from_millis(100),
-            ping_timeout: Duration::from_millis(500),
+            // Quiet well before the handshake deadline, so a ping goes out while we are
+            // still in `SentVersion` and stays unanswered from then on.
+            send_ping_timeout: Duration::from_millis(50),
+            handshake_timeout: Duration::from_millis(200),
+            // Only the handshake deadline may fire.
+            ping_timeout: NEVER,
             ..fast_timeouts()
         });
 
-        // Start with no ping in flight, so the loop itself sends one after send_ping_timeout.
         peer.last_ping = None;
 
         let start = Instant::now();
+        peer.last_message = Instant::now();
 
         let fut = tokio::spawn(peer.read_loop());
 
         // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
-        // After send_ping_timeout (~100ms), the loop sends a ping and sets last_ping.
-        // Before the fix, the bare `continue` would skip all deadline checks after that point.
-        // With the fix, the loop continues to check the handshake_timeout (~300ms), which
-        // fires before ping_timeout (~500ms).
         let err = tokio::time::timeout(Duration::from_secs(5), fut)
             .await
-            .expect("peer never gave up on the unfinished handshake even with a ping in flight")
+            .expect("the handshake deadline was never re-checked once a ping went out")
             .unwrap()
             .unwrap_err();
 
@@ -1403,12 +1456,9 @@ mod tests {
             "expected the handshake deadline to fire, got {err:?}"
         );
         assert!(
-            start.elapsed() >= Duration::from_millis(300),
-            "deadline fired too early"
-        );
-        assert!(
-            start.elapsed() < Duration::from_millis(500),
-            "deadline fired too late; ping_timeout, not handshake_timeout, was checked"
+            start.elapsed() >= Duration::from_millis(200),
+            "the handshake deadline fired early, after {:?}",
+            start.elapsed()
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
@@ -1439,8 +1489,9 @@ mod tests {
         assert!(defaults.request_poll_interval < defaults.ping_timeout);
         assert!(defaults.request_poll_interval < defaults.send_ping_timeout);
 
-        // The loop only pings when nothing is in flight, so the two deadlines compose
-        // independently and the ordering is a policy choice, not a correctness invariant.
+        // Policy sanity check rather than a correctness invariant: the two deadlines compose
+        // independently, but waiting longer for a pong than we wait before pinging at all
+        // would mean a silent peer takes over two minutes to be noticed.
         assert!(defaults.ping_timeout < defaults.send_ping_timeout);
     }
 }
