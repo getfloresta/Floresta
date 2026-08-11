@@ -217,6 +217,9 @@ pub mod proof_util {
     use crate::pruned_utreexo::consensus::UTREEXO_TAG_V1;
     use crate::pruned_utreexo::utxo_data::UtxoData;
 
+    /// A leaf can never legitimately claim creation at the genesis block.
+    pub const FORBIDDEN_CREATION_HEIGHT: u32 = 0;
+
     #[derive(Debug)]
     /// Errors that may occur while reconstructing a leaf's scriptPubKey.
     pub enum LeafErrorKind {
@@ -228,6 +231,10 @@ pub mod proof_util {
 
         /// The last instruction in the scriptsig was not an `OP_PUSHBYTES`.
         NotPushBytes,
+
+        /// The leaf claims the spent UTXO was created by the genesis block (height 0); that can
+        /// never happen, as the genesis coinbase is not part of the UTXO set.
+        GenesisCreationHeight,
     }
 
     impl Display for LeafErrorKind {
@@ -236,6 +243,9 @@ pub mod proof_util {
                 Self::EmptyStack => write!(f, "Empty stack"),
                 Self::InvalidInstruction(e) => write!(f, "Invalid instruction: {e}"),
                 Self::NotPushBytes => write!(f, "Not push bytes"),
+                Self::GenesisCreationHeight => {
+                    write!(f, "Leaf claims creation at the genesis block")
+                }
             }
         }
     }
@@ -440,14 +450,25 @@ pub mod proof_util {
                 if utxos.contains_key(&input.previous_output) {
                     continue;
                 }
-                let leaf = match leaves_iter.next() {
-                    Some(leaf) => leaf,
-                    None => continue,
+                let Some(leaf) = leaves_iter.next() else {
+                    continue;
                 };
 
                 let creation_height = leaf.header_code >> 1;
                 // The coinbase flag is the LSB
                 let is_coinbase = (leaf.header_code & 1) != 0;
+
+                // A leaf can never legitimately claim creation at the
+                // genesis block, so reject height 0 up front.
+                if creation_height == FORBIDDEN_CREATION_HEIGHT {
+                    return Err(UtreexoLeafError {
+                        leaf,
+                        txid,
+                        vin,
+                        kind: LeafErrorKind::GenesisCreationHeight,
+                    }
+                    .into());
+                }
 
                 let hash = get_block_hash(creation_height)?;
                 let leaf =
@@ -558,18 +579,26 @@ pub mod proof_util {
 mod test {
     use bitcoin::Amount;
     use bitcoin::BlockHash;
+    use bitcoin::OutPoint;
     use bitcoin::ScriptBuf;
+    use bitcoin::Sequence;
     use bitcoin::Transaction;
     use bitcoin::TxIn;
+    use bitcoin::TxOut;
+    use bitcoin::Witness;
+    use bitcoin::absolute::LockTime;
     use bitcoin::blockdata::script;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::opcodes::all::OP_NOP;
     use bitcoin::opcodes::all::OP_PUSHBYTES_1;
+    use bitcoin::transaction::Version;
     use floresta_common::bhash;
 
     use super::CompactLeafData;
     use super::LeafData;
     use super::ScriptPubKeyKind;
+    use super::proof_util::UtreexoLeafError;
+    use super::proof_util::process_proof;
     use super::proof_util::reconstruct_leaf_data;
     use crate::proof_util::LeafErrorKind;
     use crate::proof_util::reconstruct_script_pubkey;
@@ -732,5 +761,69 @@ mod test {
         )
         .unwrap();
         assert_eq!(leaf, reconstructed);
+    }
+
+    #[test]
+    fn test_process_proof_rejects_genesis_creation_height() {
+        #[derive(Debug)]
+        // Any `E: From<UtreexoLeafError>` works; a local type keeps the test self-contained.
+        enum TestErr {
+            Leaf(UtreexoLeafError),
+        }
+
+        impl From<UtreexoLeafError> for TestErr {
+            fn from(e: UtreexoLeafError) -> Self {
+                Self::Leaf(e)
+            }
+        }
+
+        let coinbase = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(50),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        // A tx spending a prior-block UTXO, so `process_proof` pulls a leaf for it.
+        let spending_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: coinbase.compute_txid(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(10),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let txdata = [coinbase, spending_tx];
+
+        let leaves = [CompactLeafData {
+            header_code: 1, // height = 0, coinbase = true.
+            amount: 1,
+            spk_ty: ScriptPubKeyKind::Other(Box::new([0x51])),
+        }];
+
+        // The leaf must be rejected before any block-hash lookup happens.
+        let get_block_hash = |_height| -> Result<BlockHash, TestErr> {
+            panic!("get_block_hash must not be called for a rejected genesis leaf")
+        };
+
+        let TestErr::Leaf(err) =
+            process_proof(&leaves, &txdata, 100, get_block_hash).expect_err("must be rejected");
+
+        assert!(
+            matches!(err.kind, LeafErrorKind::GenesisCreationHeight),
+            "expected GenesisCreationHeight, got {:?}",
+            err.kind
+        );
     }
 }
