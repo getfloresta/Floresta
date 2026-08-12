@@ -153,7 +153,7 @@ mod test {
     use bitcoin::hashes::Hash;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256d;
-    use floresta_chain::pruned_utreexo::merkle::calculate_root;
+    use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
     use floresta_common::prelude::*;
 
     use super::MerkleProof;
@@ -184,7 +184,7 @@ mod test {
             let txids: Vec<_> = (0..count)
                 .map(|value| Txid::from_byte_array([value; 32]))
                 .collect();
-            let root = calculate_root(&txids).unwrap().0;
+            let root = ConsensusMerkle::calculate_root(&txids).unwrap().0;
             let hashes: Vec<_> = txids.iter().map(|txid| txid.to_raw_hash()).collect();
 
             for position in 0..u64::from(count) {

@@ -7,7 +7,7 @@ use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256d;
 use bitcoin::merkle_tree;
-use floresta_chain::pruned_utreexo::merkle::calculate_root;
+use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
 use libfuzzer_sys::fuzz_target;
 
 const MAX_LEAVES: usize = 256;
@@ -16,7 +16,7 @@ const MAX_LEAVES: usize = 256;
 fn assert_root_matches(txids: &[Txid]) -> Option<(TxMerkleNode, bool)> {
     let hashes = txids.iter().map(|txid| txid.to_raw_hash());
     let expected = merkle_tree::calculate_root(hashes).map(TxMerkleNode::from);
-    let actual = calculate_root(txids);
+    let actual = ConsensusMerkle::calculate_root(txids);
 
     assert_eq!(actual.as_ref().map(|(root, _)| *root), expected);
     actual

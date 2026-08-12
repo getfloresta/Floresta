@@ -28,7 +28,7 @@ use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
-use floresta_chain::pruned_utreexo::merkle;
+use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
 use floresta_chain::pruned_utreexo::utxo_data::UtxoData;
 use rustreexo::proof::Proof;
 
@@ -186,8 +186,8 @@ fn check_merkle_root_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("floresta::merkle::calculate_root", |b| {
-        b.iter(|| black_box(merkle::calculate_root(black_box(&txids))))
+    c.bench_function("ConsensusMerkle::calculate_root", |b| {
+        b.iter(|| black_box(ConsensusMerkle::calculate_root(black_box(&txids))))
     });
 }
 

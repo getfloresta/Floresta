@@ -30,6 +30,60 @@ use bitcoin_hashes::Sha256d;
 
 use super::consensus::Consensus;
 
+#[derive(Clone, Copy)]
+/// Floresta's consensus-compatible Bitcoin transaction Merkle backend.
+pub struct ConsensusMerkle;
+
+impl ConsensusMerkle {
+    /// Computes a transaction Merkle root and reports equal real sibling hashes.
+    ///
+    /// Rust counterpart of Bitcoin Core's [`ComputeMerkleRoot`]. Returns `(root, mutated)`.
+    /// The root always covers the entire input, including when `mutated` is true.
+    /// Unlike Core's zero hash for an empty list, this returns `None`.
+    /// Synthetic siblings added for odd-length levels are not mutations.
+    ///
+    /// [`ComputeMerkleRoot`]: https://github.com/bitcoin/bitcoin/blob/v31.0/src/consensus/merkle.cpp#L46-L63
+    pub fn calculate_root(txids: &[Txid]) -> Option<(TxMerkleNode, bool)> {
+        let mut level: Vec<[u8; 32]> = txids.iter().map(|txid| txid.to_byte_array()).collect();
+
+        if level.is_empty() {
+            return None;
+        }
+
+        // Scratch space for each level's packed `left || right` inputs.
+        let mut inputs = Vec::<[u8; 64]>::with_capacity(level.len().div_ceil(2));
+        let mut mutated = false;
+
+        while level.len() > 1 {
+            for pair in level.chunks_exact(2) {
+                mutated |= pair[0] == pair[1];
+            }
+
+            Self::reduce_level(&mut level, &mut inputs);
+        }
+
+        let root = TxMerkleNode::from_byte_array(level[0]);
+        Some((root, mutated))
+    }
+
+    fn reduce_level(level: &mut Vec<[u8; 32]>, inputs: &mut Vec<[u8; 64]>) {
+        let parent_count = level.len().div_ceil(2);
+        inputs.resize(parent_count, [0; 64]);
+
+        // Pack each pair, duplicating an unpaired final hash.
+        for (index, input) in inputs.iter_mut().enumerate() {
+            let left = level[index * 2];
+            let right = level.get(index * 2 + 1).copied().unwrap_or(left);
+            input[..32].copy_from_slice(&left);
+            input[32..].copy_from_slice(&right);
+        }
+
+        // Hash all parents into the front of `level`.
+        Sha256d::hash_64_many(&mut level[..parent_count], inputs);
+        level.truncate(parent_count);
+    }
+}
+
 impl Consensus {
     /// Validates a block's transaction Merkle commitment for consensus.
     ///
@@ -48,48 +102,18 @@ impl Consensus {
         let txids: Vec<_> = block.txdata.iter().map(compute_txid).collect();
 
         // Core defines the root of an empty transaction list as zero.
-        let (root, mutated) = calculate_root(&txids).unwrap_or((TxMerkleNode::all_zeros(), false));
+        let (root, mutated) =
+            ConsensusMerkle::calculate_root(&txids).unwrap_or((TxMerkleNode::all_zeros(), false));
 
         (!mutated && block.header.merkle_root == root).then_some(txids)
     }
-}
-
-/// Computes a transaction Merkle root and reports equal real sibling hashes.
-///
-/// Rust counterpart of Bitcoin Core's [`ComputeMerkleRoot`]. Returns `(root, mutated)`.
-/// The root always covers the entire input, including when `mutated` is true.
-/// Unlike Core's zero hash for an empty list, this returns `None`.
-/// Synthetic siblings added for odd-length levels are not mutations.
-///
-/// [`ComputeMerkleRoot`]: https://github.com/bitcoin/bitcoin/blob/v31.0/src/consensus/merkle.cpp#L46-L63
-pub fn calculate_root(txids: &[Txid]) -> Option<(TxMerkleNode, bool)> {
-    let mut level: Vec<[u8; 32]> = txids.iter().map(|txid| txid.to_byte_array()).collect();
-
-    if level.is_empty() {
-        return None;
-    }
-
-    // Scratch space for each level's packed `left || right` inputs.
-    let mut inputs = Vec::<[u8; 64]>::with_capacity(level.len().div_ceil(2));
-    let mut mutated = false;
-
-    while level.len() > 1 {
-        for pair in level.chunks_exact(2) {
-            mutated |= pair[0] == pair[1];
-        }
-
-        reduce_level(&mut level, &mut inputs);
-    }
-
-    let root = TxMerkleNode::from_byte_array(level[0]);
-    Some((root, mutated))
 }
 
 /// Computes the sibling hashes needed to prove a transaction's inclusion.
 ///
 /// Returns `None` when `leaves` is empty or `position` is out of bounds. This is
 /// equivalent to Bitcoin Core's [`TransactionMerklePath`], using the same batched
-/// level reduction as [`calculate_root`].
+/// level reduction as [`ConsensusMerkle::calculate_root`].
 ///
 /// Example:
 ///
@@ -124,29 +148,12 @@ pub fn calculate_branch(
         let sibling = level.get(position ^ 1).copied().unwrap_or(level[position]);
         branch.push(sha256d::Hash::from_byte_array(sibling));
 
-        reduce_level(&mut level, &mut inputs);
+        ConsensusMerkle::reduce_level(&mut level, &mut inputs);
         // Move to the parent index.
         position >>= 1;
     }
 
     Some(branch)
-}
-
-fn reduce_level(level: &mut Vec<[u8; 32]>, inputs: &mut Vec<[u8; 64]>) {
-    let parent_count = level.len().div_ceil(2);
-    inputs.resize(parent_count, [0; 64]);
-
-    // Pack each pair, duplicating an unpaired final hash.
-    for (index, input) in inputs.iter_mut().enumerate() {
-        let left = level[index * 2];
-        let right = level.get(index * 2 + 1).copied().unwrap_or(left);
-        input[..32].copy_from_slice(&left);
-        input[32..].copy_from_slice(&right);
-    }
-
-    // Hash all parents into the front of `level`.
-    Sha256d::hash_64_many(&mut level[..parent_count], inputs);
-    level.truncate(parent_count);
 }
 
 #[rustfmt::skip]
@@ -200,7 +207,7 @@ mod tests {
             let expected = merkle_tree::calculate_root(txids.iter().map(|txid| txid.to_raw_hash()))
                 .map(TxMerkleNode::from);
 
-            let actual = calculate_root(&txids);
+            let actual = ConsensusMerkle::calculate_root(&txids);
             assert_eq!(actual.map(|(root, _)| root), expected);
             assert!(!actual.is_some_and(|(_, mutated)| mutated));
         }
@@ -222,8 +229,9 @@ mod tests {
             let duplicate_count = count.next_power_of_two() - count;
             duplicated.extend_from_slice(&txids[usize::from(count - duplicate_count)..]);
 
-            let (root, mutated) = calculate_root(&txids).unwrap();
-            let (duplicated_root, duplicated_mutated) = calculate_root(&duplicated).unwrap();
+            let (root, mutated) = ConsensusMerkle::calculate_root(&txids).unwrap();
+            let (duplicated_root, duplicated_mutated) =
+                ConsensusMerkle::calculate_root(&duplicated).unwrap();
 
             assert_eq!(root, duplicated_root);
             assert!(!mutated);
