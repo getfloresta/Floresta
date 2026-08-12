@@ -373,12 +373,11 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
                 }
             }
 
-            // Send a ping to check if this peer is still good
+            // Send a ping to check if this peer is still good.
+            // Only ping if nothing is in flight; otherwise, let the ping-timeout loop
+            // recycle and check the handshake deadline while we wait.
             let last_message = self.last_message.elapsed();
-            if last_message > self.timeouts.send_ping_timeout {
-                if self.last_ping.is_some() {
-                    continue;
-                }
+            if last_message > self.timeouts.send_ping_timeout && self.last_ping.is_none() {
                 let nonce = rand::random();
                 self.last_ping = Some(Instant::now());
                 self.write(NetworkMessage::Ping(nonce)).await?;
@@ -1141,6 +1140,87 @@ mod tests {
         drop(node_receiver);
     }
 
+    /// A deadline far enough away that it cannot fire during a test.
+    ///
+    /// Each test below leaves every deadline it is not exercising far in the future, so
+    /// whichever error comes out identifies the deadline under test with no ambiguity and
+    /// no cross-deadline race.
+    const NEVER: Duration = Duration::from_secs(3600);
+
+    /// Baseline test deadlines: nothing fires, and the loop wakes up every 10ms.
+    ///
+    /// The poll interval matters as much as the deadlines: a deadline is only observed when
+    /// the loop wakes up, so the effective timeout is the deadline rounded up to the next
+    /// multiple of `request_poll_interval`. Keeping the poll interval well under the
+    /// deadline under test keeps that rounding negligible.
+    fn fast_timeouts() -> PeerTimeouts {
+        PeerTimeouts {
+            ping_timeout: NEVER,
+            send_ping_timeout: NEVER,
+            handshake_timeout: NEVER,
+            request_poll_interval: Duration::from_millis(10),
+        }
+    }
+
+    /// A peer that never answers our `version` but goes quiet long enough to earn a ping must
+    /// still be dropped once `handshake_timeout` elapses.
+    ///
+    /// Before the fix, the bare `continue` skipped the rest of the loop body, so once a ping
+    /// was in flight the handshake deadline was never re-checked and only `ping_timeout` could
+    /// end the connection. Note that the production defaults hide this: a ping needs 60s of
+    /// silence (`send_ping_timeout`), by which point the 10s handshake deadline has long since
+    /// fired. Only configurable deadlines make the skipped check observable.
+    #[tokio::test]
+    async fn test_handshake_timeout_fires_with_ping_in_flight() {
+        let SetupData {
+            mut peer,
+            actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            handshake_timeout: Duration::from_millis(300),
+            send_ping_timeout: Duration::from_millis(100),
+            ping_timeout: Duration::from_millis(500),
+            ..fast_timeouts()
+        });
+
+        // Start with no ping in flight, so the loop itself sends one after send_ping_timeout.
+        peer.last_ping = None;
+
+        let start = Instant::now();
+
+        let fut = tokio::spawn(peer.read_loop());
+
+        // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
+        // After send_ping_timeout (~100ms), the loop sends a ping and sets last_ping.
+        // Before the fix, the bare `continue` would skip all deadline checks after that point.
+        // With the fix, the loop continues to check the handshake_timeout (~300ms), which
+        // fires before ping_timeout (~500ms).
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never gave up on the unfinished handshake even with a ping in flight")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::UnexpectedMessage),
+            "expected the handshake deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(300),
+            "deadline fired too early"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "deadline fired too late; ping_timeout, not handshake_timeout, was checked"
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(actor_sender);
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
     /// Pins down the production deadlines.
     ///
     /// [`PeerTimeouts`] exists so that behavioural tests can dial these down to milliseconds,
@@ -1163,7 +1243,8 @@ mod tests {
         assert!(defaults.request_poll_interval < defaults.ping_timeout);
         assert!(defaults.request_poll_interval < defaults.send_ping_timeout);
 
-        // We must give the remote a chance to answer before we hang up on it.
+        // The loop only pings when nothing is in flight, so the two deadlines compose
+        // independently and the ordering is a policy choice, not a correctness invariant.
         assert!(defaults.ping_timeout < defaults.send_ping_timeout);
     }
 }
