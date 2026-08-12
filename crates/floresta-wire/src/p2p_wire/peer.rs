@@ -1162,6 +1162,180 @@ mod tests {
         }
     }
 
+    /// Walks the peer through `version`/`verack` so it reaches [`State::Connected`].
+    fn complete_handshake(actor_sender: &mut UnboundedSender<ReaderMessage>, peer: &LocalAddress) {
+        send_to_peer(
+            actor_sender,
+            peer_utils::build_version_message("/Floresta-test:0.0.0/".into(), 0, peer),
+        );
+        send_to_peer(actor_sender, NetworkMessage::Verack);
+    }
+
+    /// A peer that never answers our ping must be disconnected once `ping_timeout` elapses.
+    #[tokio::test]
+    async fn test_unanswered_ping_disconnects() {
+        let SetupData {
+            peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            ping_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+        let address = peer.address.clone();
+
+        // `create_peer_with` leaves a ping in flight, which we will never answer.
+        assert!(peer.last_ping.is_some());
+
+        let fut = tokio::spawn(peer.read_loop());
+        complete_handshake(&mut actor_sender, &address);
+
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never gave up on the unanswered ping")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::PingTimeout),
+            "expected the ping deadline to fire, got {err:?}"
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    /// The positive counterpart to [`test_unanswered_ping_disconnects`]: a peer that *does*
+    /// answer our ping gets `last_ping` cleared and must stay connected.
+    ///
+    /// This is the case that had no coverage at all. Every other test either never sends a
+    /// pong or never waits long enough for the ping deadline to matter, so dropping the
+    /// `self.last_ping = None` from the `Pong` arm was completely invisible — a peer that
+    /// answers every ping perfectly would still be disconnected every 30 seconds.
+    #[tokio::test]
+    async fn test_pong_clears_ping_and_peer_stays_connected() {
+        let SetupData {
+            peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            ping_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+        let address = peer.address.clone();
+
+        let fut = tokio::spawn(peer.read_loop());
+        complete_handshake(&mut actor_sender, &address);
+
+        // Answer the ping that `create_peer_with` left in flight.
+        send_to_peer(&mut actor_sender, NetworkMessage::Pong(0));
+
+        // Well past `ping_timeout`: had the pong not cleared `last_ping`, the peer would
+        // already have bailed out with `PeerError::PingTimeout`.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            !fut.is_finished(),
+            "peer disconnected even though it received a pong"
+        );
+
+        node_sender.send(NodeRequest::Shutdown).unwrap();
+        let peer = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer did not honour the shutdown request")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            peer.last_ping.is_none(),
+            "a pong must clear the in-flight ping"
+        );
+
+        // Prevents this channel from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+    }
+
+    /// Exercises the other half of the liveness exchange: *we* ping *them*.
+    ///
+    /// The peer starts with nothing in flight and the remote goes quiet. After
+    /// `send_ping_timeout` the loop must send its own ping, and then, with no pong coming
+    /// back, give up after `ping_timeout`. Arriving at `PingTimeout` at all is what proves
+    /// the ping was sent: the test writer is a no-op sink and cannot be inspected.
+    #[tokio::test]
+    async fn test_silent_peer_is_pinged_then_times_out() {
+        let SetupData {
+            mut peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            send_ping_timeout: Duration::from_millis(100),
+            ping_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+        let address = peer.address.clone();
+
+        // Nothing in flight: the loop itself has to decide to send a ping.
+        peer.last_ping = None;
+
+        let fut = tokio::spawn(peer.read_loop());
+        complete_handshake(&mut actor_sender, &address);
+
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never pinged the silent remote, or never timed it out")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::PingTimeout),
+            "expected the ping deadline to fire, got {err:?}"
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    /// A peer that opens a connection but never answers our `version` must be dropped once
+    /// `handshake_timeout` elapses.
+    #[tokio::test]
+    async fn test_handshake_timeout_disconnects() {
+        let SetupData {
+            mut peer,
+            actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            handshake_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+
+        // Only the handshake deadline may fire.
+        peer.last_ping = None;
+
+        let fut = tokio::spawn(peer.read_loop());
+
+        // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never gave up on the unfinished handshake")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::UnexpectedMessage),
+            "expected the handshake deadline to fire, got {err:?}"
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(actor_sender);
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
     /// A peer that never answers our `version` but goes quiet long enough to earn a ping must
     /// still be dropped once `handshake_timeout` elapses.
     ///
