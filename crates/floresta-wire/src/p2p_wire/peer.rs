@@ -1175,7 +1175,7 @@ mod tests {
     #[tokio::test]
     async fn test_unanswered_ping_disconnects() {
         let SetupData {
-            peer,
+            mut peer,
             mut actor_sender,
             node_receiver,
             node_sender,
@@ -1187,6 +1187,10 @@ mod tests {
 
         // `create_peer_with` leaves a ping in flight, which we will never answer.
         assert!(peer.last_ping.is_some());
+
+        // Re-stamp the deadline after setup, so the deadline floor can never predate this instant.
+        let start = Instant::now();
+        peer.last_ping = Some(Instant::now());
 
         let fut = tokio::spawn(peer.read_loop());
         complete_handshake(&mut actor_sender, &address);
@@ -1200,6 +1204,10 @@ mod tests {
         assert!(
             matches!(err, PeerError::PingTimeout),
             "expected the ping deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(200),
+            "deadline fired too early"
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
@@ -1280,6 +1288,10 @@ mod tests {
         // Nothing in flight: the loop itself has to decide to send a ping.
         peer.last_ping = None;
 
+        // Re-stamp the deadline after setup, so the deadline floor can never predate this instant.
+        let start = Instant::now();
+        peer.last_message = Instant::now();
+
         let fut = tokio::spawn(peer.read_loop());
         complete_handshake(&mut actor_sender, &address);
 
@@ -1292,6 +1304,10 @@ mod tests {
         assert!(
             matches!(err, PeerError::PingTimeout),
             "expected the ping deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(300),
+            "deadline fired too early"
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
@@ -1316,6 +1332,8 @@ mod tests {
         // Only the handshake deadline may fire.
         peer.last_ping = None;
 
+        let start = Instant::now();
+
         let fut = tokio::spawn(peer.read_loop());
 
         // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
@@ -1328,6 +1346,10 @@ mod tests {
         assert!(
             matches!(err, PeerError::UnexpectedMessage),
             "expected the handshake deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(200),
+            "deadline fired too early"
         );
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
