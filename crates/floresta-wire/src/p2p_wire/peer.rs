@@ -64,6 +64,17 @@ const PING_TIMEOUT: Duration = Duration::from_secs(30);
 /// If the last message we've got was more than 60, send out a ping
 const SEND_PING_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long a peer has to answer our `version` before we give up on the handshake.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the peer loop blocks waiting for a node request before waking up to
+/// re-check the liveness deadlines.
+///
+/// This is the resolution of every deadline below: a deadline can only be noticed
+/// on a loop iteration, so the *effective* timeout is the deadline rounded up to the
+/// next multiple of this interval.
+const REQUEST_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 /// The command string for the "utreexo proof" message
 const UTREEXO_PROOF_CMD_STRING: &str = "uproof";
 
@@ -98,6 +109,39 @@ enum State {
     SentVersion(Instant),
     SentVerack,
     Connected,
+}
+
+/// The liveness deadlines that govern a peer connection.
+///
+/// Production always uses [`PeerTimeouts::default`], which is wired to the module
+/// constants ([`PING_TIMEOUT`], [`SEND_PING_TIMEOUT`], [`HANDSHAKE_TIMEOUT`] and
+/// [`REQUEST_POLL_INTERVAL`]). Making them per-[`Peer`] data rather than hardcoded
+/// constants is what lets tests drive the very same code paths at millisecond scale,
+/// against the real clock, instead of needing a mockable clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerTimeouts {
+    /// If we send a ping and the peer takes longer than this to reply, disconnect.
+    pub ping_timeout: Duration,
+
+    /// If we haven't heard anything from the peer for this long, send it a ping.
+    pub send_ping_timeout: Duration,
+
+    /// How long the peer has to answer our `version` before we drop the connection.
+    pub handshake_timeout: Duration,
+
+    /// How often the peer loop wakes up to re-check the deadlines above.
+    pub request_poll_interval: Duration,
+}
+
+impl Default for PeerTimeouts {
+    fn default() -> Self {
+        Self {
+            ping_timeout: PING_TIMEOUT,
+            send_ping_timeout: SEND_PING_TIMEOUT,
+            handshake_timeout: HANDSHAKE_TIMEOUT,
+            request_poll_interval: REQUEST_POLL_INTERVAL,
+        }
+    }
 }
 
 pub struct MessageActor<R: AsyncRead + Unpin + Send> {
@@ -162,6 +206,7 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     // This is kept as an option to avoid the need to keep the other half around during tests.
     cancellation_sender: Option<oneshot::Sender<()>>,
     transport_protocol: TransportProtocol,
+    timeouts: PeerTimeouts,
 }
 
 #[derive(Debug)]
@@ -289,7 +334,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         self.state = State::SentVersion(Instant::now());
         loop {
             tokio::select! {
-                request = tokio::time::timeout(Duration::from_secs(2), self.node_requests.recv()) => {
+                request = tokio::time::timeout(self.timeouts.request_poll_interval, self.node_requests.recv()) => {
                     match request {
                         Ok(None) => {
                             return Err(PeerError::Channel);
@@ -323,14 +368,14 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
             // If we send a ping and our peer doesn't respond in time, disconnect
             if let Some(when) = self.last_ping {
-                if when.elapsed() > PING_TIMEOUT {
+                if when.elapsed() > self.timeouts.ping_timeout {
                     return Err(PeerError::PingTimeout);
                 }
             }
 
             // Send a ping to check if this peer is still good
             let last_message = self.last_message.elapsed();
-            if last_message > SEND_PING_TIMEOUT {
+            if last_message > self.timeouts.send_ping_timeout {
                 if self.last_ping.is_some() {
                     continue;
                 }
@@ -356,7 +401,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             }
 
             if let State::SentVersion(when) = self.state {
-                if Instant::now().duration_since(when) > Duration::from_secs(10) {
+                if Instant::now().duration_since(when) > self.timeouts.handshake_timeout {
                     return Err(PeerError::UnexpectedMessage);
                 }
             }
@@ -749,6 +794,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             our_best_block,
             cancellation_sender: Some(cancellation_sender),
             transport_protocol,
+            timeouts: PeerTimeouts::default(),
         };
 
         spawn(peer.read_loop());
@@ -938,6 +984,7 @@ mod tests {
     use crate::node::NodeRequest;
     use crate::p2p_wire::peer::Peer;
     use crate::p2p_wire::peer::PeerError;
+    use crate::p2p_wire::peer::PeerTimeouts;
     use crate::p2p_wire::peer::ReaderMessage;
     use crate::p2p_wire::peer::State;
     use crate::p2p_wire::peer::peer_utils;
@@ -962,6 +1009,15 @@ mod tests {
     }
 
     fn create_peer() -> SetupData {
+        create_peer_with(PeerTimeouts::default())
+    }
+
+    /// Same as [`create_peer`], but with the liveness deadlines dialled down to whatever
+    /// the caller needs.
+    ///
+    /// Tests use millisecond-scale deadlines so the real code paths run against the real
+    /// clock in well under a second.
+    fn create_peer_with(timeouts: PeerTimeouts) -> SetupData {
         let (node_tx, node_receiver) = unbounded_channel();
         let (node_sender, node_requests) = unbounded_channel();
         let (actor_sender, actor_receiver) = unbounded_channel();
@@ -1003,6 +1059,7 @@ mod tests {
             current_best_block: 0,
             transport_protocol: TransportProtocol::V1,
             cancellation_sender: Some(cancellation_sender),
+            timeouts,
         };
 
         SetupData {
@@ -1082,5 +1139,31 @@ mod tests {
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
         drop(node_receiver);
+    }
+
+    /// Pins down the production deadlines.
+    ///
+    /// [`PeerTimeouts`] exists so that behavioural tests can dial these down to milliseconds,
+    /// which means no such test says anything about the values a real peer uses. These are the
+    /// numbers the rest of the network sees, so they get asserted literally rather than against
+    /// the constants they come from — comparing a constant to itself would pass no matter what
+    /// it is changed to.
+    #[test]
+    fn test_default_timeouts_match_production_values() {
+        let defaults = PeerTimeouts::default();
+
+        assert_eq!(defaults.ping_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.send_ping_timeout, Duration::from_secs(60));
+        assert_eq!(defaults.handshake_timeout, Duration::from_secs(10));
+        assert_eq!(defaults.request_poll_interval, Duration::from_secs(2));
+
+        // A deadline is only noticed on a loop wake-up, so a poll interval coarser than a
+        // deadline would silently stretch that deadline out to the poll interval.
+        assert!(defaults.request_poll_interval < defaults.handshake_timeout);
+        assert!(defaults.request_poll_interval < defaults.ping_timeout);
+        assert!(defaults.request_poll_interval < defaults.send_ping_timeout);
+
+        // We must give the remote a chance to answer before we hang up on it.
+        assert!(defaults.ping_timeout < defaults.send_ping_timeout);
     }
 }
