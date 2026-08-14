@@ -25,6 +25,7 @@ use crate::block_proof::Bitmap;
 use crate::block_proof::UtreexoProof;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
+use crate::node_handle::UserRequest;
 use crate::p2p_wire::error::WireError;
 
 /// The leaf data, utreexo proof and the peer that sent them.
@@ -116,6 +117,34 @@ where
     ) -> Result<(), WireError> {
         let block_hash = block.block_hash();
         self.inflight.remove(&InflightRequests::Blocks(block_hash));
+
+        // Verify whether the block is mutated before requesting and validating the proof.
+        // This prevents banning a Utreexo peer because a malicious peer sent mutated blocks.
+        let is_mutated = !(block.check_merkle_root() && block.check_witness_commitment());
+        if is_mutated {
+            error!("Peer {peer} sent us a mutated block {block_hash}");
+            self.disconnect_and_ban(peer)?;
+
+            let is_user_request = self
+                .inflight_user_requests
+                .contains_key(&UserRequest::Block(block_hash));
+
+            if is_user_request {
+                // Retry the block elsewhere; the user request stays open
+                // and the inflight entry re-arms the timeout machinery.
+                let new_peer = self.send_to_fast_peer(
+                    NodeRequest::GetBlock(vec![block_hash]),
+                    ServiceFlags::NETWORK,
+                )?;
+                self.inflight.insert(
+                    InflightRequests::Blocks(block_hash),
+                    (new_peer, Instant::now()),
+                );
+                return Ok(());
+            }
+
+            return Err(WireError::PeerMisbehaving);
+        }
 
         // Reply and return early if it's a user-requested block. Else continue handling it.
         let Some(block) = self.check_is_user_block_and_reply(block)? else {

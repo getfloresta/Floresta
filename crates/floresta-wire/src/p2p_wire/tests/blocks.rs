@@ -14,12 +14,15 @@ mod tests {
     use tokio::sync::oneshot::Receiver;
 
     use crate::node::InflightRequests;
+    use crate::node::PeerStatus;
     use crate::node::UtreexoNode;
     use crate::node::sync_ctx::SyncNode;
     use crate::node_handle::NodeResponse;
     use crate::node_handle::UserRequest;
+    use crate::p2p_wire::error::WireError;
     use crate::p2p_wire::tests::utils::PeerData;
     use crate::p2p_wire::tests::utils::build_node;
+    use crate::p2p_wire::tests::utils::mutated_block_h7;
     use crate::p2p_wire::tests::utils::signet_blocks;
     use crate::p2p_wire::tests::utils::signet_headers;
 
@@ -31,7 +34,7 @@ mod tests {
         Option<Receiver<NodeResponse>>,
     );
 
-    fn setup_test(is_user_request: bool) -> TestSetup {
+    fn setup_test(is_user_request: bool, is_mutated_block: bool) -> TestSetup {
         let datadir = format!("./tmp-db/{}.blocks", rand::random::<u32>());
         let blocks = signet_blocks();
         let headers = signet_headers();
@@ -42,8 +45,12 @@ mod tests {
         ];
         let (mut node, _chain) = build_node(peers, false, Network::Signet, &datadir, 9);
 
-        let block_hash = headers[1].block_hash();
-        let block = blocks.get(&block_hash).unwrap().clone();
+        let block = if is_mutated_block {
+            mutated_block_h7()
+        } else {
+            let block_hash = headers[1].block_hash();
+            blocks.get(&block_hash).unwrap().clone()
+        };
 
         let block_hash = block.block_hash();
 
@@ -69,7 +76,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_proof_valid_block_stores_and_requests_proof() {
-        let (mut node, block, _) = setup_test(false);
+        let (mut node, block, _) = setup_test(false, false);
         let block_hash = block.block_hash();
 
         node.request_block_proof(block, PEER_TEST).unwrap();
@@ -83,19 +90,19 @@ mod tests {
                 .contains_key(&InflightRequests::Blocks(block_hash))
         );
 
-            // Coinbase-only: no proof needed, aux_data is ready
-            let inflight_block = node.blocks.get(&block_hash).unwrap();
-            assert!(inflight_block.aux_data.is_some());
-            assert!(
-                !node
-                    .inflight
-                    .contains_key(&InflightRequests::UtreexoProof(block_hash))
-            );
+        // Coinbase-only: no proof needed, aux_data is ready
+        let inflight_block = node.blocks.get(&block_hash).unwrap();
+        assert!(inflight_block.aux_data.is_some());
+        assert!(
+            !node
+                .inflight
+                .contains_key(&InflightRequests::UtreexoProof(block_hash))
+        );
     }
 
     #[tokio::test]
     async fn test_block_proof_valid_block_user_request_replies_to_user() {
-        let (mut node, block, response) = setup_test(true);
+        let (mut node, block, response) = setup_test(true, false);
         let block_hash = block.block_hash();
 
         node.request_block_proof(block, PEER_TEST).unwrap();
@@ -114,6 +121,62 @@ mod tests {
         assert!(
             !node
                 .inflight_user_requests
+                .contains_key(&UserRequest::Block(block_hash))
+        );
+
+        // The proof request should NOT happen.
+        assert!(
+            !node
+                .inflight
+                .contains_key(&InflightRequests::UtreexoProof(block_hash))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_block_proof_mutated_block_not_user_request_bans_peer() {
+        let (mut node, mutated_block, _) = setup_test(false, true);
+        let block_hash = mutated_block.block_hash();
+
+        let result = node.request_block_proof(mutated_block, PEER_TEST);
+
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+
+        // Block should NOT be stored
+        assert!(!node.blocks.contains_key(&block_hash));
+        // Peer should be banned
+        assert_eq!(
+            node.peers.get(&PEER_TEST).unwrap().state,
+            PeerStatus::Banned
+        );
+        // The proof request should NOT happen.
+        assert!(
+            !node
+                .inflight
+                .contains_key(&InflightRequests::UtreexoProof(block_hash))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_block_proof_mutated_block_user_request_retries() {
+        let (mut node, mutated_block, _) = setup_test(true, true);
+        let block_hash = mutated_block.block_hash();
+
+        node.request_block_proof(mutated_block, PEER_TEST).unwrap();
+
+        assert_eq!(
+            node.peers.get(&PEER_TEST).unwrap().state,
+            PeerStatus::Banned
+        );
+
+        // A new Blocks inflight entry should exist (the retry)
+        assert!(
+            node.inflight
+                .contains_key(&InflightRequests::Blocks(block_hash))
+        );
+
+        // The user request should still be open (not removed)
+        assert!(
+            node.inflight_user_requests
                 .contains_key(&UserRequest::Block(block_hash))
         );
 
