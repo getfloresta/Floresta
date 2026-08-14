@@ -965,6 +965,7 @@ mod test {
     use floresta_chain::ChainState;
     use floresta_chain::FlatChainStore;
     use floresta_chain::FlatChainStoreConfig;
+    use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
     use floresta_common::assert_ok;
     use floresta_common::get_spk_hash;
     use floresta_mempool::Mempool;
@@ -1034,7 +1035,7 @@ mod test {
     fn get_test_cache() -> Arc<AddressCache<KvDatabase>> {
         let test_id: u32 = rand::random();
         let cache = KvDatabase::new(format!("./tmp-db/{test_id}.floresta")).unwrap();
-        let cache = AddressCache::new(cache);
+        let cache = AddressCache::new(cache, ConsensusMerkle);
 
         // Inserting test transactions in the wallet
         let (transaction, proof) = get_test_transaction();

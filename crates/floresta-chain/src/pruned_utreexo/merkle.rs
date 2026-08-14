@@ -27,6 +27,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256d;
 use bitcoin_hashes::HashEngine as _;
 use bitcoin_hashes::Sha256d;
+use floresta_common::MerkleBackend;
 
 use super::consensus::Consensus;
 
@@ -109,51 +110,54 @@ impl Consensus {
     }
 }
 
-/// Computes the sibling hashes needed to prove a transaction's inclusion.
-///
-/// Returns `None` when `leaves` is empty or `position` is out of bounds. This is
-/// equivalent to Bitcoin Core's [`TransactionMerklePath`], using the same batched
-/// level reduction as [`ConsensusMerkle::calculate_root`].
-///
-/// Example:
-///
-/// ```text
-///          root (0)
-///         /        \
-///     H01 (0)       H22 (1)
-///    /     \         /     \
-///   0 (00)  1 (01)  2 (10)  2 (11, duplicate)
-/// ```
-///
-/// Position `11` is absent, so Bitcoin's odd-tail rule duplicates leaf `10`.
-/// At each level, `position ^ 1` selects the sibling and `position >> 1`
-/// selects the parent.
-///
-/// [`TransactionMerklePath`]: https://github.com/bitcoin/bitcoin/blob/v31.0/src/consensus/merkle.cpp#L172-L180
-pub fn calculate_branch(
-    leaves: &[sha256d::Hash],
-    mut position: usize,
-) -> Option<Vec<sha256d::Hash>> {
-    if position >= leaves.len() {
-        return None;
+impl MerkleBackend for ConsensusMerkle {
+    /// Computes the sibling hashes needed to prove a transaction's inclusion.
+    ///
+    /// Returns `None` when `leaves` is empty or `position` is out of bounds. This is
+    /// equivalent to Bitcoin Core's [`TransactionMerklePath`], using the same batched
+    /// level reduction as [`ConsensusMerkle::calculate_root`].
+    ///
+    /// Example:
+    ///
+    /// ```text
+    ///          root (0)
+    ///         /        \
+    ///     H01 (0)       H22 (1)
+    ///    /     \         /     \
+    ///   0 (00)  1 (01)  2 (10)  2 (11, duplicate)
+    /// ```
+    ///
+    /// Position `11` is absent, so Bitcoin's odd-tail rule duplicates leaf `10`.
+    /// At each level, `position ^ 1` selects the sibling and `position >> 1`
+    /// selects the parent.
+    ///
+    /// [`TransactionMerklePath`]: https://github.com/bitcoin/bitcoin/blob/v31.0/src/consensus/merkle.cpp#L172-L180
+    fn calculate_branch(
+        &self,
+        leaves: &[sha256d::Hash],
+        mut position: usize,
+    ) -> Option<Vec<sha256d::Hash>> {
+        if position >= leaves.len() {
+            return None;
+        }
+
+        let mut level: Vec<[u8; 32]> = leaves.iter().map(|hash| hash.to_byte_array()).collect();
+        let mut inputs = Vec::<[u8; 64]>::with_capacity(level.len().div_ceil(2));
+        let mut branch = Vec::new();
+
+        while level.len() > 1 {
+            // Flip the low bit to switch between the left and right child of a pair.
+            // If the sibling is missing, Bitcoin's odd-tail rule duplicates the final child.
+            let sibling = level.get(position ^ 1).copied().unwrap_or(level[position]);
+            branch.push(sha256d::Hash::from_byte_array(sibling));
+
+            Self::reduce_level(&mut level, &mut inputs);
+            // Move to the parent index.
+            position >>= 1;
+        }
+
+        Some(branch)
     }
-
-    let mut level: Vec<[u8; 32]> = leaves.iter().map(|hash| hash.to_byte_array()).collect();
-    let mut inputs = Vec::<[u8; 64]>::with_capacity(level.len().div_ceil(2));
-    let mut branch = Vec::new();
-
-    while level.len() > 1 {
-        // Flip the low bit to switch between the left and right child of a pair.
-        // If the sibling is missing, Bitcoin's odd-tail rule duplicates the final child.
-        let sibling = level.get(position ^ 1).copied().unwrap_or(level[position]);
-        branch.push(sha256d::Hash::from_byte_array(sibling));
-
-        ConsensusMerkle::reduce_level(&mut level, &mut inputs);
-        // Move to the parent index.
-        position >>= 1;
-    }
-
-    Some(branch)
 }
 
 #[rustfmt::skip]
@@ -189,10 +193,16 @@ fn compute_txid(tx: &Transaction) -> Txid {
 #[cfg(test)]
 mod tests {
     use bitcoin::Network;
+    use bitcoin::TxMerkleNode;
+    use bitcoin::Txid;
     use bitcoin::constants::genesis_block;
+    use bitcoin::hashes::Hash;
     use bitcoin::merkle_tree;
+    use floresta_common::MerkleBackend;
 
-    use super::*;
+    use crate::pruned_utreexo::consensus::Consensus;
+    use crate::pruned_utreexo::merkle::ConsensusMerkle;
+    use crate::pruned_utreexo::merkle::compute_txid;
 
     fn unique_txids(count: u8) -> Vec<Txid> {
         (0..count)
@@ -215,10 +225,14 @@ mod tests {
 
     #[test]
     fn rejects_invalid_branch_positions() {
-        assert!(calculate_branch(&[], 0).is_none());
+        assert!(ConsensusMerkle.calculate_branch(&[], 0).is_none());
 
         let leaves = [Txid::all_zeros().to_raw_hash()];
-        assert!(calculate_branch(&leaves, leaves.len()).is_none());
+        assert!(
+            ConsensusMerkle
+                .calculate_branch(&leaves, leaves.len())
+                .is_none()
+        );
     }
 
     #[test]
