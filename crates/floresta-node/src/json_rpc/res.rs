@@ -159,6 +159,7 @@ pub mod jsonrpc_interface {
     pub const NO_BLOCK_FILTERS: i16 = SERVER_ERROR_MIN + 7; // -32092
     pub const NODE_ERROR: i16 = SERVER_ERROR_MIN + 8; // -32091
     pub const CHAIN_ERROR: i16 = SERVER_ERROR_MIN + 9; // -32090
+    pub const ADDNODE_ERROR: i16 = SERVER_ERROR_MIN + 10; // -32089
     pub const FILTERS_ERROR: i16 = SERVER_ERROR_MAX; // -32000
 
     #[derive(Debug)]
@@ -241,6 +242,11 @@ pub mod jsonrpc_interface {
         /// Peer not found in the peer list.
         PeerNotFound,
 
+        /// An `addnode` command (`add`, `remove`, or `onetry`) did not perform the requested
+        /// operation, e.g. adding a peer that's already added, removing one that was never
+        /// added, or a one-time connection attempt that failed.
+        AddnodeFailed(String),
+
         /// Timestamp argument to `rescanblockchain` is before the genesis block
         /// (and not zero, which is the default).
         InvalidTimestamp,
@@ -287,6 +293,9 @@ pub mod jsonrpc_interface {
                 | Self::BlockNotFound
                 | Self::TxNotFound
                 | Self::PeerNotFound => StatusCode::NOT_FOUND,
+
+                // 409 Conflict - the requested operation doesn't match the peer's current state
+                Self::AddnodeFailed(_) => StatusCode::CONFLICT,
 
                 // 500 Internal Server Error - server messed up
                 Self::ChainWorkOverflow | Self::ConversionOverflow(_) => {
@@ -425,6 +434,11 @@ pub mod jsonrpc_interface {
                 Self::PeerNotFound => RpcError {
                     code: PEER_NOT_FOUND,
                     message: "Peer not found".into(),
+                    data: None,
+                },
+                Self::AddnodeFailed(msg) => RpcError {
+                    code: ADDNODE_ERROR,
+                    message: msg.clone(),
                     data: None,
                 },
                 Self::NoAddressesToRescan => RpcError {

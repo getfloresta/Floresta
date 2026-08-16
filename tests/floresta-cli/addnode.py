@@ -3,6 +3,7 @@
 """Tests for florestad addnode RPC behavior."""
 
 import pytest
+from requests.exceptions import HTTPError
 
 from test_framework.node import NodeType
 
@@ -101,18 +102,29 @@ class AddNodeTest:
         self.verify_peer_connection_state(is_connected=True)
 
         self.log.info(
-            "===== Verify Floresta does not add the same persistent peer twice"
+            "===== Verify Floresta rejects re-adding the same persistent peer"
         )
-        self.floresta_addnode_with_command("add")
-        # This function expects 1 peer connected to florestad
+        with pytest.raises(HTTPError):
+            self.floresta_addnode_with_command("add")
+        # The peer was already connected and stays that way; the RPC call itself failed.
         self.verify_peer_connection_state(is_connected=True)
 
-        self.floresta_addnode_with_command("onetry")
-        # This function expects 1 peer connected to florestad
+        self.log.info(
+            "===== Verify Floresta rejects a onetry to an already-connected peer"
+        )
+        with pytest.raises(HTTPError):
+            self.floresta_addnode_with_command("onetry")
         self.verify_peer_connection_state(is_connected=True)
 
         self.log.info("===== Remove bitcoind from Floresta's persistent peer list")
         self.floresta_addnode_with_command("remove")
+        self.verify_peer_connection_state(is_connected=True)
+
+        self.log.info(
+            "===== Verify Floresta rejects removing a peer that was not added"
+        )
+        with pytest.raises(HTTPError):
+            self.floresta_addnode_with_command("remove")
         self.verify_peer_connection_state(is_connected=True)
 
         self.stop_bitcoind()
