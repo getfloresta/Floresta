@@ -84,7 +84,7 @@ floresta-rpc = { path = "crates/floresta-rpc" }
 floresta-watch-only = { path = "crates/floresta-watch-only" }
 floresta-wire = { path = "crates/floresta-wire" }
 floresta-mempool = { path = "crates/floresta-mempool" }
-floresta-domain = { path = "crates/floresta-domain" }
+floresta-domain = { path = "crates/floresta-domain", default-features = false}
 metrics = { path = "metrics" }
 
 [workspace.lints.clippy]

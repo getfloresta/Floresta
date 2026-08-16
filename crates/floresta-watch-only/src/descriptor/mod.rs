@@ -4,10 +4,12 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use core::fmt::Result as FmtResult;
 use core::str::FromStr;
+use std::fmt::Debug;
 
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use floresta_common::impl_error_from;
+use floresta_domain::wallet::error::WatchOnlyError;
 use miniscript::Descriptor;
 use miniscript::DescriptorPublicKey;
 use miniscript::Error as MiniscriptError;
@@ -15,9 +17,9 @@ use miniscript::descriptor::NonDefiniteKeyError;
 
 mod slip132;
 
+use super::descriptor::slip132::Error as Slip132Error;
 use super::descriptor::slip132::generate_descriptor_from_xpub;
 use super::descriptor::slip132::is_xpub_mainnet;
-use crate::descriptor::slip132::Error as Slip132Error;
 
 #[derive(Debug)]
 pub enum DescriptorError {
@@ -36,6 +38,12 @@ pub enum DescriptorError {
 impl_error_from!(DescriptorError, Slip132Error, XpubParseError);
 impl_error_from!(DescriptorError, MiniscriptError, MiniscriptError);
 impl_error_from!(DescriptorError, NonDefiniteKeyError, DeriveDescriptorError);
+
+impl From<DescriptorError> for WatchOnlyError {
+    fn from(e: DescriptorError) -> Self {
+        Self::InvalidDescriptor(e.to_string())
+    }
+}
 
 impl Display for DescriptorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {

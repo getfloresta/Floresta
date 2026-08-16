@@ -19,12 +19,13 @@ categories = ["cryptography::cryptocurrencies"]
 
 [dependencies]
 bitcoin = { workspace = true, features = ["serde", "std"] }
-rustreexo = { workspace = true }
 
 floresta-chain = { workspace = true }
 
 [features]
-default = []
+default = ["mempool", "wallet"]
+mempool = []
+wallet = []
 
 [lints]
 workspace = true

@@ -36,15 +36,17 @@ fn main() {
     // We can now add the descriptor to the wallet. This will generate the first 100 addresses
     // for us, and add them to the wallet.
     for i in 0..100 {
-        wallet.cache_address(bitcoin::ScriptBuf::from(
-            descriptor
-                .at_derivation_index(i)
-                .unwrap()
-                .explicit_script()
-                .unwrap()
-                .as_bytes()
-                .to_vec(),
-        ));
+        wallet
+            .cache_address(bitcoin::ScriptBuf::from(
+                descriptor
+                    .at_derivation_index(i)
+                    .unwrap()
+                    .explicit_script()
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec(),
+            ))
+            .unwrap();
     }
     // We can now process some blocks. Here, we process the first 11 blocks of a custom
     // regtest network. Each coinbase some of the addresses derived above.
@@ -64,6 +66,7 @@ fn main() {
     // Fetch all txids that involve the address.
     let history = wallet
         .get_address_history(&hash)
+        .unwrap()
         .unwrap()
         .iter()
         .map(|tx| tx.hash)
