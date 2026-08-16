@@ -1091,7 +1091,7 @@ mod test {
 
         // Create test_chain_state
         let test_id = rand::random::<u32>();
-        let conf = FlatChainStoreConfig::new(format!("./tmp-db/{test_id}.floresta/"));
+        let conf = FlatChainStoreConfig::new_with_path(format!("./tmp-db/{test_id}.floresta/"));
         let chainstore = FlatChainStore::new(conf).unwrap();
         let chain = ChainState::<FlatChainStore>::open(
             chainstore,
