@@ -7,6 +7,7 @@ use core::fmt::Formatter;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::Weight;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
@@ -17,8 +18,11 @@ use floresta_common::prelude::String;
 use floresta_common::prelude::Vec;
 
 use crate::BlockchainInterface;
+use crate::pruned_utreexo::consensus::BlockTxStats;
 
 const MEDIAN_TIME_PAST_BLOCK_COUNT: usize = 11;
+
+pub(crate) const SATS_PER_KILO_VBYTE: u64 = Weight::WITNESS_SCALE_FACTOR * 1000;
 
 pub trait Bip30UnspendableExt {
     /// Returns true if the coinbase output in this block is BIP-30 unspendable.
@@ -37,6 +41,17 @@ impl Bip30UnspendableExt for Block {
             91812 => self.block_hash() == bhash_91812,
             _ => false,
         }
+    }
+}
+
+impl BlockTxStats {
+    /// Average fee rate of this block in sat/kvB, same formula as
+    pub(crate) fn avg_fee_rate(&self) -> u64 {
+        self.total_fees
+            .to_sat()
+            .checked_mul(SATS_PER_KILO_VBYTE)
+            .and_then(|r| r.checked_div(self.total_weight))
+            .unwrap_or(0)
     }
 }
 
@@ -310,6 +325,7 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::OutPoint;
@@ -744,5 +760,21 @@ mod tests {
 
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(work, expected_work);
+    }
+
+    #[test]
+    fn test_block_tx_stats_avg_fee_rate() {
+        let stats = BlockTxStats {
+            total_fees: Amount::from_sat(20),
+            total_weight: 1000,
+        };
+        assert_eq!(stats.avg_fee_rate(), 20 * SATS_PER_KILO_VBYTE / 1000);
+
+        // Coinbase-only block has no weight; mush not divide by zero.
+        let empty = BlockTxStats {
+            total_fees: Amount::from_sat(20),
+            total_weight: 0,
+        };
+        assert_eq!(empty.avg_fee_rate(), 0);
     }
 }
