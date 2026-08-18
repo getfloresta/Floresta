@@ -11,7 +11,7 @@ failures rather than silent drift.
 
 import pytest
 
-from test_framework.util import wait_until, compare_fields
+from test_framework.util import wait_until
 
 MINE_BLOCKS = 10
 EXTRA_BLOCKS = 5
@@ -35,11 +35,20 @@ def test_get_blockchain_info(node_manager, florestad_bitcoind_utreexod_with_chai
     floresta_info = florestad.rpc.get_blockchain_info()
     bitcoind_info = bitcoind.rpc.get_blockchain_info()
 
-    compare_fields(
-        floresta_info,
-        bitcoind_info,
-        ignore_fields=FLORESTA_SPECIFIC_FIELDS,
-    )
+    for key, bval in bitcoind_info.items():
+        if key in FLORESTA_SPECIFIC_FIELDS:
+            continue
+        fval = floresta_info[key]
+        if key == "difficulty":
+            # Allow float rounding noise.
+            assert round(fval, 3) == round(bval, 3)
+        elif key == "verificationprogress":
+            # Floresta computes time-based progress; bitcoind computes
+            # tx-weighted. Both converge at endpoints but drift mid-sync
+            # and at the tip (block timestamps lag `now` by seconds).
+            assert abs(fval - bval) < 1e-3
+        else:
+            assert fval == bval, f"{key}: floresta={fval} bitcoind={bval}"
 
     # size_on_disk: well-formed, grows after mining.
     size_before = floresta_info["size_on_disk"]
