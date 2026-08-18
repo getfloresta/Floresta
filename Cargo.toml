@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     # Libraries
+    "crates/floresta-proc-macro",
     "crates/floresta",
     "crates/floresta-node",
     "crates/floresta-chain",
@@ -24,6 +25,7 @@ members = [
 ]
 
 default-members = [
+    "crates/floresta-proc-macro",
     "crates/floresta",
     "crates/floresta-node",
     "crates/floresta-chain",
@@ -75,6 +77,7 @@ tonic = { version = "=0.14.5" } # note: >0.14.5 requires Rust 1.88.0
 tonic-prost = { version = "=0.14.5" } # note: >0.14.5 requires Rust 1.88.0
 
 # Local dependencies
+floresta-proc-macro = { path = "crates/floresta-proc-macro" }
 floresta-chain = { path = "crates/floresta-chain" }
 floresta-common = { path = "crates/floresta-common" }
 floresta-compact-filters = { path = "crates/floresta-compact-filters" }

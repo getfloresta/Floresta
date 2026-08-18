@@ -4,21 +4,21 @@
 
 use std::collections::BTreeMap;
 
-use corepc_types::v26::AddrManInfoNetwork;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v30::GetNetworkInfoNetwork;
 use floresta_common::PROTOCOL_VERSION;
 use floresta_common::advertised_services;
 use floresta_common::service_flags_strings;
+use floresta_rpc::rpc_interfaces::NetworkRpc;
+use floresta_rpc::rpc_types::AddNodeCommand;
+use floresta_rpc::rpc_types::AddrManInfoNetwork;
+use floresta_rpc::rpc_types::GetAddrManInfo;
+use floresta_rpc::rpc_types::GetNetworkInfo;
+use floresta_rpc::rpc_types::GetNetworkInfoNetwork;
+use floresta_rpc::rpc_types::PeerInfo;
 use floresta_wire::address_man::NetworkStats;
 use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::bitcoin_socket_addr::BitcoinSocketAddr;
 use floresta_wire::bitcoin_socket_addr::SystemResolver;
 use floresta_wire::node_interface::NetworkMethods;
-use floresta_wire::node_interface::PeerInfo;
-use serde_json::Value;
-use serde_json::json;
 
 use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
@@ -46,38 +46,35 @@ fn parse_mmmmpp(version: &str) -> usize {
     major * 10_000 + minor * 100 + patch
 }
 
-impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    pub(crate) async fn ping(&self) -> Result<bool> {
+impl<Blockchain: RpcChain> NetworkRpc for RpcImpl<Blockchain> {
+    type Error = JsonRpcError;
+
+    async fn ping(&self) -> Result<bool> {
         self.node
             .ping()
             .await
             .map_err(|e| JsonRpcError::Node(e.to_string()))
     }
 
-    pub(crate) async fn add_node(
+    async fn add_node(
         &self,
         address: String,
-        command: String,
+        command: AddNodeCommand,
         v2transport: bool,
-    ) -> Result<Value> {
+    ) -> Result<()> {
         let address =
             BitcoinSocketAddr::parse_address(&address, Some(self.network), SystemResolver)?;
 
-        let _ = match command.as_str() {
-            "add" => self.node.add_peer(address, v2transport).await,
-            "remove" => self.node.remove_peer(address).await,
-            "onetry" => self.node.onetry_peer(address, v2transport).await,
-            _ => return Err(JsonRpcError::InvalidAddnodeCommand),
+        let _ = match command {
+            AddNodeCommand::Add => self.node.add_peer(address, v2transport).await,
+            AddNodeCommand::Remove => self.node.remove_peer(address).await,
+            AddNodeCommand::Onetry => self.node.onetry_peer(address, v2transport).await,
         };
 
-        Ok(json!(null))
+        Ok(())
     }
 
-    pub(crate) async fn disconnect_node(
-        &self,
-        node_address: String,
-        node_id: Option<u32>,
-    ) -> Result<Value> {
+    async fn disconnect_node(&self, node_address: String, node_id: Option<u32>) -> Result<()> {
         let peer_addr = match (node_address.is_empty(), node_id) {
             // Reference the peer by it's IP address and port.
             (false, None) => {
@@ -116,24 +113,40 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return Err(JsonRpcError::PeerNotFound);
         }
 
-        Ok(json!(null))
+        Ok(())
     }
 
-    pub(crate) async fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
-        self.node
+    async fn get_peer_info(&self) -> Result<Vec<PeerInfo>> {
+        let infos = self
+            .node
             .get_peer_info()
             .await
-            .map_err(|_| JsonRpcError::Node("Failed to get peer information".to_string()))
+            .map_err(|_| JsonRpcError::Node("Failed to get peer information".to_string()))?;
+
+        let response = infos
+            .into_iter()
+            .map(|info| PeerInfo {
+                id: info.id,
+                address: info.address.to_string(),
+                services: info.services.to_string(),
+                user_agent: info.user_agent,
+                initial_height: info.initial_height,
+                kind: format!("{:?}", info.kind).to_lowercase(),
+                state: format!("{:?}", info.state),
+                transport_protocol: format!("{:?}", info.transport_protocol),
+            })
+            .collect();
+
+        Ok(response)
     }
 
-    pub(crate) async fn get_connection_count(&self) -> Result<usize> {
+    async fn get_connection_count(&self) -> Result<usize> {
         self.node
             .get_connection_count()
             .await
             .map_err(|_| JsonRpcError::Node("Failed to get connection count".to_string()))
     }
-
-    pub(crate) async fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
+    async fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
         let stats = self
             .node
             .get_addrman_info()
@@ -167,7 +180,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         Ok(GetAddrManInfo(map))
     }
 
-    pub(crate) async fn get_network_info(&self) -> Result<GetNetworkInfo> {
+    async fn get_network_info(&self) -> Result<GetNetworkInfo> {
         // Floresta does not listen for inbound connections, so every peer is outbound.
         let connections_in = 0;
         let connections_out = self
