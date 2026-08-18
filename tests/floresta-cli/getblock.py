@@ -35,9 +35,9 @@ class TestGetBlock:
         self.log = setup_logging
         self.node_manager = node_manager
 
-        self.bitcoind.rpc.generate_block(2017)
+        self.bitcoind.rpc.generate(2017)
         time.sleep(1)
-        self.bitcoind.rpc.generate_block(6)
+        self.bitcoind.rpc.generate(6)
 
         self.node_manager.connect_nodes(self.florestad, self.bitcoind)
 
