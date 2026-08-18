@@ -300,13 +300,18 @@ pub struct PeerData {
     accs: HashMap<BlockHash, Vec<u8>>,
 }
 
-pub async fn setup_node(
+type BuildNode = (
+    UtreexoNode<Arc<ChainState<FlatChainStore>>, SyncNode>,
+    Arc<ChainState<FlatChainStore>>,
+);
+
+pub fn build_node(
     peers: Vec<PeerData>,
     pow_fraud_proofs: bool,
     network: Network,
     datadir: impl AsRef<Path>,
     num_blocks: usize,
-) -> Arc<ChainState<FlatChainStore>> {
+) -> BuildNode {
     let config = FlatChainStoreConfig::new(&datadir);
 
     let chainstore = FlatChainStore::new(config).unwrap();
@@ -353,6 +358,20 @@ pub async fn setup_node(
         }
 
         node.peers.insert(peer_id, peer);
+
+        // Simulate the Ready handshake that `node.run()` would normally process: set the
+        // advertised services and pre-warm the message-time EMA. Both are needed for
+        // `choose_peer_by_latency` (used by `send_to_fast_peer`) to return this peer.
+        {
+            let peer = node.peers.get_mut(&peer_id).unwrap();
+            peer.services = ServiceFlags::NETWORK
+                | service_flags::UTREEXO.into()
+                | service_flags::UTREEXO_ARCHIVE.into()
+                | ServiceFlags::WITNESS
+                | ServiceFlags::COMPACT_FILTERS;
+            peer.message_times.add(1.0);
+        }
+
         // Populate the peer services too
         for service in [
             service_flags::UTREEXO.into(),
@@ -372,6 +391,17 @@ pub async fn setup_node(
         );
     }
 
+    (node, chain)
+}
+
+pub async fn setup_node(
+    peers: Vec<PeerData>,
+    pow_fraud_proofs: bool,
+    network: Network,
+    datadir: impl AsRef<Path>,
+    num_blocks: usize,
+) -> Arc<ChainState<FlatChainStore>> {
+    let (node, chain) = build_node(peers, pow_fraud_proofs, network, datadir, num_blocks);
     timeout(Duration::from_secs(100), node.run(|_| {}))
         .await
         .unwrap();
