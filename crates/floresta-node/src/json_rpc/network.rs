@@ -5,6 +5,9 @@
 use std::collections::BTreeMap;
 
 use corepc_types::v26::AddrManInfoNetwork;
+use corepc_types::v30::AddedNode;
+use corepc_types::v30::AddedNodeAddress;
+use corepc_types::v30::GetAddedNodeInfo;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetNetworkInfo;
 use corepc_types::v30::GetNetworkInfoNetwork;
@@ -15,6 +18,7 @@ use floresta_wire::address_man::NetworkStats;
 use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::bitcoin_socket_addr::BitcoinSocketAddr;
 use floresta_wire::bitcoin_socket_addr::SystemResolver;
+use floresta_wire::node_interface::AddedNodeInfo;
 use floresta_wire::node_interface::NetworkMethods;
 use floresta_wire::node_interface::PeerInfo;
 use serde_json::Value;
@@ -165,6 +169,49 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         );
 
         Ok(GetAddrManInfo(map))
+    }
+
+    pub(crate) async fn get_added_node_info(
+        &self,
+        node: Option<String>,
+    ) -> Result<GetAddedNodeInfo> {
+        let node = node
+            .map(|str| BitcoinSocketAddr::parse_address(&str, Some(self.network), SystemResolver))
+            .transpose()?;
+
+        let node_request = self
+            .node
+            .get_added_node_info(node)
+            .await
+            .map_err(|e| JsonRpcError::Node(e.to_string()))?;
+
+        Ok(GetAddedNodeInfo(
+            node_request
+                .into_iter()
+                .map(
+                    |AddedNodeInfo {
+                         addednode,
+                         connected,
+                         addresses,
+                     }| AddedNode {
+                        added_node: addednode.to_string(),
+                        connected,
+                        addresses: addresses
+                            .into_iter()
+                            .map(
+                                |floresta_wire::node_interface::AddedNodeAddress {
+                                     address,
+                                     connected,
+                                 }| AddedNodeAddress {
+                                    address: address.to_string(),
+                                    connected,
+                                },
+                            )
+                            .collect(),
+                    },
+                )
+                .collect(),
+        ))
     }
 
     pub(crate) async fn get_network_info(&self) -> Result<GetNetworkInfo> {
