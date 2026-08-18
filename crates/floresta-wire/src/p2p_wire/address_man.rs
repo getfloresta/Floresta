@@ -35,6 +35,7 @@ use tracing::warn;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::bitcoin_socket_addr::InvalidAddressError;
 use crate::onion::OnionV3Addr;
+use crate::p2p_wire::ban_man::BanMan;
 
 /// How long we'll wait before trying to connect to a peer that failed
 const RETRY_TIME: u64 = 10 * 60; // 10 minutes
@@ -70,9 +71,6 @@ pub enum AddressState {
 
     /// We tried this peer before, and had success at least once, so we know what to expect
     Tried(u64),
-
-    /// This peer misbehaved and we banned them
-    Banned(u64),
 
     /// We are connected to this peer right now
     Connected,
@@ -584,7 +582,6 @@ impl AddressMan {
             };
 
             match addr.state {
-                AddressState::Banned(_) => continue,
                 AddressState::Tried(_) | AddressState::Connected => bucket.tried += 1,
                 AddressState::NeverTried | AddressState::Failed(_) => bucket.new += 1,
             }
@@ -773,10 +770,8 @@ impl AddressMan {
             let peer = self.addresses.keys().nth(idx)?;
             let address = self.addresses.get(peer)?.to_owned();
 
-            // don't try to connect to a peer that is banned or already connected
-            if matches!(address.state, AddressState::Banned(_))
-                | matches!(address.state, AddressState::Connected)
-            {
+            // don't try to connect to a peer that is already connected
+            if matches!(address.state, AddressState::Connected) {
                 return None;
             }
 
@@ -810,8 +805,6 @@ impl AddressMan {
 
                     self.good_addresses.retain(|&x| x != id);
                 }
-
-                AddressState::Banned(_) => {}
             }
         }
 
@@ -900,16 +893,40 @@ impl AddressMan {
     /// This function moves addresses between buckets, like if the ban time of a peer expired,
     /// or if we tried to connect to a peer and it failed in the past, but now it might be online
     /// again.
-    pub fn rearrange_buckets(&mut self) {
+    pub fn rearrange_buckets(&mut self, ban_man: &BanMan) {
         let now = Self::time_since_unix();
+        let banned_ips = ban_man.banned_ips();
+
+        // Trap banned IPs inside the Failed state and purge them from good_addresses
+        // By keeping them in self.addresses, we remember them and won't blindly re-connect to them.
+        self.good_addresses.retain(|idx| {
+            self.addresses.get(idx).is_some_and(|address| {
+                address
+                    .get_net_address()
+                    .is_none_or(|ip| !banned_ips.contains(&ip))
+            })
+        });
+
+        for peers in self.good_peers_by_service.values_mut() {
+            peers.retain(|idx| {
+                self.addresses.get(idx).is_some_and(|address| {
+                    address
+                        .get_net_address()
+                        .is_none_or(|ip| !banned_ips.contains(&ip))
+                })
+            });
+        }
 
         for address in self.addresses.values_mut() {
+            if address
+                .get_net_address()
+                .is_some_and(|ip| banned_ips.contains(&ip))
+            {
+                address.state = AddressState::Failed(now);
+                continue;
+            }
+
             match address.state {
-                AddressState::Banned(ban_time) => {
-                    if ban_time < now {
-                        address.state = AddressState::NeverTried;
-                    }
-                }
                 AddressState::Tried(tried_time) => {
                     if tried_time + ASSUME_STALE < now {
                         address.state = AddressState::NeverTried;
@@ -987,9 +1004,6 @@ impl AddressMan {
         }
 
         match state {
-            AddressState::Banned(_) => {
-                self.good_addresses.retain(|&x| x != idx);
-            }
             AddressState::Tried(_) => {
                 if !self.good_addresses.contains(&idx) {
                     self.good_addresses.push(idx);
@@ -1030,6 +1044,25 @@ impl AddressMan {
         }
 
         self
+    }
+
+    /// Drops all addresses matching `ip` from the "good" pools so they won't
+    /// be selected for connection, while keeping the entries in the address
+    /// book so they become eligible again once the ban expires.
+    pub fn unmark_good_by_ip(&mut self, ip: IpAddr) {
+        let ids: Vec<usize> = self
+            .addresses
+            .iter()
+            .filter(|(_, addr)| addr.get_net_address() == Some(ip))
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in &ids {
+            self.good_addresses.retain(|&x| x != *id);
+            for peers in self.good_peers_by_service.values_mut() {
+                peers.retain(|&x| x != *id);
+            }
+        }
     }
 
     /// Adds a peer to the list of peers known to have some service
@@ -1337,6 +1370,7 @@ mod test {
     use std::fs::File;
     use std::io::Read;
     use std::io::{self};
+    use std::time::Duration;
 
     use bitcoin::Network;
     use bitcoin::p2p::ServiceFlags;
@@ -1353,6 +1387,7 @@ mod test {
     use crate::address_man::DiskLocalAddress;
     use crate::address_man::ReachableNetworks;
     use crate::bitcoin_socket_addr::BitcoinSocketAddr;
+    use crate::p2p_wire::ban_man::BanMan;
 
     fn load_addresses_from_json(file_path: impl AsRef<Path>) -> io::Result<Vec<LocalAddress>> {
         let mut contents = String::new();
@@ -1540,7 +1575,9 @@ mod test {
             None, // No proxy
         ));
 
-        address_man.rearrange_buckets();
+        let ban_man = BanMan::new();
+
+        address_man.rearrange_buckets(&ban_man);
     }
 
     #[test]
@@ -1604,6 +1641,7 @@ mod test {
     fn test_rearrange_buckets() {
         let mut address_man = AddressMan::new(None, &[]);
         let addresses = get_addresses_and_random_times();
+        let banman = BanMan::new();
         address_man.addresses.extend(
             addresses
                 .iter()
@@ -1612,7 +1650,7 @@ mod test {
         );
 
         assert_eq!(address_man.addresses.len(), addresses.len());
-        address_man.rearrange_buckets();
+        address_man.rearrange_buckets(&banman);
 
         assert!(address_man.addresses.iter().all(|(_, addr)| {
             matches!(
@@ -1620,6 +1658,68 @@ mod test {
                 AddressState::NeverTried | AddressState::Tried(_)
             )
         }));
+    }
+
+    #[test]
+    fn test_rearrange_buckets_quarantines_banned_ips() {
+        let mut address_man = AddressMan::new(None, &[]);
+        let mut ban_man = BanMan::new();
+        let addresses = get_addresses_and_random_times();
+
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+        );
+
+        let total = address_man.addresses.len();
+        assert!(total > 0);
+
+        // Ban the first address
+        let first_addr = addresses[0].get_net_address().unwrap();
+        ban_man.add_ban(first_addr, Some(Duration::from_secs(3600)));
+
+        // Run rearrange_buckets — should quarantine the banned address into Failed
+        address_man.rearrange_buckets(&ban_man);
+
+        assert_eq!(address_man.addresses.len(), total); // Should NOT be deleted!
+
+        let quarantined = address_man
+            .addresses
+            .values()
+            .find(|addr| addr.get_net_address() == Some(first_addr))
+            .unwrap();
+
+        assert!(matches!(quarantined.state, AddressState::Failed(_)));
+    }
+
+    #[test]
+    fn test_unmark_good_by_ip_preserves_address_entries() {
+        let mut address_man = AddressMan::new(None, &[]);
+        let addresses = get_addresses_and_random_times();
+        address_man.addresses.extend(
+            addresses
+                .iter()
+                .map(|addr| (addr.id, addr.clone()))
+                .collect::<HashMap<usize, LocalAddress>>(),
+        );
+        let total = address_man.addresses.len();
+        let first_id = addresses[0].id;
+        let first_ip = addresses[0].get_net_address().unwrap();
+        address_man.good_addresses.push(first_id);
+
+        address_man.unmark_good_by_ip(first_ip);
+
+        assert_eq!(
+            address_man.addresses.len(),
+            total,
+            "address entry must not be deleted",
+        );
+        assert!(
+            !address_man.good_addresses.contains(&first_id),
+            "must be unmarked as good",
+        );
     }
 
     #[test]
@@ -1783,14 +1883,14 @@ mod test {
         );
 
         for addr in addresses {
-            address_man.update_set_state(addr.id, AddressState::Banned(0));
+            address_man.update_set_state(addr.id, AddressState::Failed(0));
         }
 
         assert!(
             address_man
                 .addresses
                 .values()
-                .all(|addr| matches!(addr.state, AddressState::Banned(_)))
+                .all(|addr| matches!(addr.state, AddressState::Failed(_)))
         );
     }
 
