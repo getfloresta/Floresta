@@ -393,6 +393,7 @@ where
         }
 
         node.peers.insert(peer_id, peer);
+
         // Populate the peer services too
         for service in [
             service_flags::UTREEXO.into(),
