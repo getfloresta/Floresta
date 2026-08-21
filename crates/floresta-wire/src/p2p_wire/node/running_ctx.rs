@@ -748,6 +748,7 @@ where
                                 .inflight
                                 .contains_key(&InflightRequests::Blocks(block_hash))
                                 || self.blocks.contains_key(&block_hash);
+
                             if already_requested {
                                 continue;
                             }
@@ -764,8 +765,8 @@ where
                                 return Ok(());
                             };
 
-                            let current_height = self.chain.get_best_block()?.0;
-                            if current_height.saturating_sub(MAX_REORG_DEPTH) > previous_height {
+                            let (best_height, _) = self.chain.get_best_block()?;
+                            if best_height.saturating_sub(MAX_REORG_DEPTH) > previous_height {
                                 // peer has a super deep reorg, this could be a disk fill attack
                                 warn!(
                                     "Peer {peer} is trying to reorg a very deep block, might be a disk fill attack. Banning it"
@@ -775,6 +776,14 @@ where
                             }
 
                             self.chain.accept_header(*header)?;
+
+                            // Call it again, since `accept_header` might reorg the chain
+                            let (_, best_hash) = self.chain.get_best_block()?;
+
+                            // this is a fork block, don't request the actual block.
+                            if header.prev_blockhash != best_hash {
+                                continue;
+                            }
 
                             self.send_to_peer(
                                 peer,
