@@ -1,5 +1,5 @@
 [package]
-name = "metrics"
+name = "floresta-metrics"
 version = "0.2.0"
 rust-version.workspace = true
 edition.workspace = true

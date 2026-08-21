@@ -13,13 +13,13 @@ members = [
     "crates/floresta-wire",
     "crates/floresta-mempool",
     "crates/floresta-domain",
+    "crates/floresta-metrics",
 
     # Binaries
     "bin/florestad",
     "bin/floresta-cli",
 
-    # Tests and monitoring
-    "metrics",
+    # Tests
     "fuzz",
 ]
 
@@ -35,6 +35,7 @@ default-members = [
     "crates/floresta-wire",
     "crates/floresta-mempool",
     "crates/floresta-domain",
+    "crates/floresta-metrics",
     "bin/florestad",
     "bin/floresta-cli",
 ]
@@ -85,7 +86,7 @@ floresta-watch-only = { path = "crates/floresta-watch-only" }
 floresta-wire = { path = "crates/floresta-wire" }
 floresta-mempool = { path = "crates/floresta-mempool" }
 floresta-domain = { path = "crates/floresta-domain" }
-metrics = { path = "metrics" }
+floresta-metrics = { path = "crates/floresta-metrics" }
 
 [workspace.lints.clippy]
 unused_async = "deny"

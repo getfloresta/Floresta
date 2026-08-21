@@ -28,12 +28,12 @@ crates="\
     floresta-wire \
     florestad \
     floresta-cli \
-    fuzz \
-    metrics"
+    floresta-metrics \
+    fuzz"
 
 for crate in $crates; do
     # Determine the path to the crate
-    if [ "$crate" = "fuzz" ] || [ "$crate" = "metrics" ]; then
+    if [ "$crate" = "fuzz" ]; then
         path="$crate"
     elif [ "$crate" = "florestad" ] || [ "$crate" = "floresta-cli" ]; then
         path="bin/$crate"
@@ -45,8 +45,8 @@ for crate in $crates; do
     # include that case (see https://github.com/taiki-e/cargo-hack/issues/155#issuecomment-2474330839)
     if [ "$crate" = "floresta-compact-filters" ] || \
        [ "$crate" = "floresta-electrum" ] || \
-       [ "$crate" = "fuzz" ] || \
-       [ "$crate" = "metrics" ]; then
+       [ "$crate" = "floresta-metrics" ] || \
+       [ "$crate" = "fuzz" ]; then
         # These crates don't have a default feature
         skip_default=""
     else
@@ -56,6 +56,23 @@ for crate in $crates; do
     # Navigate to the crate's directory
     cd "$path" || exit 1
     printf "\033[1;35mRunning cargo %s for all feature combinations in %s...\033[0m\n" "$action" "$crate"
+
+    # Only test the `floresta` crate using the `full`
+    # feature as to not blow up the amount of combinations
+    if [ "$crate" = "floresta" ]; then
+        if [ "$action" = "clippy" ]; then
+            # The floresta crate is a facade over the workspace crates. Check its full
+            # re-export surface without enumerating every re-export feature subset.
+            # shellcheck disable=SC2086
+            cargo +nightly clippy --all-targets --no-default-features --features full $cargo_arg
+        elif [ "$action" = "test" ]; then
+            # shellcheck disable=SC2086
+            cargo test --release --no-default-features --features full -v $cargo_arg
+        fi
+
+        cd - > /dev/null || exit 1
+        continue
+    fi
 
     if [ "$action" = "clippy" ]; then
         # shellcheck disable=SC2086

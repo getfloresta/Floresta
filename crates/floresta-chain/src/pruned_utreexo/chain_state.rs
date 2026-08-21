@@ -42,7 +42,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
 use floresta_common::Channel;
 #[cfg(feature = "metrics")]
-use metrics;
+use floresta_metrics as metrics;
 use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;

@@ -25,7 +25,6 @@ COPY Cargo.* ./
 COPY bin/ bin/
 COPY crates/ crates/
 COPY fuzz/ fuzz/
-COPY metrics/ metrics/
 COPY doc/ doc/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     if [ -n "$BUILD_FEATURES" ]; then \
