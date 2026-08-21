@@ -280,47 +280,76 @@ where
         let (leaf_data, proof, utreexo_peer) =
             inflight.aux_data.ok_or(WireError::BlockProofNotFound)?;
 
+        // The leaf data supplied by the utreexo peer is consumed here, before it is
+        // authenticated, so errors must go through the same handling as `connect_block` ones;
+        // otherwise a misbehaving peer would go unpunished and the block would silently stall.
         let (del_hashes, inputs) =
-            proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {
+            match proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {
                 self.chain.get_block_hash(h)
-            })?;
-
-        if let Err(chain_err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
-            error!(
-                "Validation failed for block with {:?}, received by peer {peer}. Reason: {chain_err}",
-                block.header,
-            );
-
-            // Return early if the error is not from block validation (e.g., a database error)
-            let Some(e) = Self::block_validation_err(chain_err) else {
-                return Ok(());
-            };
-
-            return match self.handle_validation_errors(e, block, peer, utreexo_peer) {
-                // Disconnect the responsible peer and ban it.
-                Some(blamed_peer) => {
-                    self.disconnect_and_ban(blamed_peer)?;
-                    Err(WireError::PeerMisbehaving)
+            }) {
+                Ok(processed) => processed,
+                Err(err) => {
+                    return self.handle_process_block_error(err.into(), block, peer, utreexo_peer);
                 }
-                None => Ok(()),
             };
+
+        if let Err(err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
+            return self.handle_process_block_error(
+                WireError::Blockchain(err),
+                block,
+                peer,
+                utreexo_peer,
+            );
         }
 
         self.last_tip_update = Instant::now();
         Ok(())
     }
 
-    /// Returns the inner [`BlockValidationErrors`] of this chain error, if any.
-    fn block_validation_err(e: BlockchainError) -> Option<BlockValidationErrors> {
-        match e {
-            BlockchainError::TransactionError(tx_err) => Some(tx_err.error),
-            BlockchainError::BlockValidation(block_err) => Some(block_err),
+    /// Handles an error raised while processing a block, either by [`proof_util::process_proof`]
+    /// or [`UpdatableChainstate::connect_block`], banning the responsible peer if any.
+    ///
+    /// Only chain errors caused by peer-supplied data lead to a ban; any other error is our own
+    /// fault (e.g. a database failure) and never punishes a peer: non-chain errors are propagated
+    /// unchanged, and chain errors that aren't validation failures are only logged.
+    ///
+    /// [`UpdatableChainstate::connect_block`]: floresta_chain::pruned_utreexo::UpdatableChainstate::connect_block
+    fn handle_process_block_error(
+        &mut self,
+        err: WireError,
+        block: Block,
+        block_peer: PeerId,
+        utreexo_peer: PeerId,
+    ) -> Result<(), WireError> {
+        let WireError::Blockchain(chain_err) = err else {
+            Err(err)?
+        };
+
+        // Return early if the error is not from block validation (e.g., a database error)
+        let e = match chain_err {
+            BlockchainError::TransactionError(tx_err) => tx_err.error,
+            BlockchainError::BlockValidation(block_err) => block_err,
             // TODO: we need clearer error definitions for utreexo failures
-            BlockchainError::AccumulatorError(_) | BlockchainError::InvalidUtreexoProof => {
-                Some(BlockValidationErrors::InvalidUtreexoProof)
-            }
-            _ => None,
-        }
+            BlockchainError::AccumulatorError(_)
+            | BlockchainError::InvalidUtreexoProof
+            | BlockchainError::UtreexoLeaf(_) => BlockValidationErrors::InvalidUtreexoProof,
+            _ => return Ok(()),
+        };
+
+        let block_hash = block.block_hash();
+
+        let Some(blamed_peer) = self.handle_validation_errors(&e, block, block_peer, utreexo_peer)
+        else {
+            return Ok(());
+        };
+
+        error!(
+            "Validation failed for block {block_hash}, received by peer {blamed_peer}. Reason: {e}"
+        );
+
+        // Disconnect the responsible peer and ban it.
+        self.disconnect_and_ban(blamed_peer)?;
+        Err(WireError::PeerMisbehaving)
     }
 
     /// Handles the different block validation errors that can happen when connecting a block.
@@ -328,7 +357,7 @@ where
     /// Returns the peer id that caused this error, since it could be block or utreexo-related.
     fn handle_validation_errors(
         &mut self,
-        e: BlockValidationErrors,
+        e: &BlockValidationErrors,
         block: Block,
         block_peer: PeerId,
         utreexo_peer: PeerId,
