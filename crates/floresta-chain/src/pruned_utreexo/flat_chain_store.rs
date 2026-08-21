@@ -134,6 +134,10 @@ type CacheType = LruCache<BlockHash, DiskBlockHeader>;
 /// 64 (MAX_ROOTS) * 32 bytes (ROOT_SIZE) + 8 bytes (LEAF_COUNT) = 2056 bytes
 pub const MAX_ACCUMULATOR_SIZE: usize = 2056;
 
+/// Fee rate pruning window: keep at most the last 1008 blocks (~1week)
+const FEE_RATE_WINDOW: u32 = 1008;
+const FEE_RATE_FILE_SIZE: u64 = FEE_RATE_WINDOW as u64 * size_of::<u64>() as u64; //8064 bytes
+
 #[derive(Clone)]
 /// Configuration for our flat chain store. See each field for more information
 pub struct FlatChainStoreConfig {
@@ -628,6 +632,9 @@ pub struct FlatChainStore {
 
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
+
+    /// Per-block fee rate store, one little-endian u64 per height (offset = height * 8)
+    fee_rate_file: File,
 }
 
 impl FlatChainStore {
@@ -660,6 +667,7 @@ impl FlatChainStore {
         let metadata_path = datadir.join("metadata.bin");
         let fork_headers_path = datadir.join("fork_headers.bin");
         let accumulator_file_path = datadir.join("accumulators.bin");
+        let fee_rate_file_path = datadir.join("fee_rates.bin");
 
         let index_map_file_size = index_size * size_of::<u32>();
         let index_map = unsafe { Self::init_file(&index_path, index_map_file_size, file_mode)? };
@@ -709,9 +717,19 @@ impl FlatChainStore {
             .truncate(false)
             .open(accumulator_file_path)?;
 
+        let fee_rate_file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(fee_rate_file_path)?;
+
+        fee_rate_file.set_len(FEE_RATE_FILE_SIZE)?;
+
         Ok(Self {
             headers,
             accumulator_file,
+            fee_rate_file,
             metadata,
             block_index: BlockIndex::new(index_map, index_size),
             fork_headers,
@@ -762,6 +780,7 @@ impl FlatChainStore {
         let headers_file_path = datadir.join("headers.bin");
         let fork_file_path = datadir.join("fork_headers.bin");
         let accumulator_file_path = datadir.join("accumulators.bin");
+        let fee_rate_file_path = datadir.join("fee_rates.bin");
 
         let index_file_size = metadata.index_capacity * size_of::<u32>();
         let headers_file_size = metadata.headers_file_size * size_of::<HashedDiskHeader>();
@@ -781,9 +800,19 @@ impl FlatChainStore {
             .truncate(false)
             .open(accumulator_file_path)?;
 
+        let fee_rate_file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(fee_rate_file_path)?;
+
+        fee_rate_file.set_len(FEE_RATE_FILE_SIZE)?;
+
         Ok(Self {
             headers,
             accumulator_file,
+            fee_rate_file,
             metadata: metadata_file,
             block_index: BlockIndex::new(index_map, metadata.index_capacity),
             fork_headers,
@@ -1300,6 +1329,32 @@ impl ChainStore for FlatChainStore {
         let index = Index::new(height)?;
 
         unsafe { self.add_index_entry(hash, index) }
+    }
+
+    fn save_block_fee_rate(&mut self, height: u32, fee_rate: u64) -> Result<(), Self::Error> {
+        let pos = (height as u64 % FEE_RATE_WINDOW as u64) * size_of::<u64>() as u64;
+        self.fee_rate_file.seek(SeekFrom::Start(pos))?;
+        self.fee_rate_file.write_all(&fee_rate.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn get_block_fee_rate(&mut self, height: u32) -> Result<Option<u64>, Self::Error> {
+        let tip_height = unsafe { self.get_metadata()?.depth.saturating_sub(1) };
+
+        // Fee rate pruned return None: outside the ~1 week window, or future block
+        if tip_height.saturating_sub(height) >= FEE_RATE_WINDOW || tip_height < height {
+            return Ok(None);
+        }
+
+        let pos = (height as u64 % FEE_RATE_WINDOW as u64) * size_of::<u64>() as u64;
+        let file_len = self.fee_rate_file.metadata()?.len();
+        if pos + size_of::<u64>() as u64 > file_len {
+            return Ok(None);
+        }
+        let mut buf = [0u8; size_of::<u64>()];
+        self.fee_rate_file.seek(SeekFrom::Start(pos))?;
+        self.fee_rate_file.read_exact(&mut buf)?;
+        Ok(Some(u64::from_le_bytes(buf)))
     }
 }
 
@@ -1828,6 +1883,87 @@ mod tests {
         while let Ok(header) = Header::consensus_decode(&mut buffer) {
             chain.accept_header(header).unwrap();
         }
+    }
+
+    #[test]
+    fn test_fee_rate_save_and_get() {
+        let mut store = get_test_chainstore(None).unwrap();
+        store
+            .save_height(&BestChain {
+                depth: 1000,
+                best_block: BlockHash::all_zeros(),
+                validation_index: BlockHash::all_zeros(),
+                alternative_tips: vec![],
+            })
+            .unwrap();
+
+        // save and get
+        store.save_block_fee_rate(0, 12345).unwrap();
+        store.save_block_fee_rate(1, 67890).unwrap();
+        store.save_block_fee_rate(100, u64::MAX).unwrap();
+
+        assert_eq!(store.get_block_fee_rate(0).unwrap(), Some(12345));
+        assert_eq!(store.get_block_fee_rate(1).unwrap(), Some(67890));
+        assert_eq!(store.get_block_fee_rate(100).unwrap(), Some(u64::MAX));
+    }
+
+    #[test]
+    fn test_fee_rate_prune_window() {
+        const W: u32 = super::FEE_RATE_WINDOW;
+
+        let mut store = get_test_chainstore(None).unwrap();
+
+        // tip = W * 2
+        let tip = W * 2;
+        store
+            .save_height(&BestChain {
+                depth: tip + 1, // tip_height = depth - 1 = W * 2
+                best_block: BlockHash::all_zeros(),
+                validation_index: BlockHash::all_zeros(),
+                alternative_tips: vec![],
+            })
+            .unwrap();
+
+        // Case 1: within window → Some
+        let h1 = W + 500; // tip - h1 = W - 500 < W
+        store.save_block_fee_rate(h1, 100).unwrap();
+        assert_eq!(store.get_block_fee_rate(h1).unwrap(), Some(100));
+
+        // Case 2: at window boundary → None (tip - h2 = W >= W)
+        let h2 = W;
+        store.save_block_fee_rate(h2, 200).unwrap();
+        assert_eq!(store.get_block_fee_rate(h2).unwrap(), None);
+
+        // Case 3: future block → None
+        let h3 = tip + 1;
+        store.save_block_fee_rate(h3, 300).unwrap();
+        assert_eq!(store.get_block_fee_rate(h3).unwrap(), None);
+    }
+
+    #[test]
+    fn test_fee_rate_missing_block_returns_none() {
+        let mut store = get_test_chainstore(None).unwrap();
+
+        // not saved
+        assert_eq!(store.get_block_fee_rate(2).unwrap(), None);
+        assert_eq!(store.get_block_fee_rate(99999).unwrap(), None);
+    }
+
+    #[test]
+    fn test_fee_rate_overwrite() {
+        let mut store = get_test_chainstore(None).unwrap();
+        store
+            .save_height(&BestChain {
+                depth: 1000,
+                best_block: BlockHash::all_zeros(),
+                validation_index: BlockHash::all_zeros(),
+                alternative_tips: vec![],
+            })
+            .unwrap();
+
+        store.save_block_fee_rate(5, 111).unwrap();
+        store.save_block_fee_rate(5, 222).unwrap();
+        assert_eq!(store.get_block_fee_rate(5).unwrap(), Some(222));
     }
 
     #[test]

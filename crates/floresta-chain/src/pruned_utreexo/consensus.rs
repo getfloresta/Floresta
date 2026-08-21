@@ -101,6 +101,14 @@ impl From<Network> for Consensus {
     }
 }
 
+/// Fee/weight statistics collected while validating a block's transactions.
+pub(crate) struct BlockTxStats {
+    /// Total fees paid by the block's non-coinbase transactions.
+    pub(crate) total_fees: Amount,
+    /// Combined weight of the block's non-coinbase transactions.
+    pub(crate) total_weight: u64,
+}
+
 impl Consensus {
     /// Returns the block-finality lock-time cutoff for a candidate block.
     ///
@@ -188,12 +196,33 @@ impl Consensus {
     pub fn verify_block_transactions(
         height: u32,
         lock_time_cutoff: u32,
-        mut utxos: HashMap<OutPoint, UtxoData>,
+        utxos: HashMap<OutPoint, UtxoData>,
         transactions: &[Transaction],
         subsidy: Amount,
         verify_script: bool,
         flags: c_uint,
     ) -> Result<(), BlockchainError> {
+        Self::verify_block_transactions_inner(
+            height,
+            lock_time_cutoff,
+            utxos,
+            transactions,
+            subsidy,
+            verify_script,
+            flags,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_block_transactions_inner(
+        height: u32,
+        lock_time_cutoff: u32,
+        mut utxos: HashMap<OutPoint, UtxoData>,
+        transactions: &[Transaction],
+        subsidy: Amount,
+        verify_script: bool,
+        flags: c_uint,
+    ) -> Result<BlockTxStats, BlockchainError> {
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
             Err(BlockValidationErrors::EmptyBlock)?;
@@ -201,6 +230,8 @@ impl Consensus {
 
         // Total block fees that the miner can claim in the coinbase
         let mut fee = Amount::ZERO;
+
+        let mut total_weight = 0u64;
 
         for (n, transaction) in transactions.iter().enumerate() {
             if !Self::is_final_transaction(transaction, height, lock_time_cutoff) {
@@ -219,12 +250,12 @@ impl Consensus {
             // Actually verify the transaction
             let (in_value, out_value) =
                 Self::verify_transaction(transaction, &mut utxos, height, verify_script, flags)?;
-
             // Fee is the difference between inputs and outputs. In the above function call we have
             // verified that `out_value <= in_value` (no underflow risk).
             fee = fee
                 .checked_add(in_value - out_value)
                 .ok_or(BlockValidationErrors::TooManyCoins)?;
+            total_weight += transaction.weight().to_wu();
         }
 
         // Check coinbase output values to ensure the miner isn't producing excess coins
@@ -238,7 +269,10 @@ impl Consensus {
             Err(BlockValidationErrors::BadCoinbaseOutValue)?;
         }
 
-        Ok(())
+        Ok(BlockTxStats {
+            total_fees: fee,
+            total_weight,
+        })
     }
 
     /// Performs all transaction checks that are independent of the spent outputs and produces

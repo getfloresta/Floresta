@@ -79,6 +79,12 @@ pub trait ChainStore {
     /// this store. Implementations should not include the size of any enclosing
     /// directory or unrelated data.
     fn size_on_disk(&self) -> Result<u64, Self::Error>;
+
+    /// Persist the average fee rate for a block at the given height.
+    fn save_block_fee_rate(&mut self, height: u32, fee_rate: u64) -> Result<(), Self::Error>;
+
+    /// Retrieve the stored average fee rate for a block at the given height, if any.
+    fn get_block_fee_rate(&mut self, height: u32) -> Result<Option<u64>, Self::Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
