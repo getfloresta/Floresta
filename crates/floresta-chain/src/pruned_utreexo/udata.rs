@@ -212,6 +212,7 @@ pub mod proof_util {
     use crate::BlockchainError;
     use crate::CompactLeafData;
     use crate::ScriptPubKeyKind;
+    use crate::extensions::Bip30UnspendableExt;
     use crate::prelude::*;
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::consensus::UTREEXO_TAG_V1;
@@ -348,6 +349,14 @@ pub mod proof_util {
         sha256::Hash::from_byte_array(leaf_hash.into())
     }
 
+    fn get_input_prevouts(txdata: &[Transaction]) -> HashSet<OutPoint> {
+        txdata
+            .iter()
+            .flat_map(|tx| tx.input.iter())
+            .map(|i| i.previous_output)
+            .collect()
+    }
+
     /// From a block, gets the roots that will be included on the acc, certifying
     /// that any utxo will not be spent in the same block.
     pub fn get_block_adds(
@@ -357,12 +366,7 @@ pub mod proof_util {
     ) -> Vec<BitcoinNodeHash> {
         // Get inputs from the block, we'll need this HashSet to check if an output is spent
         // in the same block. If it is, we don't need to add it to the accumulator.
-        let mut spent = HashSet::new();
-        for tx in &block.txdata {
-            for input in &tx.input {
-                spent.insert((input.previous_output.txid, input.previous_output.vout));
-            }
-        }
+        let spent = get_input_prevouts(&block.txdata);
 
         // Get all leaf hashes that will be added to the accumulator
         let mut adds = Vec::new();
@@ -371,7 +375,7 @@ pub mod proof_util {
             let is_cb = tx.is_coinbase();
 
             for (vout, output) in tx.output.iter().enumerate() {
-                let utxo_id = (txid, vout as u32);
+                let utxo_id = OutPoint::new(txid, vout as u32);
 
                 if Consensus::is_unspendable(&output.script_pubkey) || spent.contains(&utxo_id) {
                     // Do not add unspendable nor already spent utxos
@@ -381,6 +385,64 @@ pub mod proof_util {
                 let leaf_hash =
                     get_leaf_hashes(txid, is_cb, vout as u32, output, height, block_hash);
                 adds.push(BitcoinNodeHash::Some(leaf_hash.to_byte_array()));
+            }
+        }
+
+        adds
+    }
+
+    pub fn get_block_adds_with_hints(
+        block: &Block,
+        txids: &[Txid],
+        height: u32,
+        block_hash: BlockHash,
+        unspent_indexes: &HashSet<u32>,
+    ) -> Vec<BitcoinNodeHash> {
+        let transactions = &block.txdata;
+        assert_eq!(transactions.len(), txids.len());
+
+        let mut output_index = 0;
+
+        // Get inputs from the block, we'll need this HashSet to check if an output is spent
+        // in the same block. If it is, we don't need to add it to the accumulator.
+        let spent = get_input_prevouts(transactions);
+
+        // Get all leaf hashes that will be added to the accumulator
+        let mut adds = Vec::new();
+        for (tx, txid) in transactions.iter().zip(txids) {
+            let is_cb = tx.is_coinbase();
+
+            for (vout, output) in tx.output.iter().enumerate() {
+                // Special case: unspendable outputs do not count for the block `output_index`
+                if Consensus::is_unspendable(&output.script_pubkey) {
+                    continue;
+                }
+
+                let utxo_id = OutPoint::new(*txid, vout as u32);
+                if spent.contains(&utxo_id) {
+                    output_index += 1;
+                    // Do not add UTXOs spent in the same block
+                    continue;
+                }
+
+                let is_bip30_unspendable = is_cb && block.is_bip30_unspendable(height);
+
+                if is_bip30_unspendable || unspent_indexes.contains(&output_index) {
+                    // Add unspent outputs to the accumulator, according to the hints
+                    let leaf_hash =
+                        get_leaf_hashes(*txid, is_cb, vout as u32, output, height, block_hash);
+                    adds.push(BitcoinNodeHash::Some(leaf_hash.to_byte_array()));
+                } else {
+                    // Hinted as spent: add empty leaf hash
+                    adds.push(BitcoinNodeHash::Empty);
+                }
+
+                // BIP-30 unspendable outputs do not count for the block `output_index`
+                if is_bip30_unspendable {
+                    continue;
+                }
+
+                output_index += 1;
             }
         }
 
