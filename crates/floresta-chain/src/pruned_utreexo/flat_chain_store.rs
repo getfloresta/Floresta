@@ -77,6 +77,7 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use core::mem::size_of;
 use core::num::NonZeroUsize;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::DirBuilder;
 use std::fs::File;
@@ -980,6 +981,62 @@ impl FlatChainStore {
         Ok(())
     }
 
+    /// Derives the current set of alternative chain tips by scanning stored fork headers.
+    ///
+    /// A fork header is considered a tip if no other fork header references it as its
+    /// parent (`prev_blockhash`). This mirrors how Bitcoin Core computes chain tips from
+    /// its block index rather than maintaining an explicit on-disk list.
+    ///
+    /// Orphan and invalid-chain headers are also stored in the fork headers file, but
+    /// they are skipped since they are not alternative chain tips. Finding a main-chain
+    /// header in a fork slot means the database is corrupted.
+    ///
+    /// Blocks that were reorged into the main chain leave stale `InFork` copies in the
+    /// fork headers file, so candidate tips are checked against the block index (which
+    /// reorgs repoint to the main-chain slot) and kept only if still `InFork`.
+    ///
+    /// This is called once on startup (via `get_best_chain`) to populate the in-memory
+    /// `BestChain.alternative_tips` cache. At runtime, tips are maintained incrementally
+    /// by `ChainState::push_alt_tip`.
+    fn derive_alternative_tips(&self) -> Result<Vec<BlockHash>, FlatChainstoreError> {
+        let metadata = unsafe { self.get_metadata()? };
+        let fork_count = metadata.fork_count as usize;
+
+        let mut fork_hashes = HashSet::with_capacity(fork_count);
+        let mut parent_hashes = HashSet::with_capacity(fork_count);
+
+        for i in 0..fork_count {
+            let index = Index::new_fork(i as u32)?;
+            let hdr = unsafe { self.get_disk_header(index)? };
+            match hdr.header {
+                DiskBlockHeader::InFork(..) => {
+                    fork_hashes.insert(hdr.hash);
+                    parent_hashes.insert(hdr.header.prev_blockhash);
+                }
+                // Orphan and invalid-chain headers share the fork headers file (see
+                // `save_header`), but they are not alternative chain tips.
+                DiskBlockHeader::Orphan(..) | DiskBlockHeader::InvalidChain(..) => {}
+                // These headers are never written to fork slots
+                DiskBlockHeader::FullyValid(..)
+                | DiskBlockHeader::HeadersOnly(..)
+                | DiskBlockHeader::AssumedValid(..) => {
+                    return Err(FlatChainstoreError::CorruptedDatabase);
+                }
+            }
+        }
+
+        let mut tips = Vec::new();
+        for hash in fork_hashes.difference(&parent_hashes) {
+            // A reorged-in block leaves a stale `InFork` copy in the fork headers file;
+            // the block index is authoritative about its current status.
+            if let Some(DiskBlockHeader::InFork(..)) = unsafe { self.get_header_by_hash(*hash)? } {
+                tips.push(*hash);
+            }
+        }
+
+        Ok(tips)
+    }
+
     unsafe fn get_best_chain(&self) -> Result<BestChain, FlatChainstoreError> {
         let metadata = unsafe { self.get_metadata()? };
 
@@ -987,11 +1044,7 @@ impl FlatChainStore {
             best_block: metadata.best_block,
             depth: metadata.depth,
             validation_index: metadata.validation_index,
-            alternative_tips: metadata
-                .alternative_tips
-                .into_iter()
-                .take_while(|tip| *tip != BlockHash::all_zeros())
-                .collect(),
+            alternative_tips: self.derive_alternative_tips()?,
         })
     }
 
@@ -1406,13 +1459,19 @@ mod tests {
 
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::CompactTarget;
     use bitcoin::Network;
+    use bitcoin::TxMerkleNode;
     use bitcoin::block::Header;
+    use bitcoin::block::Version;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use floresta_common::bhash;
+    use rand::RngExt;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use tempfile::TempDir;
     use twox_hash::XxHash3_64;
 
@@ -1929,5 +1988,212 @@ mod tests {
             Err(e) => panic!("Unexpected err: {e:?}"),
             Ok(_) => panic!("Should not have been able to save roots for a block we don't have"),
         }
+    }
+
+    /// Test helper that wraps a [`FlatChainStore`] with a seeded RNG and a fork slot
+    /// counter, providing ergonomic methods for building fork topologies.
+    struct ForkBuilder {
+        store: FlatChainStore,
+        rng: StdRng,
+        next_slot: u32,
+    }
+
+    impl ForkBuilder {
+        fn new(seed: u64) -> Self {
+            let mut store = get_test_chainstore(None).unwrap();
+            // The open-addressing hash map probes slots via `get_disk_header`.
+            // Position 0 must hold a valid header so probes that land there
+            // don't fail with `HeaderNotFound`.
+            let genesis = genesis_block(Network::Regtest);
+            store
+                .save_header(&DiskBlockHeader::FullyValid(genesis.header, 0))
+                .unwrap();
+            store.update_block_index(0, genesis.block_hash()).unwrap();
+            Self {
+                store,
+                rng: StdRng::seed_from_u64(seed),
+                next_slot: 0,
+            }
+        }
+
+        /// Save a single independent fork header branching off genesis and return its hash.
+        fn add_independent_fork(&mut self) -> BlockHash {
+            let genesis_hash = genesis_block(Network::Regtest).block_hash();
+            self.add_fork_child(genesis_hash)
+        }
+
+        /// Build a random header whose parent is `prev`.
+        fn make_header(&mut self, prev: BlockHash) -> Header {
+            Header {
+                version: Version::from_consensus(2),
+                prev_blockhash: prev,
+                merkle_root: TxMerkleNode::from_byte_array(self.rng.random()),
+                time: self.rng.random(),
+                bits: CompactTarget::from_consensus(self.rng.random()),
+                nonce: self.rng.random(),
+            }
+        }
+
+        /// Extend a fork chain: save a header whose parent is `prev` and return its hash.
+        fn add_fork_child(&mut self, prev: BlockHash) -> BlockHash {
+            let header = self.make_header(prev);
+            let hash = header.block_hash();
+            let slot = self.next_slot;
+            self.next_slot += 1;
+            self.store
+                .save_header(&DiskBlockHeader::InFork(header, slot))
+                .unwrap();
+            hash
+        }
+
+        /// Build a fork chain of `len` blocks branching off genesis and return the tip hash.
+        fn add_fork_chain(&mut self, len: usize) -> BlockHash {
+            let mut tip = genesis_block(Network::Regtest).block_hash();
+            for _ in 0..len {
+                tip = self.add_fork_child(tip);
+            }
+            tip
+        }
+
+        fn derive_tips(&self) -> std::collections::HashSet<BlockHash> {
+            self.store
+                .derive_alternative_tips()
+                .unwrap()
+                .into_iter()
+                .collect()
+        }
+    }
+
+    #[test]
+    fn derive_alternative_tips_no_forks() {
+        let fb = ForkBuilder::new(0x0f10_e57a_0000);
+        assert!(fb.derive_tips().is_empty());
+    }
+
+    #[test]
+    fn derive_alternative_tips_independent_forks() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0001);
+
+        let expected: std::collections::HashSet<_> =
+            (0..5).map(|_| fb.add_independent_fork()).collect();
+
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_fork_chain() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0002);
+
+        // Chain of 3: only the tip should be returned.
+        let tip = fb.add_fork_chain(3);
+
+        let tips = fb.derive_tips();
+        assert_eq!(tips.len(), 1);
+        assert!(tips.contains(&tip));
+    }
+
+    #[test]
+    fn derive_many_alternative_tips() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0003);
+
+        // 300 tips, go brr and dont crash.
+        let expected: std::collections::HashSet<_> =
+            (0..300).map(|_| fb.add_independent_fork()).collect();
+
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_mixed_chains_and_independent() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0004);
+
+        // Chain A→B (tip: B), independent C (tip: C), chain D→E→F (tip: F)
+        let tip_b = fb.add_fork_chain(2);
+        let tip_c = fb.add_independent_fork();
+        let tip_f = fb.add_fork_chain(3);
+
+        let expected: std::collections::HashSet<_> = [tip_b, tip_c, tip_f].into_iter().collect();
+        assert_eq!(fb.derive_tips(), expected);
+    }
+
+    #[test]
+    fn derive_alternative_tips_skips_orphan_and_invalid_chain() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0005);
+
+        // Chain of 2: only its tip is an alternative tip.
+        let tip = fb.add_fork_chain(2);
+
+        // Orphan and invalid-chain headers live in the fork headers file too.
+        // They must not show up as tips, nor hide the fork tip they extend.
+        let invalid = fb.make_header(tip);
+        fb.store
+            .save_header(&DiskBlockHeader::InvalidChain(invalid))
+            .unwrap();
+
+        let unknown_parent = BlockHash::from_byte_array(fb.rng.random());
+        let orphan = fb.make_header(unknown_parent);
+        fb.store
+            .save_header(&DiskBlockHeader::Orphan(orphan))
+            .unwrap();
+
+        let tips = fb.derive_tips();
+        assert_eq!(tips.len(), 1);
+        assert!(tips.contains(&tip));
+    }
+
+    #[test]
+    fn derive_alternative_tips_ignores_stale_promoted_forks() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0007);
+
+        // Losing branch: stays in the fork file as a legit alternative tip.
+        let loser_tip = fb.add_fork_chain(2);
+
+        // Winning branch: two fork headers that later get promoted to the main chain,
+        // as `mark_chain_as_active` does during a reorg. Their stale `InFork` copies
+        // remain in the fork headers file.
+        let genesis_hash = genesis_block(Network::Regtest).block_hash();
+        let f1 = fb.make_header(genesis_hash);
+        let f2 = fb.make_header(f1.block_hash());
+        for (height, header) in [(1u32, f1), (2, f2)] {
+            fb.store
+                .save_header(&DiskBlockHeader::InFork(header, height))
+                .unwrap();
+        }
+
+        // Promote: re-save as main-chain headers and repoint the block index.
+        for (height, header) in [(1u32, f1), (2, f2)] {
+            fb.store
+                .save_header(&DiskBlockHeader::HeadersOnly(header, height))
+                .unwrap();
+            fb.store
+                .update_block_index(height, header.block_hash())
+                .unwrap();
+        }
+
+        let tips = fb.derive_tips();
+        assert_eq!(tips.len(), 1);
+        assert!(tips.contains(&loser_tip));
+    }
+
+    #[test]
+    fn derive_alternative_tips_corrupted_on_main_chain_variant() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0006);
+
+        fb.add_independent_fork();
+
+        // `save_header` never routes main-chain variants to the fork headers file, so
+        // write one there directly to simulate a corrupted database.
+        let genesis_hash = genesis_block(Network::Regtest).block_hash();
+        let header = fb.make_header(genesis_hash);
+        unsafe {
+            fb.store
+                .save_fork_block(DiskBlockHeader::FullyValid(header, 1))
+                .unwrap();
+        }
+
+        assert!(matches!(
+            fb.store.derive_alternative_tips(),
+            Err(FlatChainstoreError::CorruptedDatabase)
+        ))
     }
 }
