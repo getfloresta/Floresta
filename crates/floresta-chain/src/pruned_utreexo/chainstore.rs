@@ -8,6 +8,10 @@
 //! - [DiskBlockHeader]: A block header linked to its validation-state metadata
 //! - [BestChain]: Tracks the current best chain, last valid block, and fork tips
 
+use core::fmt;
+use core::fmt::Display;
+use core::fmt::Formatter;
+
 use bitcoin::BlockHash;
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::consensus::Decodable;
@@ -79,6 +83,38 @@ pub trait ChainStore {
     /// this store. Implementations should not include the size of any enclosing
     /// directory or unrelated data.
     fn size_on_disk(&self) -> Result<u64, Self::Error>;
+
+    /// Returns accumulated health warnings about this store (e.g. index full).
+    ///
+    /// Warnings persist for the process lifetime and are never cleared.
+    fn get_warnings(&self) -> Vec<ChainStoreWarning> {
+        vec![]
+    }
+}
+
+/// A health warning raised by a [ChainStore], mapping to a message via [Display].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainStoreWarning {
+    /// The header storage is full; new block headers cannot be stored.
+    HeaderStorageFull,
+
+    /// The block index is full; new blocks cannot be indexed.
+    BlockIndexFull,
+}
+
+impl Display for ChainStoreWarning {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HeaderStorageFull => write!(
+                f,
+                "Warning: header storage is full; new blocks cannot be stored."
+            ),
+            Self::BlockIndexFull => write!(
+                f,
+                "Warning: block index is full; new blocks cannot be stored."
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
