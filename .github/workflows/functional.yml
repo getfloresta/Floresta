@@ -54,6 +54,10 @@ jobs:
         run: |
           tests/run.sh
 
+      - name: Run heavy functional tests tasks
+        run: |
+          tests/run.sh -n 1 --run-heavy ./tests/heavy
+
       - name: Log tests on failure
         if: failure()
         run: |

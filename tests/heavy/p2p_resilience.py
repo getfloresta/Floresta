@@ -74,7 +74,7 @@ class TestP2pResilience:
     p2p_conn_v1 = None
     p2p_conn_v2 = None
 
-    @pytest.mark.p2p
+    @pytest.mark.heavy
     def test_oversized_messages_disconnection(
         self, setup_logging, node_manager, florestad_node
     ):
@@ -154,7 +154,7 @@ class TestP2pResilience:
             self.p2p_conn_v2.send_without_ping(msg)
             self.check_disconnection(self.p2p_conn_v2)
 
-    @pytest.mark.p2p
+    @pytest.mark.heavy
     def test_spam_rate_limiting(self, setup_logging, node_manager, florestad_node):
         """
         Test message spam protection and rate limit enforcement.

@@ -57,6 +57,10 @@ test-functional-prepare arg="":
 test-functional-run arg="":
     bash tests/run.sh {{ arg }}
 
+# Execute tests/run.sh -n 1 --run-heavy ./tests/heavy
+test-heavy-functional-run:
+    bash tests/run.sh -n 1 --run-heavy ./tests/heavy
+
 # Format and lint functional tests
 test-functional-uv-fmt:
     @just check-command uv test-functional-uv-fmt "https://docs.astral.sh/uv/getting-started/installation/"
@@ -67,6 +71,7 @@ test-functional-uv-fmt:
 test-functional:
     @just test-functional-prepare
     @just test-functional-run
+    @just test-heavy-functional-run
 
 # Run the benchmarks
 bench:

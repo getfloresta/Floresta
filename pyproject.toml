@@ -47,6 +47,7 @@ markers = [
     "florestad: marks tests specific to the Florestad daemon",
     "rpc: marks tests focused on RPC calls",
     "p2p: marks tests related to peer-to-peer interactions",
+    "heavy: marks heavy-weight tests that only run when --run-heavy is passed",
 ]
 
 minversion = "9.0"

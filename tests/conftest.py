@@ -26,6 +26,27 @@ from test_framework.node import Node, NodeType
 from test_framework.util import Utility
 
 
+def pytest_addoption(parser):
+    """Register custom pytest command-line options used by this test suite."""
+    parser.addoption(
+        "--run-heavy",
+        action="store_true",
+        default=False,
+        help="Run tests marked with the heavy marker",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip heavy-marked tests unless the dedicated opt-in flag is enabled."""
+    if config.getoption("--run-heavy"):
+        return
+
+    skip_heavy = pytest.mark.skip(reason="need --run-heavy to run heavy tests")
+    for item in items:
+        if "heavy" in item.keywords:
+            item.add_marker(skip_heavy)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def validate_and_check_environment():
     """Validate environment and check for required binaries before running tests."""
