@@ -90,6 +90,22 @@ metrics = { path = "metrics" }
 [workspace.lints.clippy]
 unused_async = "deny"
 use_self = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+todo = "deny"
+unimplemented = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+map_err_ignore = "warn"
+wildcard_enum_match_arm = "warn"
+result_unit_err = "deny"
+
+# Documentation & payload - always warn
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+result_large_err = "warn"
 
 [profile.release]
 opt-level = 3     # maximum optimization level
