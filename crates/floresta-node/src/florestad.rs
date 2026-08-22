@@ -25,6 +25,7 @@ use floresta_chain::FlatChainStore as ChainStore;
 use floresta_chain::FlatChainStoreConfig;
 #[cfg(feature = "zmq-server")]
 use floresta_chain::pruned_utreexo::BlockchainInterface;
+use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
 #[cfg(feature = "json-rpc")]
 use floresta_common::NetworkExt;
 use floresta_common::try_and_log;
@@ -723,7 +724,7 @@ impl Florestad {
         let database = KvDatabase::new(&self.config.datadir)
             .map_err(FlorestadError::CouldNotOpenKvDatabase)?;
 
-        let wallet = AddressCache::new(database);
+        let wallet = AddressCache::new(database, ConsensusMerkle);
 
         wallet
             .setup()

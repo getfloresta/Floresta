@@ -21,6 +21,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # All dependencies MUST be pinned precisely with `X.Y.z`
 bitcoin = { workspace = true }
+bitcoin_hashes = { workspace = true }
 bitcoinkernel = { version = "=0.2.1", optional = true }
 lru = { version = "=0.18.2", optional = true }
 memmap2 = { version = "=0.9.11", optional = true }
@@ -34,6 +35,9 @@ twox-hash = { version = "=2.1.2", default-features = false, features = ["xxhash3
 # Local dependencies
 floresta-common = { workspace = true, features = ["std"] }
 metrics = { workspace = true,  optional = true }
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+bitcoin_hashes = { workspace = true, features = ["cpufeatures"] }
 
 [dev-dependencies]
 bitcoin = { workspace = true, features = ["serde"] }

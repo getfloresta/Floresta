@@ -18,6 +18,7 @@ Available fuzz targets:
 - `disk_block_header_roundtrip`
 - `flat_chainstore_header_insertion`
 - `local_address_str`
+- `merkle_root`
 - `onion_address_rtt`
 - `onion_address_str_parse`
 - `p2p_v2_message`

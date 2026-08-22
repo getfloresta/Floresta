@@ -20,6 +20,7 @@ use bitcoin::ScriptBuf;
 use bitcoin::hashes::sha256;
 use floresta_chain::BlockConsumer;
 use floresta_chain::UtxoData;
+pub use floresta_common::MerkleBackend;
 use floresta_common::get_spk_hash;
 
 pub mod descriptor;
@@ -208,7 +209,12 @@ struct AddressCacheInner<D: AddressCacheDatabase> {
 impl<D: AddressCacheDatabase> AddressCacheInner<D> {
     /// Iterates through a block, finds transactions destined to ourselves.
     /// Returns all transactions we found.
-    fn block_process(&mut self, block: &Block, height: u32) -> Vec<(Transaction, TxOut)> {
+    fn block_process(
+        &mut self,
+        block: &Block,
+        height: u32,
+        merkle: &dyn MerkleBackend,
+    ) -> Vec<(Transaction, TxOut)> {
         let mut my_transactions = Vec::new();
         // Check if this transaction spends from one of our utxos
         for (position, transaction) in block.txdata.iter().enumerate() {
@@ -229,7 +235,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
                         .get(txin.previous_output.vout as usize)
                         .expect("Did we cache an invalid utxo?");
 
-                    let merkle_block = MerkleProof::from_block(block, position as u64);
+                    let merkle_block = MerkleProof::from_block(block, position as u64, merkle);
 
                     self.cache_transaction(
                         transaction,
@@ -249,7 +255,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
                 if self.script_set.contains(&hash) {
                     my_transactions.push((transaction.clone(), output.clone()));
 
-                    let merkle_block = MerkleProof::from_block(block, position as u64);
+                    let merkle_block = MerkleProof::from_block(block, position as u64, merkle);
 
                     self.cache_transaction(
                         transaction,
@@ -583,6 +589,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
 /// methods, to store all data
 pub struct AddressCache<D: AddressCacheDatabase> {
     inner: RwLock<AddressCacheInner<D>>,
+    merkle: Box<dyn MerkleBackend>,
 }
 
 impl<D: AddressCacheDatabase + Sync + Send + 'static> BlockConsumer for AddressCache<D> {
@@ -601,9 +608,10 @@ impl<D: AddressCacheDatabase + Sync + Send + 'static> BlockConsumer for AddressC
 }
 
 impl<D: AddressCacheDatabase> AddressCache<D> {
-    pub fn new(database: D) -> Self {
+    pub fn new(database: D, merkle: impl MerkleBackend + 'static) -> Self {
         Self {
             inner: RwLock::new(AddressCacheInner::new(database)),
+            merkle: Box::new(merkle),
         }
     }
 
@@ -721,7 +729,7 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
 
     pub fn block_process(&self, block: &Block, height: u32) -> Vec<(Transaction, TxOut)> {
         let mut inner = self.inner.write().expect("poisoned lock");
-        inner.block_process(block, height)
+        inner.block_process(block, height, self.merkle.as_ref())
     }
 
     pub fn get_address_utxos(&self, script_hash: &Hash) -> Option<Vec<(TxOut, OutPoint)>> {
@@ -852,6 +860,7 @@ mod test {
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
+    use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
     use floresta_common::get_spk_hash;
     use floresta_common::prelude::*;
 
@@ -870,7 +879,7 @@ mod test {
 
     fn get_test_cache() -> AddressCache<MemoryDatabase> {
         let database = MemoryDatabase::new();
-        AddressCache::new(database)
+        AddressCache::new(database, ConsensusMerkle)
     }
 
     fn get_test_address() -> (Address<NetworkChecked>, sha256::Hash) {

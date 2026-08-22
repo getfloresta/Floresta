@@ -58,6 +58,7 @@ use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::IBDState;
+use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
 use rand::rng;
@@ -479,9 +480,9 @@ where
                         return Err(WireError::PeerMisbehaving);
                     }
 
-                    // Check if the blocks was maliciously mutated by our peer
-                    let is_mutated =
-                        !(recv_block.check_merkle_root() && recv_block.check_witness_commitment());
+                    // Check if the block was maliciously mutated by our peer
+                    let is_mutated = Consensus::check_merkle_root(&recv_block).is_none()
+                        || !recv_block.check_witness_commitment();
 
                     if is_mutated {
                         error!(

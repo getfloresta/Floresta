@@ -31,10 +31,12 @@ use sha2::Digest;
 #[cfg(feature = "std")]
 mod ema;
 pub mod macros;
+pub mod merkle;
 pub mod spsc;
 
 #[cfg(feature = "std")]
 pub use ema::Ema;
+pub use merkle::MerkleBackend;
 pub use spsc::Channel;
 
 /// Computes the SHA-256 digest of the byte slice data and returns a [Hash] from `bitcoin_hashes`.
