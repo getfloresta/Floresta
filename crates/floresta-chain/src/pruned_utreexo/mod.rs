@@ -41,6 +41,24 @@ use crate::BlockchainError;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 
+/// Information about a single chain tip, as returned by
+/// [`BlockchainInterface::get_chain_tips`].
+///
+/// The active tip is always the first element in the returned vector.
+/// Alternative (fork) tips follow, sorted by height descending.
+#[derive(Debug, Clone)]
+pub struct ChainTipInfo {
+    /// Height of this tip.
+    pub height: u32,
+
+    /// Block hash of this tip.
+    pub hash: BlockHash,
+
+    /// Number of blocks between this tip and the fork point with the main
+    /// chain. Always 0 for the active tip.
+    pub branch_length: u32,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 /// Our current IBD state, meaning which startup phase are we, if any.
 ///
@@ -128,8 +146,11 @@ pub trait BlockchainInterface {
         del_hashes: Vec<sha256::Hash>,
     ) -> Result<Stump, Self::Error>;
 
-    /// Returns all known chain tips, including the best one and forks
-    fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error>;
+    /// Returns all known chain tips, including the best one and forks.
+    ///
+    /// The active tip is always the first element. Alternative tips follow,
+    /// sorted by height descending.
+    fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error>;
 
     /// Validates a block according to Bitcoin's rules, without modifying our chain
     fn validate_block(
@@ -373,7 +394,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::update_acc(self, acc, block, height, proof, del_hashes)
     }
 
-    fn get_chain_tips(&self) -> Result<Vec<BlockHash>, Self::Error> {
+    fn get_chain_tips(&self) -> Result<Vec<ChainTipInfo>, Self::Error> {
         T::get_chain_tips(self)
     }
 

@@ -245,6 +245,11 @@ async fn handle_json_rpc_request(
                 .get_block_count()
                 .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
         }
+        "getchaintips" => {
+            return state
+                .get_chain_tips()
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG));
+        }
         "getconnectioncount" => {
             return state
                 .get_connection_count()

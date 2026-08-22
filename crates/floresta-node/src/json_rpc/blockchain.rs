@@ -20,11 +20,14 @@ use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use corepc_types::ScriptPubKey;
 use corepc_types::v29::GetTxOut;
+use corepc_types::v30::ChainTips;
+use corepc_types::v30::ChainTipsStatus;
 use corepc_types::v30::DeploymentInfo;
 use corepc_types::v30::GetBlockHeaderVerbose;
 use corepc_types::v30::GetBlockVerboseOne;
 use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::v30::GetDeploymentInfo;
+use corepc_types::v31::GetChainTips;
 use floresta_chain::buried_deployments_for;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
@@ -356,7 +359,32 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
     // getblockstats
     // getchainstates
+
     // getchaintips
+    pub(super) fn get_chain_tips(&self) -> Result<GetChainTips, JsonRpcError> {
+        let tips = self
+            .chain
+            .get_chain_tips()
+            .map_err(|_| JsonRpcError::Chain)?;
+
+        let result = tips
+            .into_iter()
+            .enumerate()
+            .map(|(i, tip)| ChainTips {
+                height: tip.height.into(),
+                hash: tip.hash.to_string(),
+                branch_length: tip.branch_length.into(),
+                status: if i == 0 {
+                    ChainTipsStatus::Active
+                } else {
+                    ChainTipsStatus::ValidHeaders
+                },
+            })
+            .collect();
+
+        Ok(GetChainTips(result))
+    }
+
     // getchaintxstats
 
     // getdeploymentinfo
