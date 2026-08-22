@@ -372,7 +372,8 @@ where
             | BlockValidationErrors::BIP94TimeWarp
             | BlockValidationErrors::UnspendableUTXO
             | BlockValidationErrors::NonFinalTransaction
-            | BlockValidationErrors::CoinbaseNotMatured => {
+            | BlockValidationErrors::CoinbaseNotMatured
+            | BlockValidationErrors::TimeTooOld => {
                 try_and_log!(self.chain.invalidate_block(hash));
 
                 warn!("Block {hash} is invalid, banning peer {block_peer}");
@@ -383,6 +384,13 @@ where
             // mutated block, so we can't invalidate it since the original txdata may be valid.
             BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment => {
                 Some(block_peer)
+            }
+
+            // A header too far in the future may become valid later, so we neither invalidate
+            // the block nor punish the peer. Our own clock may also be the one at fault.
+            BlockValidationErrors::TimeTooNew(hash) => {
+                warn!("Block {hash} time is too far in the future, please check your system clock");
+                None
             }
 
             // We've tried to connect a block that doesn't extend the tip.

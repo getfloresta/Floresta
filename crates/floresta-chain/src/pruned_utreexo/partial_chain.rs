@@ -320,7 +320,11 @@ impl UpdatableChainstate for PartialChainState {
 
     // these are unimplemented, and will panic if called
 
-    fn accept_header(&self, _header: BlockHeader) -> Result<(), BlockchainError> {
+    fn accept_header(
+        &self,
+        _header: BlockHeader,
+        _current_time: u32,
+    ) -> Result<(), BlockchainError> {
         unimplemented!("partialChainState shouldn't be used to accept new headers")
     }
 

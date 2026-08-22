@@ -53,6 +53,9 @@ use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
 use crate::p2p_wire::transport::TransportProtocol;
 
+// A fixed timestamp far past all the test data timestamps
+pub const MOCK_TIME: u32 = 2_000_000_000;
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UtreexoRoots {
     roots: Option<Vec<String>>,
@@ -318,7 +321,7 @@ pub async fn setup_node(
     headers.remove(0);
     headers.truncate(num_blocks);
     for header in headers {
-        chain.accept_header(header).unwrap();
+        chain.accept_header(header, MOCK_TIME).unwrap();
     }
 
     let config = get_node_config(&datadir, network, pow_fraud_proofs);
