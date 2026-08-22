@@ -25,6 +25,13 @@ from test_framework.constants import (
 from test_framework.node import Node, NodeType
 from test_framework.util import Utility
 
+# The default arguments for an `utreexod` acting as a server for our tests.
+UTREEXOD_ARGS = [
+    f"--miningaddr={WALLET_ADDRESS}",
+    "--utreexoproofindex",
+    "--prune=0",
+]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def validate_and_check_environment():
@@ -144,11 +151,7 @@ def utreexod_node(node_manager) -> Node:
     """Single `utreexod` node with default configurations, started and ready for testing"""
     node = node_manager.add_node_extra_args(
         variant=NodeType.UTREEXOD,
-        extra_args=[
-            f"--miningaddr={WALLET_ADDRESS}",
-            "--utreexoproofindex",
-            "--prune=0",
-        ],
+        extra_args=UTREEXOD_ARGS,
     )
     node_manager.run_node(node)
     return node
@@ -220,6 +223,49 @@ def florestad_bitcoind_utreexod_with_chain(
         return florestad_node, bitcoind_node, utreexod_node
 
     return _create_nodes_with_chain
+
+
+@pytest.fixture
+def florestad_bitcoind_utreexod_with_filters(
+    florestad_node, bitcoind_node, add_node_with_extra_args, node_manager
+) -> Callable[..., tuple[Node, Node, Node]]:
+    """
+    Variant of `florestad_bitcoind_utreexod_with_chain` whose utreexod serves
+    compact block filters.
+
+    Utreexod only advertises NODE_COMPACT_FILTERS when started with
+    `--cfilters`, and florestad needs such a peer to download the filters that
+    back RPCs scanning them, like `findtxout`.
+    """
+
+    def _create_nodes_with_filters(
+        blocks: int = 100,
+        floresta_descriptors: List[str] | None = None,
+    ) -> tuple[Node, Node, Node]:
+        if floresta_descriptors is None:
+            floresta_descriptors = [
+                WALLET_DESCRIPTOR_EXTERNAL,
+                WALLET_DESCRIPTOR_INTERNAL,
+            ]
+
+        for descriptor in floresta_descriptors:
+            florestad_node.rpc.load_descriptor(descriptor)
+
+        utreexod_node = add_node_with_extra_args(
+            variant=NodeType.UTREEXOD,
+            extra_args=UTREEXOD_ARGS + ["--cfilters"],
+        )
+        utreexod_node.rpc.generate(blocks)
+
+        node_manager.connect_nodes(florestad_node, utreexod_node)
+        time.sleep(3)
+        node_manager.connect_nodes(bitcoind_node, utreexod_node)
+        time.sleep(1)
+        node_manager.connect_nodes(florestad_node, bitcoind_node)
+
+        return florestad_node, bitcoind_node, utreexod_node
+
+    return _create_nodes_with_filters
 
 
 @pytest.fixture(scope="class")
@@ -328,11 +374,7 @@ def shared_utreexod_node(shared_node_manager) -> Node:
     """Single utreexod node shared across all methods in a test class."""
     node = shared_node_manager.add_node_extra_args(
         variant=NodeType.UTREEXOD,
-        extra_args=[
-            f"--miningaddr={WALLET_ADDRESS}",
-            "--utreexoproofindex",
-            "--prune=0",
-        ],
+        extra_args=UTREEXOD_ARGS,
     )
     shared_node_manager.run_node(node)
     return node

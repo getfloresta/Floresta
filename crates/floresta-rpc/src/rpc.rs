@@ -141,7 +141,7 @@ pub trait FlorestaRPC {
         outpoint: u32,
         script: String,
         height_hint: u32,
-    ) -> Result<Value>;
+    ) -> Result<Option<GetTxOut>>;
     #[doc = include_str!("../../../doc/rpc/getmemoryinfo.md")]
     fn get_memory_info(&self, mode: String) -> Result<GetMemInfoRes>;
     #[doc = include_str!("../../../doc/rpc/getrpcinfo.md")]
@@ -175,7 +175,7 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
         outpoint: u32,
         script: String,
         height_hint: u32,
-    ) -> Result<Value> {
+    ) -> Result<Option<GetTxOut>> {
         self.call(
             "findtxout",
             &[
