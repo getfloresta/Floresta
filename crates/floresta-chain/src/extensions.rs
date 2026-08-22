@@ -392,6 +392,13 @@ mod tests {
                 .ok_or(MockBlockchainError::NotFound)
         }
 
+        fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error> {
+            let hash = self.get_block_hash(height)?;
+            let header = self.get_block_header(&hash)?;
+
+            header.median_time_past_with(|current| self.get_block_header(&current.prev_blockhash))
+        }
+
         fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
             Ok(self.heights.get(hash).cloned())
         }

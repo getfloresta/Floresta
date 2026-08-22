@@ -203,6 +203,7 @@ pub mod proof_util {
     use bitcoin::consensus::Encodable;
     use bitcoin::hashes::Hash;
     use bitcoin::hashes::sha256;
+    use bitcoin::transaction::Version;
     use floresta_common::impl_error_from;
     use rustreexo::node_hash::BitcoinNodeHash;
     use sha2::Digest;
@@ -401,14 +402,16 @@ pub mod proof_util {
     /// and a function to get the block hash for a given height. Then returns a [`Result`] containing
     /// a vector with hashes for deleted leaves, and a `UtxoMap`, which is defined
     /// as [`HashMap<OutPoint, UtxoData>`].
-    pub fn process_proof<F, E>(
+    pub fn process_proof<F, G, E>(
         leaves: &[CompactLeafData],
         txdata: &[Transaction],
         height: u32,
         get_block_hash: F,
+        get_mtp: G,
     ) -> Result<ProcessedProof, E>
     where
         F: Fn(u32) -> Result<BlockHash, E>,
+        G: Fn(u32) -> Result<u32, E>,
         E: From<UtreexoLeafError>,
     {
         // Initialize return values
@@ -416,6 +419,10 @@ pub mod proof_util {
         let mut utxos = HashMap::new();
 
         let mut leaves_iter = leaves.iter().cloned();
+
+        // Every output created in this block shares the same creation MTP, so compute it once
+        // instead of on every output.
+        let block_mtp = get_mtp(height - 1)?;
 
         // Skip coinbase transaction
         for tx in txdata.iter().skip(1) {
@@ -429,7 +436,7 @@ pub mod proof_util {
                         txout: out.clone(),
                         is_coinbase: tx.is_coinbase(),
                         creation_height: height,
-                        creation_time: 0, // TODO add MTP(`height` - 1)
+                        creation_time: block_mtp,
                     },
                 );
             }
@@ -458,6 +465,17 @@ pub mod proof_util {
                         kind: e,
                     })?;
 
+                // creation_time is only read by the BIP68 relative lock-time check, and only
+                // when the spending input's sequence actually encodes a time-based lock, so
+                // avoid the get_mtp call otherwise.
+                let creation_time = if tx.version.0 as u32 >= Version::TWO.0 as u32
+                    && input.sequence.is_time_locked()
+                {
+                    get_mtp(creation_height - 1)?
+                } else {
+                    0
+                };
+
                 // Push the UTXO to remove from the set and its leaf hash (deletion hash)
                 del_hashes.push(leaf._get_leaf_hashes());
                 utxos.insert(
@@ -466,7 +484,7 @@ pub mod proof_util {
                         txout: leaf.utxo,
                         is_coinbase,
                         creation_height,
-                        creation_time: 0, // TODO add MTP(`creation_height` - 1)
+                        creation_time,
                     },
                 );
             }

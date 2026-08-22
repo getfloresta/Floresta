@@ -280,10 +280,13 @@ where
         let (leaf_data, proof, utreexo_peer) =
             inflight.aux_data.ok_or(WireError::BlockProofNotFound)?;
 
-        let (del_hashes, inputs) =
-            proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {
-                self.chain.get_block_hash(h)
-            })?;
+        let (del_hashes, inputs) = proof_util::process_proof(
+            &leaf_data,
+            &block.txdata,
+            block_height,
+            |h| self.chain.get_block_hash(h),
+            |h| self.chain.get_mtp_by_height(h),
+        )?;
 
         if let Err(chain_err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
             error!(
@@ -372,7 +375,8 @@ where
             | BlockValidationErrors::BIP94TimeWarp
             | BlockValidationErrors::UnspendableUTXO
             | BlockValidationErrors::NonFinalTransaction
-            | BlockValidationErrors::CoinbaseNotMatured => {
+            | BlockValidationErrors::CoinbaseNotMatured
+            | BlockValidationErrors::BadRelativeLockTime => {
                 try_and_log!(self.chain.invalidate_block(hash));
 
                 warn!("Block {hash} is invalid, banning peer {block_peer}");
