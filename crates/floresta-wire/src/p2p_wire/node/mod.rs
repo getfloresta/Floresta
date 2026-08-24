@@ -21,6 +21,8 @@ use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::BlockHash;
 use bitcoin::Network;
@@ -32,6 +34,7 @@ pub(crate) use blocks::BlockStructureCheckOutcome;
 pub(crate) use blocks::InflightBlock;
 use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
+use floresta_chain::minimum_chain_work;
 use floresta_chain::pruned_utreexo::consensus::SwiftSyncDelta;
 use floresta_common::Ema;
 use floresta_common::try_and_log;
@@ -489,6 +492,29 @@ where
             },
             context: T::default(),
         })
+    }
+
+    /// Whether our validated tip has at least the minimum chain work and is no older than
+    /// `max_tip_age_secs`, like Core's `IsTipRecent`. We stay in IBD until this holds. Always
+    /// true when the age is `u32::MAX`.
+    pub(crate) fn is_tip_recent(&self) -> Result<bool, WireError> {
+        let max_age = self.config.max_tip_age_secs;
+        if max_age == u32::MAX {
+            return Ok(true);
+        }
+
+        let height = self.chain.get_validation_index()?;
+        let tip = self.chain.get_block_hash(height)?;
+        if self.chain.get_work(tip)? < minimum_chain_work(self.network) {
+            return Ok(false);
+        }
+
+        let tip_time = u64::from(self.chain.get_block_header(&tip)?.time);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Ok(now.saturating_sub(tip_time) <= u64::from(max_age))
     }
 
     pub(crate) fn shutdown(&mut self) {
