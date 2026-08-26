@@ -249,6 +249,72 @@ mod tests {
     }
 
     #[test]
+    fn test_add_peer_address() {
+        let (_proc, client) = start_florestad();
+
+        let addrman = |net: &str| {
+            let info = client.get_addrman_info().expect("rpc not working");
+            info.0[net].clone()
+        };
+
+        // Adding a new address with tried=false should succeed and create a "new" entry.
+        let ipv4_new_before = addrman("ipv4").new;
+        let res = client
+            .add_peer_address("8.8.4.4".into(), Some(8333), false)
+            .expect("rpc not working");
+        assert!(res.success);
+        assert!(ipv4_new_before < addrman("ipv4").new);
+
+        // Adding a routable address as "tried" should create a "tried" entry.
+        let ipv4_tried_before = addrman("ipv4").tried;
+        let res = client
+            .add_peer_address("8.8.8.8".into(), Some(8333), true)
+            .expect("rpc not working");
+        assert!(res.success);
+        assert!(ipv4_tried_before < addrman("ipv4").tried);
+
+        // Adding a duplicate should return success=false and leave counts unchanged.
+        let ipv4_tried_before = addrman("ipv4").tried;
+        let res = client
+            .add_peer_address("8.8.8.8".into(), Some(8333), false)
+            .expect("rpc not working");
+        assert!(!res.success);
+        assert_eq!(ipv4_tried_before, addrman("ipv4").tried);
+
+        // Adding an address without a port should use the network default.
+        let res = client
+            .add_peer_address("1.1.1.1".into(), None, false)
+            .expect("rpc not working");
+        assert!(res.success);
+
+        // IPv6: adding a routable IPv6 address with an explicit port should succeed. Note that
+        // IPv6 addresses must be bracketed, as everywhere else in our address-parsing API.
+        let ipv6_new_before = addrman("ipv6").new;
+        let res = client
+            .add_peer_address("[2001:4860:4860::8888]".into(), Some(8333), false)
+            .expect("rpc not working");
+        assert!(res.success);
+        assert!(ipv6_new_before < addrman("ipv6").new);
+
+        // IPv6 without a port should use the network default.
+        let ipv6_new_before = addrman("ipv6").new;
+        let res = client
+            .add_peer_address("[2001:4860:4860::8844]".into(), None, false)
+            .expect("rpc not working");
+        assert!(res.success);
+        assert!(ipv6_new_before < addrman("ipv6").new);
+
+        // Onion: adding a valid .onion v3 address should succeed.
+        let onion_addr = "ejgeimjypsfuijpxzy5xpwmmjmkr4izwze6od5pw74csjglflib6nsid.onion";
+        let onion_new_before = addrman("onion").new;
+        let res = client
+            .add_peer_address(onion_addr.into(), Some(8333), false)
+            .expect("rpc not working");
+        assert!(res.success);
+        assert!(onion_new_before < addrman("onion").new);
+    }
+
+    #[test]
     fn test_get_network_info() {
         let (_proc, client) = start_florestad();
 
