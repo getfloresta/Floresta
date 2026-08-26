@@ -13,13 +13,12 @@ readme.workspace = true # Floresta/README.md
 # All dependencies MUST be pinned precisely with `X.Y.z`
 bitcoin = { workspace = true }
 hashbrown = { version = "=0.17.1" }
-sha2 = { workspace = true }
 spin = { workspace = true }
 tracing = { workspace = true }
 
 [features]
 default = ["std"]
-std = ["bitcoin/std", "sha2/std"]
+std = ["bitcoin/std"]
 
 [lints]
 workspace = true

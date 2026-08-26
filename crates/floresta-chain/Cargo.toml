@@ -26,7 +26,6 @@ lru = { version = "=0.18.2", optional = true }
 memmap2 = { version = "=0.9.11", optional = true }
 rustreexo = { workspace = true }
 serde = { workspace = true, optional = true }
-sha2 = { workspace = true, features = ["std"] }
 spin = { workspace = true }
 tracing = { workspace = true }
 twox-hash = { version = "=2.1.2", default-features = false, features = ["xxhash3_64", "std"], optional = true }
