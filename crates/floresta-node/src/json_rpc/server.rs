@@ -336,6 +336,15 @@ async fn handle_json_rpc_request(
             state.clone().find_tx_out(txid, vout, script, height).await
         }
 
+        "getaddednodeinfo" => {
+            let node = try_into_optional(get_at(&params, 0, "node"))?;
+
+            state
+                .get_added_node_info(node)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
+        }
+
         "getblock" => {
             let hash = get_at(&params, 0, "block_hash")?;
             let verbosity = get_with_default(&params, 1, "verbosity", 1)?;

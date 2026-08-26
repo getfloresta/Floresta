@@ -6,6 +6,8 @@ tests.test_framework.rpc.bitcoin.py
 A test framework for testing JsonRPC calls to a bitocoin node.
 """
 
+from typing import Optional
+
 from test_framework.rpc.base import BaseRPC
 
 
@@ -83,3 +85,11 @@ class BitcoinRPC(BaseRPC):
         Send a specified amount to a given address.
         """
         return self.perform_request("sendtoaddress", params=[address, amount])
+
+    def get_added_node_info(self, node: Optional[str] = None) -> list:
+        """
+        Get information about manually added nodes.
+        node: optional filter — return only this added node's info
+        """
+        params = [node] if node is not None else []
+        return self.perform_request("getaddednodeinfo", params)
