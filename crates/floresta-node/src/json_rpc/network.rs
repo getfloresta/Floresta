@@ -58,11 +58,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         &self,
         address: String,
         command: String,
-        v2transport: bool,
+        v2transport: Option<bool>,
     ) -> Result<Value> {
         let address =
             BitcoinSocketAddr::parse_address(&address, Some(self.network), SystemResolver)?;
-
+        let v2transport = v2transport.unwrap_or(self.default_connection_is_v2);
         let succeeded = match command.as_str() {
             "add" => self.node.add_peer(address.clone(), v2transport).await,
             "remove" => self.node.remove_peer(address.clone()).await,
