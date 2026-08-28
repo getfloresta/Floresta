@@ -47,6 +47,7 @@ markers = [
     "florestad: marks tests specific to the Florestad daemon",
     "rpc: marks tests focused on RPC calls",
     "p2p: marks tests related to peer-to-peer interactions",
+    "electrum: marks tests related to Electrum server interactions",
 ]
 
 minversion = "9.0"
