@@ -1,0 +1,20 @@
+[package]
+name = "floresta-proc-macro"
+version = "0.1.0"
+description = "Procedural macros for the Floresta project"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "=1.0.106"
+syn = { version = "=2.0.117", features = ["full"] }
+quote = "=1.0.45"
+
+[features]
+default = []
+async = []
