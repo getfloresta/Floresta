@@ -1032,7 +1032,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .parameters
             .get_validation_flags(height, block.block_hash());
         #[cfg(not(feature = "bitcoinkernel"))]
-        let flags = 0;
+        let flags = consensus.parameters.get_sigop_flags(block.block_hash());
         let verify_script = self.verify_script(height)?;
 
         Consensus::verify_block_transactions(

@@ -32,6 +32,12 @@ use rustreexo::node_hash::BitcoinNodeHash;
 use crate::AssumeValidArg;
 use crate::prelude::*;
 
+// Bitcoin Core script verification flags used by GetTransactionSigOpCost:
+// https://github.com/bitcoin/bitcoin/blob/v31.0/src/kernel/bitcoinkernel.h#L468-L479
+const VERIFY_NONE: u32 = 0;
+pub(super) const VERIFY_P2SH: u32 = 1 << 0;
+pub(super) const VERIFY_WITNESS: u32 = 1 << 11;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubsidyHalvingInterval {
     /// Bitcoin, testnet, testnet4, and signet: 210,000 blocks.
@@ -279,18 +285,22 @@ impl ChainParams {
 
         flags
     }
+
+    #[cfg(not(feature = "bitcoinkernel"))]
+    /// Returns the flags relevant to contextual sigop accounting.
+    pub(crate) fn get_sigop_flags(&self, hash: BlockHash) -> u32 {
+        self.exceptions
+            .get(&hash)
+            .copied()
+            .unwrap_or(VERIFY_P2SH | VERIFY_WITNESS)
+    }
 }
 
-#[cfg(feature = "bitcoinkernel")]
 /// There's almost no transactions in the chain that
 /// "looks like segwit but are not segwit". We pretend segwit
 /// was enabled since genesis, and only skip this for blocks
 /// that have such transactions using hardcoded values.
-fn get_exceptions() -> HashMap<BlockHash, ScriptVerificationFlags> {
-    use bitcoinkernel::VERIFY_NONE;
-    use bitcoinkernel::VERIFY_P2SH;
-    use bitcoinkernel::VERIFY_WITNESS;
-
+fn get_exceptions() -> HashMap<BlockHash, u32> {
     let mut exceptions = HashMap::new();
     exceptions.insert(
         bhash!("00000000000002dc756eebf4f49723ed8d30cc28a5f108eb94b1ba88ac4f9c22"),
@@ -305,11 +315,6 @@ fn get_exceptions() -> HashMap<BlockHash, ScriptVerificationFlags> {
         VERIFY_NONE,
     ); // BIP16 exception on test net
     exceptions
-}
-
-#[cfg(not(feature = "bitcoinkernel"))]
-fn get_exceptions() -> HashMap<BlockHash, u32> {
-    HashMap::new()
 }
 
 impl AsRef<Params> for ChainParams {

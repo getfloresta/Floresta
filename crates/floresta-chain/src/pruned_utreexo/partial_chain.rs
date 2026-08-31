@@ -226,7 +226,7 @@ impl PartialChainStateInner {
             .get_validation_flags(height, block.block_hash());
 
         #[cfg(not(feature = "bitcoinkernel"))]
-        let flags = 0;
+        let flags = self.chain_params().get_sigop_flags(block.block_hash());
 
         Consensus::verify_block_transactions(
             height,
