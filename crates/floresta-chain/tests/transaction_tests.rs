@@ -61,7 +61,9 @@ mod parse {
 
             let vout = match is_coinbase {
                 true => u32::MAX,
-                false => prev.vout as u32,
+                false => {
+                    u32::try_from(prev.vout).expect("non-coinbase vout must fit in an OutPoint")
+                }
             };
 
             let utxo_data = UtxoData {

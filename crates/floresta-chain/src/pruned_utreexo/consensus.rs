@@ -312,7 +312,8 @@ impl Consensus {
                 if hinted_unspent {
                     unspent_amount += out.value;
                 } else {
-                    spent_vouts.push(vout as u32);
+                    spent_vouts
+                        .push(u32::try_from(vout).map_err(|_| BlockValidationErrors::BlockTooBig)?);
                 }
                 output_index += 1;
             }
@@ -733,13 +734,13 @@ impl Consensus {
         match push {
             Ok(script::Instruction::PushBytes(b)) => {
                 let h = script::read_scriptint(b.as_bytes()).ok()?;
-                Some(h as u32)
+                Some(u32::try_from(h).ok()?)
             }
 
             Ok(script::Instruction::Op(opcode)) => {
                 let opcode = opcode.to_u8();
                 if (0x51..=0x60).contains(&opcode) {
-                    Some(opcode as u32 - 0x50)
+                    Some(u32::from(opcode) - 0x50)
                 } else {
                     None
                 }
@@ -1836,7 +1837,12 @@ mod tests {
                 i => {
                     let unspent_indexes = default_unspent_idx.clone();
                     let (agg_i, amount) = consensus
-                        .process_block_swiftsync(block, i as u32, unspent_indexes, &salt)
+                        .process_block_swiftsync(
+                            block,
+                            u32::try_from(i).expect("test block height must fit in u32"),
+                            unspent_indexes,
+                            &salt,
+                        )
                         .unwrap();
 
                     assert!(agg_i.is_zero());

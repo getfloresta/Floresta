@@ -65,6 +65,7 @@ use super::partial_chain::PartialChainState;
 use super::partial_chain::PartialChainStateInner;
 use crate::BestChain;
 use crate::ChainStore;
+use crate::extensions::ChainWorkOverflow;
 use crate::extensions::HeaderExt;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
@@ -193,7 +194,9 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
     ) -> Result<(), BlockchainError> {
         for (offset, &header) in headers.iter().enumerate() {
-            let disk_height = height + offset as u32;
+            let offset = u32::try_from(offset)
+                .map_err(|_| BlockchainError::OperationOverflow(ChainWorkOverflow))?;
+            let disk_height = height + offset;
             let disk_header = DiskBlockHeader::FullyValid(header, disk_height);
             let hash = disk_header.block_hash();
 
@@ -969,7 +972,8 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         // Special testnet rule, if a block takes more than 20 minutes to mine, we can
         // mine a block with diff 1
         if params.params.allow_min_difficulty_blocks
-            && last_block.time + params.params.pow_target_spacing as u32 * 2 < next_header.time
+            && u64::from(last_block.time) + params.params.pow_target_spacing * 2
+                < u64::from(next_header.time)
         {
             return Ok(params.params.max_attainable_target);
         }
@@ -2061,7 +2065,7 @@ mod test {
             ChainParams::from(Network::Signet),
         );
 
-        assert!((first_block.time as i32 - last_block.time as i32) < 0);
+        assert!(first_block.time < last_block.time);
 
         assert_eq!(0x1e00ddeb, next_target.to_compact_lossy().to_consensus());
 
@@ -2313,7 +2317,10 @@ mod test {
             .invalidate_block(headers[random_height].prev_blockhash)
             .unwrap();
 
-        assert_eq!(chain.get_height().unwrap() as usize, random_height - 1);
+        assert_eq!(
+            usize::try_from(chain.get_height().unwrap()).expect("test height must fit in usize"),
+            random_height - 1
+        );
 
         // update_tip
         chain.update_tip(headers[1].prev_blockhash, 1);

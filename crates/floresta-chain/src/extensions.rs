@@ -222,7 +222,7 @@ impl HeaderExt for Header {
     }
 
     fn get_version_hex(&self) -> String {
-        serialize_hex(&(self.version.to_consensus() as u32).to_be())
+        serialize_hex(&self.version.to_consensus().to_be())
     }
 }
 
@@ -286,7 +286,7 @@ impl WorkExt for Work {
             // Result is built in big-endian order, so calculate the index accordingly
             let byte_index = by_chunks.len() - word_index;
             result_bytes[(byte_index - 1) * word_size..byte_index * word_size]
-                .copy_from_slice(&(product as u32).to_be_bytes());
+                .copy_from_slice(&product.to_be_bytes()[4..]);
         }
 
         if carry_high > 0 {
@@ -649,7 +649,10 @@ mod tests {
 
         let expected_confirmations = headers.len() - 2;
 
-        assert_eq!(confirmations, expected_confirmations as u32);
+        assert_eq!(
+            confirmations,
+            u32::try_from(expected_confirmations).expect("test confirmation count must fit in u32")
+        );
     }
 
     #[test]
@@ -669,7 +672,10 @@ mod tests {
             .get_height(&mock_chain)
             .expect("Failed to get block height");
 
-        assert_eq!(height, height_expected as u32);
+        assert_eq!(
+            height,
+            u32::try_from(height_expected).expect("test height must fit in u32")
+        );
 
         let mut header_missing = headers[0];
         header_missing.nonce = 0;

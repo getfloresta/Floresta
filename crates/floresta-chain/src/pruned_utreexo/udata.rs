@@ -381,15 +381,15 @@ pub mod proof_util {
             let is_cb = tx.is_coinbase();
 
             for (vout, output) in tx.output.iter().enumerate() {
-                let utxo_id = (txid, vout as u32);
+                let vout = u32::try_from(vout).expect("block output index must fit in an OutPoint");
+                let utxo_id = (txid, vout);
 
                 if Consensus::is_unspendable(&output.script_pubkey) || spent.contains(&utxo_id) {
                     // Do not add unspendable nor already spent utxos
                     continue;
                 }
 
-                let leaf_hash =
-                    get_leaf_hashes(txid, is_cb, vout as u32, output, height, block_hash);
+                let leaf_hash = get_leaf_hashes(txid, is_cb, vout, output, height, block_hash);
                 adds.push(BitcoinNodeHash::Some(leaf_hash.to_byte_array()));
             }
         }
@@ -434,7 +434,11 @@ pub mod proof_util {
             // Collect new UTXOs, which may be spent by later transactions in the block
             for (vout, out) in tx.output.iter().enumerate() {
                 utxos.insert(
-                    OutPoint::new(txid, vout as u32),
+                    OutPoint::new(
+                        txid,
+                        u32::try_from(vout)
+                            .expect("transaction output index must fit in an OutPoint"),
+                    ),
                     UtxoData {
                         txout: out.clone(),
                         is_coinbase: tx.is_coinbase(),

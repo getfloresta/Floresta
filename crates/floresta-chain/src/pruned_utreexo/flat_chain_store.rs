@@ -1000,7 +1000,9 @@ impl FlatChainStore {
         let mut parent_hashes = HashSet::with_capacity(fork_count);
 
         for i in 0..fork_count {
-            let index = Index::new_fork(i as u32)?;
+            let index = Index::new_fork(
+                u32::try_from(i).map_err(|_| FlatChainstoreError::OversizedIndex)?,
+            )?;
             let hdr = unsafe { self.get_disk_header(index)? };
             match hdr.header {
                 DiskBlockHeader::InFork(..)
@@ -1251,8 +1253,9 @@ impl ChainStore for FlatChainStore {
             return Err(FlatChainstoreError::HeaderNotFound);
         }
 
-        header.acc_pos = pos as u32;
-        header.acc_len = size as u32;
+        header.acc_pos = u32::try_from(pos).map_err(|_| FlatChainstoreError::OversizedIndex)?;
+        header.acc_len =
+            u32::try_from(size).map_err(|_| FlatChainstoreError::OversizedAccumulator)?;
 
         self.accumulator_file.write_all(&roots)?;
         self.accumulator_file.flush()?;
@@ -1694,12 +1697,18 @@ mod tests {
             let block: Block = deserialize(&block).unwrap();
 
             store
-                .save_header(&DiskBlockHeader::FullyValid(block.header, i as u32))
+                .save_header(&DiskBlockHeader::FullyValid(
+                    block.header,
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                ))
                 .unwrap();
             // Map hashes to block indices such that we can later fetch headers from hashes
             // (hash -> index -> header)
             store
-                .update_block_index(i as u32, block.block_hash())
+                .update_block_index(
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                    block.block_hash(),
+                )
                 .unwrap();
         }
 
@@ -1873,11 +1882,17 @@ mod tests {
             hashes.push(block.block_hash());
 
             store
-                .save_header(&DiskBlockHeader::FullyValid(block.header, i as u32))
+                .save_header(&DiskBlockHeader::FullyValid(
+                    block.header,
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                ))
                 .unwrap();
 
             store
-                .update_block_index(i as u32, block.block_hash())
+                .update_block_index(
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                    block.block_hash(),
+                )
                 .unwrap();
         }
 
@@ -1933,11 +1948,17 @@ mod tests {
             let block: Block = deserialize(block).unwrap();
 
             store
-                .save_header(&DiskBlockHeader::FullyValid(block.header, i as u32))
+                .save_header(&DiskBlockHeader::FullyValid(
+                    block.header,
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                ))
                 .unwrap();
 
             store
-                .update_block_index(i as u32, block.block_hash())
+                .update_block_index(
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                    block.block_hash(),
+                )
                 .unwrap();
         }
 
@@ -1948,7 +1969,10 @@ mod tests {
             hashes.push(block.block_hash());
 
             store
-                .save_header(&DiskBlockHeader::InFork(block.header, i as u32))
+                .save_header(&DiskBlockHeader::InFork(
+                    block.header,
+                    u32::try_from(i).expect("test block index must fit in a u32"),
+                ))
                 .unwrap();
         }
 

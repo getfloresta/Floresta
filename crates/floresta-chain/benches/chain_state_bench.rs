@@ -303,7 +303,7 @@ fn chainstore_checksum_benchmark(c: &mut Criterion) {
         let mut chainstore = FlatChainStore::new(config).unwrap();
 
         headers.iter().enumerate().for_each(|(i, header)| {
-            let height = i as u32;
+            let height = u32::try_from(i).expect("test header index must fit in a u32");
             let disk_header = DiskBlockHeader::HeadersOnly(*header, height);
 
             chainstore.save_header(&disk_header).unwrap();

@@ -100,11 +100,8 @@ impl PartialChainStateInner {
     }
 
     pub fn get_block(&self, height: u32) -> Option<&BlockHeader> {
-        if height >= self.blocks.len() as u32 {
-            return None;
-        }
-
-        self.blocks.get(height as usize)
+        let height = usize::try_from(height).ok()?;
+        self.blocks.get(height)
     }
 
     #[inline]
@@ -276,7 +273,10 @@ impl PartialChainState {
         self.inner()
             .blocks
             .iter()
-            .take(self.inner().current_height as usize)
+            .take(
+                usize::try_from(self.inner().current_height)
+                    .expect("current height must fit in a usize"),
+            )
             .collect()
     }
 
@@ -380,9 +380,10 @@ impl BlockchainInterface for PartialChainState {
     }
 
     fn get_block_hash(&self, height: u32) -> Result<bitcoin::BlockHash, BlockchainError> {
+        let height = usize::try_from(height).map_err(|_| BlockchainError::BlockNotPresent)?;
         self.inner()
             .blocks
-            .get(height as usize)
+            .get(height)
             .map(|b| b.block_hash())
             .ok_or(BlockchainError::BlockNotPresent)
     }
@@ -596,7 +597,8 @@ mod tests {
             consensus: Consensus::from(Network::Regtest),
             current_height: 0,
             current_acc: Stump::default(),
-            final_height: times.len().saturating_sub(1) as u32,
+            final_height: u32::try_from(times.len().saturating_sub(1))
+                .expect("test chain height must fit in u32"),
             blocks,
             error: None,
         }
