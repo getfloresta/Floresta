@@ -24,7 +24,7 @@ tracing = { workspace = true }
 
 # Local dependencies
 floresta-chain = { workspace = true }
-floresta-domain = { workspace = true }
+floresta-domain = { workspace = true, features = ["mempool"] }
 
 [dev-dependencies]
 floresta-common = { workspace = true }
