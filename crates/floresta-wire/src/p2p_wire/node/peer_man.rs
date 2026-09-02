@@ -594,6 +594,17 @@ where
         }
     }
 
+    /// Bans a peer by address, disconnecting it immediately.
+    pub fn handle_ban_peer(&mut self, addr: BitcoinSocketAddr) -> Result<(), WireError> {
+        let peer_id = self
+            .peers
+            .iter()
+            .find_map(|(&id, peer)| (*peer.address.as_bitcoin_socket_addr() == addr).then_some(id))
+            .ok_or(WireError::PeerNotFoundAtAddress(addr))?;
+
+        self.disconnect_and_ban(peer_id)
+    }
+
     /// Checks whether some of our inflight requests have timed out.
     ///
     /// This function will check if any of our inflight requests have timed out, and if so,
