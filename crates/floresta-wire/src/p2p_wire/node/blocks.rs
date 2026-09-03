@@ -365,7 +365,8 @@ where
         let hash = block.block_hash();
         match e {
             // The utreexo peer sent us an invalid utreexo proof. Block is not yet processed.
-            BlockValidationErrors::InvalidUtreexoProof => {
+            BlockValidationErrors::InvalidUtreexoProof
+            | BlockValidationErrors::MalformedUtreexoProof => {
                 self.blocks
                     .insert(hash, InflightBlock::new(block, block_peer));
 
@@ -399,8 +400,17 @@ where
             | BlockValidationErrors::EmptyBlock
             | BlockValidationErrors::BadBip34
             | BlockValidationErrors::BIP94TimeWarp
+            | BlockValidationErrors::TimeTooOld
+            | BlockValidationErrors::DuplicateInvalidBlock
+            | BlockValidationErrors::BadPrevBlock
+            | BlockValidationErrors::BadDifficultyBits
+            | BlockValidationErrors::BadBlockVersion
+            | BlockValidationErrors::BadSignetBlockSignature
+            | BlockValidationErrors::TooManySigOps
+            | BlockValidationErrors::MultipleCoinbase
             | BlockValidationErrors::UnspendableUTXO
             | BlockValidationErrors::NonFinalTransaction
+            | BlockValidationErrors::UnsatisfiedSequenceLocks
             | BlockValidationErrors::CoinbaseNotMatured => {
                 try_and_log!(self.chain.invalidate_block(hash));
 
@@ -410,12 +420,23 @@ where
 
             // This block's txdata doesn't match the txid or wtxid merkle root. This can be a
             // mutated block, so we can't invalidate it since the original txdata may be valid.
-            BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment => {
-                Some(block_peer)
-            }
+            BlockValidationErrors::BadMerkleRoot
+            | BlockValidationErrors::BadWitnessCommitment
+            | BlockValidationErrors::DuplicateTransactions
+            | BlockValidationErrors::SixtyFourByteTransaction
+            | BlockValidationErrors::BadWitnessNonceSize
+            | BlockValidationErrors::UnexpectedWitness => Some(block_peer),
+
+            // The block may become valid as our clock advances, so it isn't invalid and the
+            // peer isn't misbehaving.
+            BlockValidationErrors::TimeTooNew => None,
+
+            // We already know this block, so there's nothing to invalidate and nobody to blame
+            BlockValidationErrors::DuplicateBlock => None,
 
             // We've tried to connect a block that doesn't extend the tip.
             BlockValidationErrors::BlockExtendsAnOrphanChain
+            | BlockValidationErrors::PrevBlockNotFound
             | BlockValidationErrors::BlockDoesntExtendTip => {
                 self.last_block_request = self.chain.get_validation_index().unwrap_or(0);
 
