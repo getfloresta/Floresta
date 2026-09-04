@@ -58,7 +58,6 @@ use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::IBDState;
-use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
 use rand::rng;
@@ -481,17 +480,7 @@ where
                     }
 
                     // Check if the block was maliciously mutated by our peer
-                    let is_mutated = Consensus::check_merkle_root(&recv_block).is_none()
-                        || !recv_block.check_witness_commitment();
-
-                    if is_mutated {
-                        error!(
-                            "Peer {peer} sent us a mutated block {}",
-                            recv_block.block_hash()
-                        );
-                        self.disconnect_and_ban(peer)?;
-                        return Err(WireError::PeerMisbehaving);
-                    }
+                    self.check_mutated_block(&recv_block, peer)?;
 
                     block = Some(recv_block);
                     // ask for the proof. Sending two empty bitmaps means we want the full
@@ -1039,6 +1028,12 @@ where
             // user request made through the node handle. If it isn't, we punish this
             // peer for sending an unrequested block.
             PeerMessages::Block(block) => {
+                // Check whether the block is mutated and whether there is an outstanding user
+                // request before proceeding.
+                if self.check_mutated_block_and_retry_user_request(&block, peer)? {
+                    return Ok(());
+                }
+
                 let block = self.check_is_user_block_and_reply(block)?;
 
                 if block.is_some() {
@@ -1060,8 +1055,17 @@ mod tests {
     use floresta_chain::ChainState;
     use floresta_chain::FlatChainStore;
     use rustreexo::node_hash::BitcoinNodeHash;
+    use tokio::sync::oneshot;
 
     use super::*;
+    use crate::node::InflightRequests;
+    use crate::node::PeerStatus;
+    use crate::node_handle::NodeResponse;
+    use crate::node_handle::UserRequest;
+    use crate::p2p_wire::tests::utils::Mutation;
+    use crate::p2p_wire::tests::utils::PEER_TEST;
+    use crate::p2p_wire::tests::utils::setup_unit_node;
+    use crate::p2p_wire::tests::utils::synthetic_block;
 
     type TestNode = UtreexoNode<Arc<ChainState<FlatChainStore>>, ChainSelector>;
 
@@ -1163,5 +1167,113 @@ mod tests {
                 ],
             },
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_mutated_with_user_request_bans_and_retries() {
+        let mut node = setup_unit_node();
+        let block = synthetic_block(Mutation::MerkleRoot);
+        let block_hash = block.block_hash();
+
+        let (tx, _rx) = oneshot::channel();
+        node.inflight_user_requests.insert(
+            UserRequest::Block(block_hash),
+            (PEER_TEST, Instant::now(), tx),
+        );
+
+        node.handle_peer_notification(PeerMessages::Block(block), PEER_TEST, Instant::now())
+            .await
+            .unwrap();
+
+        // The peer is banned and the block is retried elsewhere
+        assert_eq!(
+            node.peers.get(&PEER_TEST).unwrap().state,
+            PeerStatus::Banned
+        );
+        assert!(
+            node.inflight
+                .contains_key(&InflightRequests::Blocks(block_hash))
+        );
+
+        // The user request stays open
+        assert!(
+            node.inflight_user_requests
+                .contains_key(&UserRequest::Block(block_hash))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_mutated_without_user_request_errors() {
+        let mut node = setup_unit_node();
+        let block = synthetic_block(Mutation::MerkleRoot);
+        let block_hash = block.block_hash();
+
+        let result = node
+            .handle_peer_notification(PeerMessages::Block(block), PEER_TEST, Instant::now())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(result, WireError::PeerMisbehaving));
+        assert_eq!(
+            node.peers.get(&PEER_TEST).unwrap().state,
+            PeerStatus::Banned
+        );
+
+        // No retry should happen
+        assert!(
+            !node
+                .inflight
+                .contains_key(&InflightRequests::Blocks(block_hash))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_valid_with_user_request_replies_to_user() {
+        let mut node = setup_unit_node();
+        let block = synthetic_block(Mutation::None);
+        let block_hash = block.block_hash();
+
+        let (tx, rx) = oneshot::channel();
+        node.inflight_user_requests.insert(
+            UserRequest::Block(block_hash),
+            (PEER_TEST, Instant::now(), tx),
+        );
+
+        node.handle_peer_notification(PeerMessages::Block(block), PEER_TEST, Instant::now())
+            .await
+            .unwrap();
+
+        // The user gets the block
+        let response = rx.await.unwrap();
+        match response {
+            NodeResponse::Block(Some(b)) => assert_eq!(b.block_hash(), block_hash),
+            _ => panic!("expected NodeResponse::Block(Some(_))"),
+        }
+
+        // The user request is consumed and the peer isn't punished
+        assert!(
+            !node
+                .inflight_user_requests
+                .contains_key(&UserRequest::Block(block_hash))
+        );
+
+        let peer = node.peers.get(&PEER_TEST).unwrap();
+        assert_eq!(peer.state, PeerStatus::Ready);
+        assert_eq!(peer.banscore, 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_valid_unrequested_increases_banscore() {
+        let mut node = setup_unit_node();
+        let block = synthetic_block(Mutation::None);
+
+        node.handle_peer_notification(PeerMessages::Block(block), PEER_TEST, Instant::now())
+            .await
+            .unwrap();
+
+        let peer = node.peers.get(&PEER_TEST).unwrap();
+        // The peer is punished with a banscore, but not banned
+        assert_eq!(peer.banscore, 5);
+        assert_eq!(peer.state, PeerStatus::Ready);
     }
 }
