@@ -1550,7 +1550,7 @@ macro_rules! write_lock {
 }
 
 #[cfg(all(test, feature = "flat-chainstore"))]
-mod test {
+pub(crate) mod test {
     use std::format;
     use std::fs::File;
     use std::io::Cursor;
@@ -1603,8 +1603,8 @@ mod test {
 
     const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
     const TEST_FORK_FILE_SIZE: usize = 10_000;
-    const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
-    fn setup_test_chain(
+    pub(crate) const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
+    pub(crate) fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
         header_capacity: Option<usize>,
@@ -1630,7 +1630,11 @@ mod test {
         script
     }
 
-    fn test_coinbase(height: u32, sequence: Sequence, lock_time: LockTime) -> Transaction {
+    pub(crate) fn test_coinbase(
+        height: u32,
+        sequence: Sequence,
+        lock_time: LockTime,
+    ) -> Transaction {
         let script_sig = Builder::new()
             .push_int(i64::from(height))
             .push_int(0)
@@ -1644,7 +1648,7 @@ mod test {
         }
     }
 
-    fn block_with_transactions(height: u32, txdata: Vec<Transaction>) -> Block {
+    pub(crate) fn block_with_transactions(height: u32, txdata: Vec<Transaction>) -> Block {
         let mut block = Block {
             header: BlockHeader {
                 version: HeaderVersion::TWO,
@@ -1664,7 +1668,25 @@ mod test {
         block_with_transactions(height, vec![coinbase])
     }
 
-    fn test_outpoint(vout: u32) -> OutPoint {
+    /// Grinds the header nonce until the block satisfies its own target. On regtest,
+    /// virtually every nonce works, so this returns almost immediately.
+    pub(crate) fn mine(mut block: Block) -> Block {
+        block.header = mine_header(block.header);
+
+        block
+    }
+
+    /// Grinds the nonce until the header satisfies the target it claims.
+    pub(crate) fn mine_header(mut header: BlockHeader) -> BlockHeader {
+        let target = header.target();
+        while header.validate_pow(target).is_err() {
+            header.nonce += 1;
+        }
+
+        header
+    }
+
+    pub(crate) fn test_outpoint(vout: u32) -> OutPoint {
         OutPoint {
             txid: genesis_block(Network::Regtest).txdata[0].compute_txid(),
             vout,
@@ -1673,7 +1695,7 @@ mod test {
 
     /// Builds a two-input test transaction with the given lock time and sequences,
     /// plus its referenced input UTXOs.
-    fn test_spend(
+    pub(crate) fn test_spend(
         lock_time: LockTime,
         first_sequence: Sequence,
         second_sequence: Sequence,
