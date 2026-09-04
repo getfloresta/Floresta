@@ -86,7 +86,7 @@ impl SimulatedPeer {
                 | ServiceFlags::WITNESS
                 | ServiceFlags::COMPACT_FILTERS,
             time_offset: 0,
-            kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
+            kind: ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
             transport_protocol: TransportProtocol::V2,
         };
 
@@ -186,7 +186,7 @@ pub fn create_peer(
         time_offset: 0,
         state: PeerStatus::Ready,
         channel: sender,
-        kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
+        kind: ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
         banscore: 0,
         _last_message: Instant::now(),
         transport_protocol: TransportProtocol::V2,
