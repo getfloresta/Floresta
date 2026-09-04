@@ -37,7 +37,7 @@ Returns a JSON object with the following fields:
 
 - `localservicesnames` - (array of strings) Human-readable names of the advertised services (e.g., `NETWORK`, `WITNESS`, `UTREEXO`).
 
-- `localrelay` - (boolean) Whether the node requests transaction relay from peers. Always `false` in Floresta, since Floresta has no mempool.
+- `localrelay` - (boolean) Whether the node requests transaction relay from peers. Always `false` in Floresta, since Floresta's mempool only holds locally-submitted transactions.
 
 - `timeoffset` - (numeric) The time offset, in seconds. Always `0` in Floresta, since Floresta does not track peer time offsets.
 
@@ -56,9 +56,9 @@ Returns a JSON object with the following fields:
     * `proxy` - (string) The proxy used for this network in `host:port` form, or empty if none.
     * `proxy_randomize_credentials` - (boolean) Whether randomized credentials are used for the proxy.
 
-- `relayfee` - (numeric) The minimum relay fee rate, in BTC/kB. Always `0.0` in Floresta, since Floresta has no mempool.
+- `relayfee` - (numeric) The minimum relay fee rate, in BTC/kB. Always `0.0` in Floresta, since Floresta's mempool only holds locally-submitted transactions.
 
-- `incrementalfee` - (numeric) The minimum fee rate increment for mempool limiting or replacement, in BTC/kB. Always `0.0` in Floresta, since Floresta has no mempool.
+- `incrementalfee` - (numeric) The minimum fee rate increment for mempool limiting or replacement, in BTC/kB. Always `0.0` in Floresta, since Floresta's mempool only holds locally-submitted transactions.
 
 - `localaddresses` - (array of objects) Local addresses the node is listening on. Always empty in Floresta, since the node does not accept inbound connections.
 
@@ -70,5 +70,5 @@ Returns a JSON object with the following fields:
 
 ## Notes
 
-- This RPC mirrors Bitcoin Core's `getnetworkinfo` and reuses Bitcoin Core's response schema for compatibility. Several fields are hardcoded because Floresta is a lightweight, outbound-only node: it does not accept inbound connections (`connections_in`, `localaddresses`), does not maintain a mempool (`localrelay`, `relayfee`, `incrementalfee`), does not track peer time offsets (`timeoffset`), cannot toggle networking at runtime (`networkactive`), and does not emit network or blockchain warnings (`warnings`).
+- This RPC mirrors Bitcoin Core's `getnetworkinfo` and reuses Bitcoin Core's response schema for compatibility. Several fields are hardcoded because Floresta is a lightweight, outbound-only node: it does not accept inbound connections (`connections_in`, `localaddresses`), has a mempool that only holds locally-submitted transactions with no inbound relay or fee policy (`localrelay`, `relayfee`, `incrementalfee`), does not track peer time offsets (`timeoffset`), cannot toggle networking at runtime (`networkactive`), and does not emit network or blockchain warnings (`warnings`).
 - For per-peer details rather than node-wide networking state, see [`getpeerinfo`](getpeerinfo.md). For just the connection count, see [`getconnectioncount`](getconnectioncount.md).

@@ -57,9 +57,9 @@ async fn main() {
     );
 
     // Create a new node. It will connect to the Bitcoin network and start downloading the blockchain.
-    // It will also start a mempool, which will keep track of the current mempool state, this
-    // particular mempool doesn't store other's transactions, it just keeps track of our own, to
-    // perform broadcast. We always rebroadcast our own transactions every hour.
+    // It will also start a mempool, which keeps track of the transactions we submit through the
+    // node (this particular mempool doesn't store other people's transactions) so they can be
+    // announced to our peers.
     // Note that we are using the RunningNode context, which is a state optimized for a node that
     // already has the blockchain synced. You don't need to worry about this, because internally
     // the node will automatically switch to the IBD context and back once it's finished.
@@ -83,7 +83,8 @@ async fn main() {
     let (sender, _receiver) = tokio::sync::oneshot::channel();
 
     // Start the node. This will start the IBD process, and will return once the node is synced.
-    // It will also start the mempool, which will start rebroadcasting our transactions every hour.
+    // It will also start the mempool, keeping the transactions we submit ready to be announced
+    // to our peers.
     // The node will keep running until the process is killed, by setting kill_signal to true. In
     // this example, we don't kill the node, so it will keep running forever.
     p2p.run(sender).await;

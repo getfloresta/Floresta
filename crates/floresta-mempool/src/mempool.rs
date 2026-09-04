@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! A simple mempool that keeps our transactions in memory. It try to rebroadcast
-//! our transactions every 1 hour.
-//! Once our transaction is included in a block, we remove it from the mempool.
+//! A simple mempool that keeps transactions we submitted in memory, along with
+//! the dependency relationships between them.
+//!
+//! Transactions that sit in the mempool for more than one hour can be listed with
+//! `get_stale` (e.g. for rebroadcast), and transactions included in a block can be
+//! removed with `consume_block`. Calling those is the node's responsibility; this
+//! module only provides the bookkeeping.
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -169,18 +173,23 @@ impl MempoolBase for Mempool {
             .collect()
     }
 
-    /// Accepts a transaction to mempool
+    /// Accepts a transaction into the mempool.
     ///
-    /// This method will perform some context-less validations on a transaction,
-    /// and then accept to our mempool. It assumes that we have validated this transaction's
-    /// proof.
+    /// Only context-free, structural checks are performed: non-empty input and
+    /// output lists, no duplicate inputs within the transaction, script size limits, and
+    /// output amounts within the valid range. The transaction is also rejected if it
+    /// conflicts with (spends an input already spent by) a transaction already held.
+    ///
+    /// This is *not* full validation: Utreexo proofs, input scripts, and signatures
+    /// are not verified, and there is no check that the spent outputs exist or are
+    /// unspent. Callers must not treat acceptance as a guarantee that the
+    /// transaction is valid or that the network will accept it.
     ///
     /// # Errors
     ///  - If we don't have space left in our mempool
     ///  - If the transaction conflicts with another mempool transaction
-    ///  - If it sepends the same input twice
-    ///  - If any amount check fails: if input amounts are less than output amounts or if it spends more than
-    ///    the theoretical maximum amount of Bitcoins
+    ///  - If it spends the same input twice
+    ///  - If any output amount exceeds the theoretical maximum amount of Bitcoin
     ///  - If either vIn or vOut are empty
     ///  - If any script is larger than the maximum allowed size
     fn accept_to_mempool(&mut self, transaction: Transaction) -> Result<(), MempoolError> {

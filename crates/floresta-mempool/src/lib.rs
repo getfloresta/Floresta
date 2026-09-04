@@ -1,21 +1,25 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! A Utreexo-based Bitcoin transaction mempool.
+//! A Bitcoin transaction mempool for Floresta.
 //!
-//! This crate provides a transaction mempool implementation specifically designed for
-//! [Utreexo](https://eprint.iacr.org/2019/611.pdf) nodes. Unlike traditional Bitcoin nodes
-//! that maintain a complete UTXO set, Utreexo nodes use a compact cryptographic accumulator
-//! to verify transaction validity, significantly reducing storage requirements.
+//! This crate provides an in-memory holding area for unconfirmed transactions.
+//! Today, transactions enter the mempool only when submitted locally — through the
+//! `sendrawtransaction` RPC or an Electrum broadcast. Transactions announced by
+//! peers are not accepted yet.
 //!
 //! # Overview
 //!
-//! The mempool serves as a holding area for unconfirmed transactions, performing several
-//! critical functions:
+//! The mempool currently performs the following functions:
 //!
-//! - **Transaction validation**: Verifies Utreexo inclusion proofs for transaction inputs
-//! - **Proof management**: Maintains a local accumulator to generate proofs for relay and mining
-//! - **Block template construction**: Assembles candidate blocks for miners
-//! - **Transaction relay**: Tracks which transactions to broadcast to peers
+//! - **Acceptance**: applies context-free structural checks (non-empty inputs and
+//!   outputs, script size limits, no duplicate inputs, output amounts in range)
+//!   and rejects transactions that conflict with ones already held. It does *not*
+//!   verify Utreexo proofs, scripts, or signatures, nor check that inputs exist
+//!   or are unspent.
+//! - **Dependency tracking**: records parent/child relationships between held
+//!   transactions, used for conflict handling and block assembly.
+//! - **Block template construction**: assembles candidate (unsolved) blocks from
+//!   held transactions, parents before children, up to a weight limit.
 
 // cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]

@@ -220,7 +220,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             connections_out,
             network_active: true,
             networks,
-            // Since Floresta has no mempool, relay_fee and incremental_fee are hardcoded to 0.
+            // Floresta's mempool has no fee policy yet, so relay_fee and incremental_fee are hardcoded to 0.
             relay_fee: 0.0,
             incremental_fee: 0.0,
             local_addresses: Vec::new(), // Floresta doesn't track local addresses since it does not accept inbound connections

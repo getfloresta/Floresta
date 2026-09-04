@@ -264,7 +264,7 @@ mod tests {
         // P2P networking is enabled by default.
         assert!(info.network_active);
 
-        // Floresta has no mempool, so relay-related fields are hardcoded.
+        // Floresta's mempool has no inbound relay or fee policy yet, so relay-related fields are hardcoded.
         assert!(!info.local_relay);
         assert_eq!(info.relay_fee, 0.0);
         assert_eq!(info.incremental_fee, 0.0);

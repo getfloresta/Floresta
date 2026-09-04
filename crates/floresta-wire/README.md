@@ -1,6 +1,6 @@
 # floresta-wire
 
-`floresta-wire` is the P2P layer for the Floresta project: a lightweight, Utreexo-powered Bitcoin node. It supports Bitcoin P2P transport v1 and v2/BIP324, with peer discovery via DNS seeds, hardcoded addresses, and user-provided peers. It learns about new blocks and transactions, selects the best header chain, performs IBD, maintains a mempool, and stays in sync with the network.
+`floresta-wire` is the P2P layer for the Floresta project: a lightweight, Utreexo-powered Bitcoin node. It supports Bitcoin P2P transport v1 and v2/BIP324, with peer discovery via DNS seeds, hardcoded addresses, and user-provided peers. It learns about new blocks, selects the best header chain, performs IBD, announces locally-submitted transactions to peers, and stays in sync with the network.
 
 It also supports compact block filters, which are particularly helpful for rescans because Floresta is fully pruned, and an optional SOCKS5 proxy to route all P2P traffic and DNS seed queries.
 
@@ -23,7 +23,8 @@ let node = UtreexoNode::<_, RunningNode>::new(
 
 Where:
 
-- `UtreexoNodeConfig`, `Mempool`, and `AddressMan` are defined in this crate.
+- `UtreexoNodeConfig` and `AddressMan` are defined in this crate.
+- The mempool can be any implementation of `MempoolBase` from `floresta-domain` — for example `Mempool` from `floresta-mempool`.
 - `ChainState` is provided by `floresta-chain` (implements the `ChainBackend` trait).
 - Optional compact filters use `NetworkFilters` from `floresta-compact-filters`.
 - The kill signal is an `Arc<tokio::sync::RwLock<bool>>`. Set it to `true` to stop the node.
