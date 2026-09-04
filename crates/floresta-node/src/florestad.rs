@@ -730,8 +730,10 @@ impl Florestad {
             .setup()
             .map_err(FlorestadError::CouldNotInitializeWallet)?;
 
+        let config_file = self.get_config_file();
+
         // Add the configured descriptors and addresses to the wallet
-        for descriptor in self.get_descriptors() {
+        for descriptor in self.get_descriptors(&config_file) {
             match wallet.push_descriptor(&descriptor) {
                 Ok(_) => info!("Added descriptor to wallet: {descriptor}"),
                 Err(WatchOnlyError::DuplicateDescriptor(_)) => {
@@ -743,7 +745,7 @@ impl Florestad {
             }
         }
 
-        for xpub in self.get_xpubs() {
+        for xpub in self.get_xpubs(&config_file) {
             match wallet.push_xpub(&xpub, self.config.network) {
                 Ok(()) => info!("Added xpubs to wallet: {xpub}"),
                 Err(WatchOnlyError::DuplicateDescriptor(_)) => warn!(
@@ -753,7 +755,7 @@ impl Florestad {
             }
         }
 
-        for address in self.get_addresses()? {
+        for address in self.get_addresses(&config_file)? {
             wallet.cache_address(address);
         }
 
@@ -762,31 +764,31 @@ impl Florestad {
     }
 
     /// Get the wallet descriptors from the config file
-    fn get_descriptors(&self) -> Vec<String> {
+    fn get_descriptors(&self, config_file: &ConfigFile) -> Vec<String> {
         self.config
             .wallet_descriptor
             .iter()
             .flatten()
-            .chain(self.get_config_file().wallet.descriptors.iter().flatten())
+            .chain(config_file.wallet.descriptors.iter().flatten())
             .cloned()
             .collect()
     }
 
     /// Get the wallet xpubs from the config file and the environment
-    fn get_xpubs(&self) -> Vec<String> {
+    fn get_xpubs(&self, config_file: &ConfigFile) -> Vec<String> {
         self.config
             .wallet_xpub
             .iter()
             .flatten()
-            .chain(self.get_config_file().wallet.xpubs.iter().flatten())
+            .chain(config_file.wallet.xpubs.iter().flatten())
             .chain(Self::get_key_from_env().iter())
             .cloned()
             .collect()
     }
 
     /// Get the wallet addresses from the config file
-    fn get_addresses(&self) -> Result<Vec<ScriptBuf>, FlorestadError> {
-        self.get_config_file()
+    fn get_addresses(&self, config_file: &ConfigFile) -> Result<Vec<ScriptBuf>, FlorestadError> {
+        config_file
             .wallet
             .addresses
             .as_deref()
