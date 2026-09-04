@@ -76,6 +76,9 @@ pub struct SwiftSync {
     /// The target height for the currently used SwiftSync hints.
     stop_height: u32,
 
+    /// Number of distinct blocks processed successfully in this SwiftSync session.
+    processed_blocks: u32,
+
     /// Height at which SwiftSync was aborted, if any.
     ///
     /// We abort when either the hints are found to be invalid or the current chain is invalid (we
@@ -286,6 +289,11 @@ where
             "Validation index should be 0 at the start of SwiftSync"
         );
         self.last_block_request = 0;
+        self.context.processed_blocks = 0;
+        self.chain.update_ibd(IBDState::SwiftSync {
+            processed_blocks: 0,
+            total_blocks: hints.stop_height(),
+        });
 
         // Initialize the accumulator updater task that will work in parallel to block validation
         self.context.stump_updater =
@@ -450,7 +458,6 @@ where
         self.chain
             .mark_chain_as_assumed(final_acc, tip_hash)
             .unwrap();
-        self.chain.update_ibd(IBDState::Done);
     }
 
     /// Process a message from a peer and handle it accordingly between the variants of [`PeerMessages`].
@@ -563,6 +570,15 @@ where
                 // Block is valid and not mutated, we can drop these hints from memory
                 hints.take_indices(height);
                 self.handle_valid_worker_block(block_hash, height, block);
+
+                assert!(self.context.processed_blocks < self.context.stop_height);
+                self.context.processed_blocks += 1;
+
+                // Expose the current SwiftSync progress through the FFI API
+                self.chain.update_ibd(IBDState::SwiftSync {
+                    processed_blocks: self.context.processed_blocks,
+                    total_blocks: self.context.stop_height,
+                });
             }
             Err(e) => {
                 let header = block.block.header;

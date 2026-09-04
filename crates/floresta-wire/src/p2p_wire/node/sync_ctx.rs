@@ -164,6 +164,7 @@ where
     ///     - If were low on inflights, requests new blocks to validate.
     pub async fn run(mut self, done_cb: impl FnOnce(&Chain)) -> Self {
         info!("Starting sync node...");
+        self.chain.update_ibd(IBDState::ProofSync);
         self.last_block_request = self.chain.get_validation_index().unwrap();
 
         let mut ticker = time::interval(SyncNode::MAINTENANCE_TICK);

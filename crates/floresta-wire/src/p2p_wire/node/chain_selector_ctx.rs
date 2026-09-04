@@ -749,7 +749,7 @@ where
 
                 self.context.state = ChainSelectorState::Done;
                 self.chain.mark_chain_as_assumed(acc, tips[0]).unwrap();
-                self.chain.update_ibd(IBDState::Done);
+                self.chain.update_ibd(IBDState::ProofSync);
             }
             // if we have more than one tip, we need to check if our best chain has an invalid block
             tips.remove(0); // no need to check our best one
@@ -902,7 +902,7 @@ where
         // We downloaded all headers in the most-pow chain, and all our peers agree
         // this is the most-pow chain, we're done!
         if self.context.state == ChainSelectorState::Done {
-            self.chain.update_ibd(IBDState::DownloadingBlocks);
+            self.chain.update_ibd(IBDState::ProofSync);
             try_and_log!(self.chain.flush());
             return Ok(LoopControl::Break);
         }

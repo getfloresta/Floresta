@@ -41,6 +41,7 @@ use crate::BlockchainError;
 use crate::prelude::*;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 
+#[non_exhaustive]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 /// Our current IBD state, meaning which startup phase are we, if any.
 ///
@@ -55,11 +56,19 @@ pub enum IBDState {
     /// this is the most work chain available.
     HeadersSync,
 
-    /// Downloading and checking blocks.
+    /// Downloading and validating blocks with SwiftSync and Utreexo implicit deletion.
     ///
-    /// After we find the most work chain, we start downloading blocks and connecting them to our
-    /// chain. This step usually takes the longest time.
-    DownloadingBlocks,
+    /// `processed_blocks` is a successful-block count rather than a height because SwiftSync
+    /// validates blocks in parallel and out of order.
+    SwiftSync {
+        /// Number of distinct blocks processed successfully.
+        processed_blocks: u32,
+        /// Number of blocks to process up to the SwiftSync stop height.
+        total_blocks: u32,
+    },
+
+    /// Downloading and validating blocks using conventional Utreexo deletion proofs.
+    ProofSync,
 
     /// We've finished IBD and are now listening for new blocks as they are found.
     Done,

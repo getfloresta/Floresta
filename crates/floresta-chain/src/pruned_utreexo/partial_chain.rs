@@ -360,7 +360,7 @@ impl BlockchainInterface for PartialChainState {
     type Error = BlockchainError;
 
     fn ibd_state(&self) -> IBDState {
-        IBDState::DownloadingBlocks
+        IBDState::ProofSync
     }
 
     fn get_params(&self) -> bitcoin::params::Params {

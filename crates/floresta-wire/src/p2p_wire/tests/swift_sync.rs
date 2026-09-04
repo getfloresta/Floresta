@@ -7,6 +7,7 @@ mod tests {
     use bitcoin::Network;
     use bitcoin::consensus::encode::deserialize_hex;
     use floresta_chain::pruned_utreexo::BlockchainInterface;
+    use floresta_chain::pruned_utreexo::IBDState;
     use floresta_common::bhash;
 
     use crate::p2p_wire::tests::utils::PeerData;
@@ -55,7 +56,13 @@ mod tests {
 
         assert_eq!(best_block.1, headers[NUM_BLOCKS].block_hash());
         assert_eq!(best_block, expected);
-        assert!(!chain.is_in_ibd());
+        assert_eq!(
+            chain.ibd_state(),
+            IBDState::SwiftSync {
+                processed_blocks: NUM_BLOCKS as u32,
+                total_blocks: NUM_BLOCKS as u32,
+            }
+        );
     }
 
     #[tokio::test]
@@ -94,7 +101,13 @@ mod tests {
 
         assert_eq!(best_block.1, headers[NUM_BLOCKS].block_hash());
         assert_eq!(best_block, expected);
-        assert!(!chain.is_in_ibd());
+        assert_eq!(
+            chain.ibd_state(),
+            IBDState::SwiftSync {
+                processed_blocks: NUM_BLOCKS as u32,
+                total_blocks: NUM_BLOCKS as u32,
+            }
+        );
     }
 
     // TODO add invalid block test
