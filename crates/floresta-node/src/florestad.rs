@@ -224,6 +224,12 @@ pub struct Config {
     /// and won't affect the node's operation. You may notice that this will take a lot of CPU
     /// and bandwidth to run.
     pub backfill: bool,
+    /// Whether the JSON-RPC server should be disabled
+    pub disable_rpc: bool,
+    /// Whether the Electrum server should be disabled
+    pub disable_electrum: bool,
+    /// Whether the ZMQ server should be disabled
+    pub disable_zmq: bool,
 }
 
 impl Config {
@@ -258,6 +264,9 @@ impl Config {
             tls_cert_path: None,
             allow_v1_fallback: false,
             backfill: false,
+            disable_rpc: false,
+            disable_electrum: false,
+            disable_zmq: false,
         }
     }
 }
@@ -442,7 +451,7 @@ impl Florestad {
 
         // ZMQ
         #[cfg(feature = "zmq-server")]
-        {
+        if !self.config.disable_zmq {
             info!("Starting ZMQ server");
             if let Ok(zserver) = ZMQServer::new(
                 self.config
@@ -462,7 +471,7 @@ impl Florestad {
 
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
-        {
+        if !self.config.disable_rpc {
             let server = tokio::spawn(json_rpc::server::RpcImpl::create(
                 blockchain_state.clone(),
                 wallet.clone(),
@@ -485,115 +494,117 @@ impl Florestad {
             }
         }
 
-        // Electrum Server configuration.
+        if !self.config.disable_electrum {
+            // Electrum Server configuration.
 
-        // Instantiate the Electrum Server.
-        let electrum_server = ElectrumServer::new(
-            wallet,
-            blockchain_state,
-            cfilters,
-            chain_provider.get_handle(),
-        )
-        .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
+            // Instantiate the Electrum Server.
+            let electrum_server = ElectrumServer::new(
+                wallet,
+                blockchain_state,
+                cfilters,
+                chain_provider.get_handle(),
+            )
+            .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
-        // Default Electrum Server port.
-        let default_electrum_port: u16 =
-            Self::get_default_electrum_port(self.config.network, false);
+            // Default Electrum Server port.
+            let default_electrum_port: u16 =
+                Self::get_default_electrum_port(self.config.network, false);
 
-        // Electrum Server address.
-        let electrum_addr: SocketAddr = self
-            .config
-            .electrum_address
-            .as_ref()
-            .map(|addr| Self::resolve_hostname(addr, default_electrum_port))
-            .transpose()?
-            .unwrap_or(
-                format!("127.0.0.1:{default_electrum_port}")
-                    .parse()
-                    .expect("Hardcoded address"),
-            );
-        // sans-TLS Electrum listener.
-        let non_tls_listener = TcpListener::bind(electrum_addr)
-            .await
-            .map(Arc::new)
-            .map_err(FlorestadError::FailedToBindElectrumServer)?;
-
-        task::spawn(client_accept_loop(
-            non_tls_listener,
-            electrum_server.get_notifier(),
-            None,
-        ));
-        info!("Electrum Server is running at {electrum_addr}");
-
-        // with-TLS Electrum listener.
-        if self.config.enable_electrum_tls {
-            // Default Electrum TLS port.
-            let default_electrum_port_tls: u16 =
-                Self::get_default_electrum_port(self.config.network, true);
-
-            let electrum_addr_tls = self
+            // Electrum Server address.
+            let electrum_addr: SocketAddr = self
                 .config
-                .electrum_address_tls
+                .electrum_address
                 .as_ref()
-                .map(|addr| Self::resolve_hostname(addr, default_electrum_port_tls))
+                .map(|addr| Self::resolve_hostname(addr, default_electrum_port))
                 .transpose()?
                 .unwrap_or(
-                    format!("127.0.0.1:{default_electrum_port_tls}")
+                    format!("127.0.0.1:{default_electrum_port}")
                         .parse()
                         .expect("Hardcoded address"),
                 );
-
-            // Generate self-signed TLS certificate, if enabled.
-            if self.config.generate_cert {
-                // Create TLS directory, if it does not exist.
-                let tls_dir = datadir.join("tls");
-                if !Path::new(&tls_dir).exists() {
-                    fs::create_dir_all(&tls_dir).map_err(|e| {
-                        FlorestadError::CouldNotCreateTLSDataDir(tls_dir.clone(), e)
-                    })?;
-                    info!("Created TLS directory at path={}", tls_dir.display());
-                }
-
-                // Create information for the self-signed certificate about the current node.
-                let subject_alt_names = vec!["localhost".to_string()];
-
-                // Define file paths
-                let tls_key_path = datadir.join("tls").join("key.pem");
-
-                let tls_cert_path = datadir.join("tls").join("cert.pem");
-
-                // Create the certificate.
-                Self::generate_self_signed_certificate(
-                    tls_key_path.clone(),
-                    tls_cert_path.clone(),
-                    subject_alt_names,
-                )?;
-
-                info!("TLS private key saved to path={}", tls_key_path.display());
-                info!("TLS certificate saved to path={}", tls_cert_path.display());
-            }
-
-            // Assemble TLS configuration from file.
-            let tls_config = self.create_tls_config(datadir)?;
-
-            // Electrum TLS accept loop.
-            let tls_listener = TcpListener::bind(electrum_addr_tls)
+            // sans-TLS Electrum listener.
+            let non_tls_listener = TcpListener::bind(electrum_addr)
                 .await
                 .map(Arc::new)
                 .map_err(FlorestadError::FailedToBindElectrumServer)?;
 
-            // TLS Acceptor.
-            let tls_acceptor: TlsAcceptor = TlsAcceptor::from(tls_config);
             task::spawn(client_accept_loop(
-                tls_listener,
+                non_tls_listener,
                 electrum_server.get_notifier(),
-                Some(tls_acceptor),
+                None,
             ));
-            info!("Electrum TLS Server is running at {electrum_addr_tls}");
-        }
+            info!("Electrum Server is running at {electrum_addr}");
 
-        // Electrum Server's main loop.
-        task::spawn(electrum_server.main_loop());
+            // with-TLS Electrum listener.
+            if self.config.enable_electrum_tls {
+                // Default Electrum TLS port.
+                let default_electrum_port_tls: u16 =
+                    Self::get_default_electrum_port(self.config.network, true);
+
+                let electrum_addr_tls = self
+                    .config
+                    .electrum_address_tls
+                    .as_ref()
+                    .map(|addr| Self::resolve_hostname(addr, default_electrum_port_tls))
+                    .transpose()?
+                    .unwrap_or(
+                        format!("127.0.0.1:{default_electrum_port_tls}")
+                            .parse()
+                            .expect("Hardcoded address"),
+                    );
+
+                // Generate self-signed TLS certificate, if enabled.
+                if self.config.generate_cert {
+                    // Create TLS directory, if it does not exist.
+                    let tls_dir = datadir.join("tls");
+                    if !Path::new(&tls_dir).exists() {
+                        fs::create_dir_all(&tls_dir).map_err(|e| {
+                            FlorestadError::CouldNotCreateTLSDataDir(tls_dir.clone(), e)
+                        })?;
+                        info!("Created TLS directory at path={}", tls_dir.display());
+                    }
+
+                    // Create information for the self-signed certificate about the current node.
+                    let subject_alt_names = vec!["localhost".to_string()];
+
+                    // Define file paths
+                    let tls_key_path = datadir.join("tls").join("key.pem");
+
+                    let tls_cert_path = datadir.join("tls").join("cert.pem");
+
+                    // Create the certificate.
+                    Self::generate_self_signed_certificate(
+                        tls_key_path.clone(),
+                        tls_cert_path.clone(),
+                        subject_alt_names,
+                    )?;
+
+                    info!("TLS private key saved to path={}", tls_key_path.display());
+                    info!("TLS certificate saved to path={}", tls_cert_path.display());
+                }
+
+                // Assemble TLS configuration from file.
+                let tls_config = self.create_tls_config(datadir)?;
+
+                // Electrum TLS accept loop.
+                let tls_listener = TcpListener::bind(electrum_addr_tls)
+                    .await
+                    .map(Arc::new)
+                    .map_err(FlorestadError::FailedToBindElectrumServer)?;
+
+                // TLS Acceptor.
+                let tls_acceptor: TlsAcceptor = TlsAcceptor::from(tls_config);
+                task::spawn(client_accept_loop(
+                    tls_listener,
+                    electrum_server.get_notifier(),
+                    Some(tls_acceptor),
+                ));
+                info!("Electrum TLS Server is running at {electrum_addr_tls}");
+            }
+
+            // Electrum Server's main loop.
+            task::spawn(electrum_server.main_loop());
+        }
 
         // Chain provider
         let (sender, receiver) = tokio::sync::oneshot::channel();
