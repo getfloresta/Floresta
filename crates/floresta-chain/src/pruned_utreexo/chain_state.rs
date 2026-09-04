@@ -1032,7 +1032,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             .parameters
             .get_validation_flags(height, block.block_hash());
         #[cfg(not(feature = "bitcoinkernel"))]
-        let flags = 0;
+        let flags = consensus.parameters.get_sigop_flags(block.block_hash());
         let verify_script = self.verify_script(height)?;
 
         Consensus::verify_block_transactions(
@@ -1837,6 +1837,34 @@ mod test {
         chain
             .validate_block_no_acc(&block, HEIGHT, inputs)
             .expect("Block must be valid");
+    }
+
+    #[test]
+    fn test_reject_block_with_too_many_sigops() {
+        const HEIGHT: u32 = 783_426;
+        const BLOCKS: usize = (HEIGHT + 1) as usize;
+
+        let block_file = File::open("./testdata/invalid_block_783426/raw.zst").unwrap();
+        let stxos_file = File::open("./testdata/invalid_block_783426/spent_utxos.zst").unwrap();
+        let (mut block, inputs) = decode_block_and_inputs(block_file, stxos_file);
+
+        assert_eq!(
+            block.block_hash(),
+            bhash!("00000000000000000002ec935e245f8ae70fc68cc828f05bf4cfa002668599e4"),
+        );
+
+        let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled, Some(BLOCKS));
+        read_lock!(chain)
+            .consensus
+            .check_block(&block, HEIGHT)
+            .expect("context-free checks must pass");
+
+        let prev_hash = store_mtp_headers(&chain, Network::Bitcoin, HEIGHT - 1, block.header.time);
+        block.header.prev_blockhash = prev_hash;
+        match chain.validate_block_no_acc(&block, HEIGHT, inputs) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManySigops)) => {}
+            other => panic!("expected TooManySigops, got {other:?}"),
+        }
     }
 
     #[test]

@@ -22,6 +22,7 @@ use bitcoin::block::Header as BlockHeader;
 use bitcoin::blockdata::Weight;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoin::consensus::serialize;
+use bitcoin::constants::MAX_BLOCK_SIGOPS_COST;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
 use bitcoin::script;
@@ -38,6 +39,7 @@ use swift_sync_agg::SwiftSyncAgg;
 use super::chainparams::ChainParams;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
+use super::sigops::SigopExt;
 use super::udata;
 use crate::TransactionError;
 use crate::extensions::Bip30UnspendableExt;
@@ -181,6 +183,7 @@ impl Consensus {
     /// - The first transaction in the block must be coinbase
     /// - The coinbase transaction must have the correct value (subsidy + fees)
     /// - The block must not create more coins than allowed
+    /// - The block's signature-operation cost must not exceed the consensus limit
     /// - No output may be spent more than once within the block
     /// - All transactions must be valid, as verified by [`Consensus::verify_transaction`]
     #[allow(unused)]
@@ -200,10 +203,19 @@ impl Consensus {
 
         // Total block fees that the miner can claim in the coinbase
         let mut fee = Amount::ZERO;
+        let mut sigop_cost: usize = 0;
 
         for (n, transaction) in transactions.iter().enumerate() {
             if !Self::is_final_transaction(transaction, height, lock_time_cutoff) {
                 Err(BlockValidationErrors::NonFinalTransaction)?;
+            }
+
+            // Match Bitcoin Core's ConnectBlock: accumulate GetTransactionSigOpCost before
+            // spending the inputs, including the coinbase transaction's legacy sigops.
+            // https://github.com/bitcoin/bitcoin/blob/v31.0/src/validation.cpp#L2519-L2569
+            sigop_cost = sigop_cost.saturating_add(transaction.sigop_cost(&utxos, flags));
+            if sigop_cost > MAX_BLOCK_SIGOPS_COST as usize {
+                Err(BlockValidationErrors::TooManySigops)?;
             }
 
             if n == 0 {
@@ -557,6 +569,7 @@ impl Consensus {
     /// - BIP34 coinbase-encoded height once activated (at `bip34_height`)
     /// - if there are SegWit transactions, the witness commitment is present and correct
     /// - total block weight is within the 4,000,000 WU limit
+    /// - legacy signature-operation cost is within the block-wide limit
     pub fn check_block(&self, block: &Block, height: u32) -> Result<Vec<Txid>, BlockchainError> {
         let Some(txids) = Self::check_merkle_root(block) else {
             Err(BlockValidationErrors::BadMerkleRoot)?
@@ -574,6 +587,14 @@ impl Consensus {
 
         if block.weight() > Weight::MAX_BLOCK {
             Err(BlockValidationErrors::BlockTooBig)?;
+        }
+
+        // Match Bitcoin Core's CheckBlock: sum every transaction's legacy sigops at four cost
+        // units each. P2SH and witness costs are added later once prevouts are available.
+        // https://github.com/bitcoin/bitcoin/blob/v31.0/src/validation.cpp#L4001-L4009
+        let sigop_cost: usize = block.txdata.iter().map(|tx| tx.legacy_sigop_cost()).sum();
+        if sigop_cost > MAX_BLOCK_SIGOPS_COST as usize {
+            Err(BlockValidationErrors::TooManySigops)?;
         }
 
         Ok(txids)
@@ -600,6 +621,8 @@ impl Consensus {
     /// Since previous outputs are unavailable, this does **not** verify the coinbase reward,
     /// which depends on total fees (out - in amounts). As a result, the total supply check
     /// described above is weaker than the amount checks performed in traditional AssumeValid.
+    /// P2SH and witness sigop costs likewise require previous outputs and are assumed here;
+    /// [`Consensus::check_block`] still enforces Bitcoin Core's legacy block-wide sigop limit.
     ///
     /// In theory, an attacker with majority hashpower and the ability to insert an invalid
     /// AssumeValid hash into the Floresta codebase could make us accept a chain with excess
@@ -665,15 +688,12 @@ impl Consensus {
                 .all(|input| input.sequence.is_final())
     }
 
-    /// Validates the script size and the number of sigops in a prevout scriptPubKey or scriptSig.
+    /// Rejects scripts that exceed the execution-size limit or begin with `OP_RETURN`.
     fn validate_script_size<F: Fn() -> Txid>(
         script: &ScriptBuf,
         txid: F,
     ) -> Result<(), TransactionError> {
         if Self::is_unspendable(script) {
-            return Err(tx_err!(txid, ScriptError));
-        }
-        if script.count_sigops() > 80_000 {
             return Err(tx_err!(txid, ScriptError));
         }
         Ok(())
@@ -1002,7 +1022,11 @@ mod tests {
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use bitcoin::opcodes::OP_TRUE;
+    use bitcoin::opcodes::Opcode;
+    use bitcoin::opcodes::all::OP_CHECKMULTISIG;
+    use bitcoin::opcodes::all::OP_CHECKSIG;
     use bitcoin::opcodes::all::OP_NOP;
+    use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use floresta_common::assert_err;
     use floresta_common::assert_ok;
@@ -1015,6 +1039,8 @@ mod tests {
     use rand::seq::SliceRandom;
 
     use super::*;
+    use crate::pruned_utreexo::chainparams::VERIFY_P2SH;
+    use crate::pruned_utreexo::chainparams::VERIFY_WITNESS;
 
     #[macro_export]
     /// Macro for creating a TxOut
@@ -1377,6 +1403,136 @@ mod tests {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::BlockTooBig)) => (),
             other => panic!("We should have `BlockValidationErrors::BlockTooBig`, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_legacy_block_sigops_limit() {
+        let consensus = Consensus::from(Network::Bitcoin);
+        let mut block = genesis_block(Network::Bitcoin);
+        let sigop_script = |count| ScriptBuf::from_bytes(vec![OP_CHECKSIG.to_u8(); count]);
+
+        // Legacy sigops cost four units: 20,000 reach the 80,000 limit
+        block.txdata[0].output[0].script_pubkey = sigop_script(10_000);
+        block.txdata.push(build_tx(
+            vec![txin!(dummy_outpoint())],
+            vec![txout!(0, sigop_script(10_000))],
+        ));
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        let cost: usize = block.txdata.iter().map(|tx| tx.legacy_sigop_cost()).sum();
+        assert_eq!(cost, 80_000);
+        assert_ok!(consensus.check_block(&block, 0));
+
+        // If we reach 20,001 sigops the cost is 80,004 so it must be rejected
+        block.txdata[1].output.push(txout!(0, sigop_script(1)));
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        let cost: usize = block.txdata.iter().map(|tx| tx.legacy_sigop_cost()).sum();
+        assert_eq!(cost, 80_004);
+        match consensus.check_block(&block, 0) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManySigops)) => (),
+            other => panic!("Expected TooManySigops, got: {other:?}"),
+        }
+    }
+
+    /// Validates a coinbase plus a P2SH spend at the 80,000-cost boundary.
+    ///
+    /// Here, push-only means scriptSig is just a data push of the redeem script.
+    /// Otherwise it starts with the non-push opcode `OP_CHECKSIG`.
+    ///
+    /// With `VERIFY_P2SH`, `(extra_redeem_opcode, push_only)` gives:
+    /// - `(None, true) -> 80,000`,
+    /// - `(Some(OP_CHECKSIG), true) -> 80,004`,
+    /// - `(None, false) -> 40,004`,
+    /// - `(Some(OP_CHECKSIG), false) -> 40,004`.
+    ///
+    /// A non-push-only scriptSig makes Core ignore all redeem-script sigops;
+    /// only the prepended `OP_CHECKSIG` adds four legacy cost units.
+    fn verify_p2sh_sigop_block(
+        extra_redeem_opcode: Option<Opcode>,
+        push_only: bool,
+        flags: u32,
+    ) -> Result<(), BlockchainError> {
+        // Legacy CHECKMULTISIG costs 20 sigops * 4 units: 500 * 20 * 4 = 40,000.
+        let coinbase = build_tx(
+            vec![txin!(OutPoint::null(), ScriptBuf::from_bytes(vec![0; 2]))],
+            vec![txout!(
+                0,
+                ScriptBuf::from_bytes(vec![OP_CHECKMULTISIG.to_u8(); 500])
+            )],
+        );
+
+        // With no preceding OP_N, accurate P2SH counting also gives 500 * 20 * 4 = 40,000.
+        let mut redeem = vec![OP_CHECKMULTISIG.to_u8(); 500];
+        if let Some(opcode) = extra_redeem_opcode {
+            redeem.push(opcode.to_u8());
+        }
+        let redeem = ScriptBuf::from_bytes(redeem);
+
+        let mut script_sig = ScriptBuf::builder()
+            .push_slice(PushBytesBuf::try_from(redeem.clone().into_bytes()).unwrap())
+            .into_script();
+
+        if !push_only {
+            script_sig =
+                ScriptBuf::from_bytes([&[OP_CHECKSIG.to_u8()], script_sig.as_bytes()].concat());
+        }
+
+        let spend = build_tx(
+            vec![txin!(dummy_outpoint(), script_sig)],
+            vec![txout!(0, ScriptBuf::new())],
+        );
+        let utxos = HashMap::from([(
+            dummy_outpoint(),
+            UtxoData {
+                txout: txout!(0, ScriptBuf::new_p2sh(&redeem.script_hash())),
+                is_coinbase: false,
+                creation_height: 0,
+                creation_time: 0,
+            },
+        )]);
+        Consensus::verify_block_transactions(
+            0,
+            0,
+            utxos,
+            &[coinbase, spend],
+            Amount::ZERO,
+            false,
+            flags,
+        )
+    }
+
+    #[test]
+    fn test_contextual_block_sigops_limit() {
+        let flags = VERIFY_P2SH | VERIFY_WITNESS;
+
+        // Coinbase legacy cost and the P2SH redeem-script cost are 40,000 each.
+        assert_ok!(verify_p2sh_sigop_block(None, true, flags));
+
+        // Exceeds the 80,000 cost limit by 4.
+        match verify_p2sh_sigop_block(Some(OP_CHECKSIG), true, flags) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManySigops)) => (),
+            other => panic!("Expected TooManySigops, got: {other:?}"),
+        }
+
+        // P2SH sigops are flag-gated.
+        assert_ok!(verify_p2sh_sigop_block(Some(OP_CHECKSIG), true, 0));
+        // Core ignores the redeem script unless the entire scriptSig is push-only.
+        assert_ok!(verify_p2sh_sigop_block(Some(OP_CHECKSIG), false, flags));
+
+        let wpkh_spend = build_tx(vec![txin!(dummy_outpoint())], vec![]);
+        let utxos = HashMap::from([(
+            dummy_outpoint(),
+            UtxoData {
+                txout: txout!(0, ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::all_zeros())),
+                is_coinbase: false,
+                creation_height: 0,
+                creation_time: 0,
+            },
+        )]);
+        // Enabling P2SH alone must not also enable witness accounting.
+        assert_eq!(wpkh_spend.sigop_cost(&utxos, VERIFY_P2SH), 0);
+        assert_eq!(wpkh_spend.sigop_cost(&utxos, flags), 1);
     }
 
     #[test]
