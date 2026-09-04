@@ -69,6 +69,7 @@ use crate::extensions::HeaderExt;
 use crate::extensions::WorkExt;
 use crate::prelude::*;
 use crate::pruned_utreexo::IBDState;
+use crate::pruned_utreexo::consensus::MAX_FUTURE_BLOCK_TIME;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
 use crate::write_lock;
@@ -221,7 +222,11 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         Ok(())
     }
 
-    fn validate_header(&self, block_header: &BlockHeader) -> Result<BlockHash, BlockchainError> {
+    fn validate_header(
+        &self,
+        block_header: &BlockHeader,
+        current_time: u32,
+    ) -> Result<BlockHash, BlockchainError> {
         let prev_block = self.get_disk_block_header(&block_header.prev_blockhash)?;
         let height = prev_block
             .height()
@@ -236,7 +241,18 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             Err(BlockValidationErrors::NotEnoughPow)?;
         }
 
+        let previous_mtp = self.median_time_past(*prev_block)?;
+        if block_header.time <= previous_mtp {
+            Err(BlockValidationErrors::TimeTooOld)?;
+        }
+
         self.check_bip94_block(block_header, height)?;
+
+        // Check time
+        if u64::from(block_header.time) > u64::from(current_time) + u64::from(MAX_FUTURE_BLOCK_TIME)
+        {
+            Err(BlockValidationErrors::TimeTooNew(block_header.block_hash()))?;
+        }
 
         let block_hash = block_header
             .validate_pow(actual_target)
@@ -1432,7 +1448,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         Ok(())
     }
 
-    fn accept_header(&self, header: BlockHeader) -> Result<(), BlockchainError> {
+    fn accept_header(&self, header: BlockHeader, current_time: u32) -> Result<(), BlockchainError> {
         let disk_header = self.get_disk_block_header(&header.block_hash());
 
         match disk_header {
@@ -1453,7 +1469,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         let best_block = self.get_best_block()?;
 
         // Do validation in this header
-        let block_hash = self.validate_header(&header)?;
+        let block_hash = self.validate_header(&header, current_time)?;
 
         // Update our current tip
         if header.prev_blockhash == best_block.1 {
@@ -1596,6 +1612,7 @@ mod test {
     use crate::extensions::WorkExt;
     use crate::prelude::HashMap;
     use crate::pruned_utreexo::consensus::Consensus;
+    use crate::pruned_utreexo::consensus::MAX_FUTURE_BLOCK_TIME;
     use crate::pruned_utreexo::error::BlockValidationErrors;
     use crate::pruned_utreexo::utxo_data::UtxoData;
     use crate::txin;
@@ -1604,6 +1621,10 @@ mod test {
     const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
     const TEST_FORK_FILE_SIZE: usize = 10_000;
     const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
+
+    // A mock timestamp high enough so time checks dont bother unrelated tests.
+    const MOCK_TIME: u32 = u32::MAX;
+
     fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
@@ -1955,6 +1976,99 @@ mod test {
         );
     }
 
+    /// Grinds the header's nonce until its PoW is valid for its own target.
+    ///
+    /// This is fast because [`EASIEST_REGTEST_TARGET_BITS`] accepts about half of all
+    /// hashes, so on average we only need two attempts.
+    fn grind_pow(mut header: BlockHeader) -> BlockHeader {
+        while header.validate_pow(header.target()).is_err() {
+            header.nonce += 1;
+        }
+        header
+    }
+
+    /// Extends the chain tip with 11 headers of increasing time via `accept_header`,
+    /// returning the times and the tip hash.
+    fn accept_mtp_headers(chain: &ChainState<FlatChainStore>) -> (Vec<u32>, BlockHash) {
+        let genesis = genesis_block(Network::Regtest);
+        let mut prev_hash = genesis.block_hash();
+        let mut times = Vec::with_capacity(11);
+
+        for i in 1..=11u32 {
+            let time = genesis.header.time + i * 600;
+            let header = grind_pow(BlockHeader {
+                version: HeaderVersion::TWO,
+                prev_blockhash: prev_hash,
+                merkle_root: genesis.header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+                nonce: 0,
+            });
+
+            chain.accept_header(header, MOCK_TIME).unwrap();
+            prev_hash = header.block_hash();
+            times.push(time);
+        }
+
+        (times, prev_hash)
+    }
+
+    #[test]
+    fn accept_header_rejects_time_at_or_below_mtp() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let (times, tip_hash) = accept_mtp_headers(&chain);
+        let mtp = median_time(times);
+
+        let candidate = |time| {
+            grind_pow(BlockHeader {
+                version: HeaderVersion::TWO,
+                prev_blockhash: tip_hash,
+                merkle_root: genesis_block(Network::Regtest).header.merkle_root,
+                time,
+                bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+                nonce: 0,
+            })
+        };
+
+        // A timestamp equal to the previous MTP is too old, one second later is valid
+        assert!(matches!(
+            chain.accept_header(candidate(mtp), MOCK_TIME),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::TimeTooOld
+            ))
+        ));
+
+        // The same valid header is too new for an external time more than two hours behind it
+        let valid = candidate(mtp + 1);
+        assert!(matches!(
+            chain.accept_header(valid, valid.time - MAX_FUTURE_BLOCK_TIME - 1),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::TimeTooNew(hash)
+            )) if hash == valid.block_hash()
+        ));
+
+        // Exactly two hours behind is still acceptable
+        assert_ok!(chain.accept_header(valid, valid.time - MAX_FUTURE_BLOCK_TIME));
+    }
+
+    #[test]
+    fn accept_header_saturates_current_time() {
+        // An extreme current time must saturate the future-time bound, not overflow
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let genesis = genesis_block(Network::Regtest);
+
+        let header = grind_pow(BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: genesis.block_hash(),
+            merkle_root: genesis.header.merkle_root,
+            time: genesis.header.time + 600,
+            bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+            nonce: 0,
+        });
+
+        assert_ok!(chain.accept_header(header, u32::MAX));
+    }
+
     #[test]
     fn accept_mainnet_headers() {
         // Accepts the first 10,237 mainnet headers
@@ -1966,7 +2080,7 @@ mod test {
         let chain = setup_test_chain(Network::Bitcoin, AssumeValidArg::Hardcoded, None);
 
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
             headers.push(header);
         }
         assert_eq!(headers.len(), 10_237);
@@ -2027,7 +2141,7 @@ mod test {
 
         let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded, None);
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
         }
     }
 
@@ -2112,7 +2226,7 @@ mod test {
 
         // Connect the first 10 blocks after genesis
         for block in short_chain {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
             chain
                 .connect_block(&block, Proof::default(), HashMap::new(), Vec::new())
                 .unwrap();
@@ -2134,7 +2248,7 @@ mod test {
 
         // Then accept a fork chain with 11 new blocks, building on the previous height 5 block
         for fork_block in long_chain.iter() {
-            chain.accept_header(fork_block.header).unwrap();
+            chain.accept_header(fork_block.header, MOCK_TIME).unwrap();
         }
 
         let expected = (
@@ -2199,7 +2313,7 @@ mod test {
         // Accept 10 headers; accept_header updates inner.best_block
         let mut count = 0;
         while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
             count += 1;
             if count == 10 {
                 break;
@@ -2247,7 +2361,7 @@ mod test {
 
         // Accept all 10 main-chain headers
         for block in &short_chain {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
         }
 
         // Only one tip so far (the main chain)
@@ -2256,7 +2370,7 @@ mod test {
 
         // Accept only 4 fork headers (less work than main chain: 4 < 5 blocks after fork point)
         for block in &long_chain[..4] {
-            chain.accept_header(block.header).unwrap();
+            chain.accept_header(block.header, MOCK_TIME).unwrap();
         }
 
         // Now we should have 2 tips: main chain + fork

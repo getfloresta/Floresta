@@ -34,6 +34,8 @@ use rustreexo::proof::Proof;
 
 const DEFAULT_TEST_CHAINSTORE_SIZE: usize = 32_768;
 const TEST_FORK_FILE_SIZE: usize = 10_000;
+// A fixed timestamp far past all the test data timestamps
+const MOCK_TIME: u32 = 2_000_000_000;
 
 /// Reads the first 151 blocks (or 150 blocks on top of genesis) from `regtest_blocks.txt`
 fn read_blocks_txt() -> Vec<Block> {
@@ -200,7 +202,7 @@ fn accept_mainnet_headers_benchmark(c: &mut Criterion) {
             |chain| {
                 headers
                     .iter()
-                    .for_each(|header| chain.accept_header(*header).unwrap())
+                    .for_each(|header| chain.accept_header(*header, MOCK_TIME).unwrap())
             },
             BatchSize::SmallInput,
         )
@@ -216,7 +218,7 @@ fn accept_headers_benchmark(c: &mut Criterion) {
             |chain| {
                 blocks
                     .iter()
-                    .for_each(|block| chain.accept_header(block.header).unwrap());
+                    .for_each(|block| chain.accept_header(block.header, MOCK_TIME).unwrap());
             },
             BatchSize::SmallInput,
         )
@@ -231,7 +233,7 @@ fn connect_blocks_benchmark(c: &mut Criterion) {
         // We need to accept the headers before connecting blocks
         blocks
             .iter()
-            .for_each(|block| chain.accept_header(block.header).unwrap());
+            .for_each(|block| chain.accept_header(block.header, MOCK_TIME).unwrap());
 
         chain
     };

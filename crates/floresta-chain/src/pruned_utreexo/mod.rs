@@ -191,8 +191,9 @@ pub trait UpdatableChainstate {
     /// makes some basic checks on a header and saves it on disk. We only accept a block as
     /// valid after calling connect_block.
     ///
-    /// This function returns whether this block is on our best-known chain, or in a fork
-    fn accept_header(&self, header: BlockHeader) -> Result<(), BlockchainError>;
+    /// `current_time` is the current UNIX timestamp in seconds, used to reject headers
+    /// timestamped too far in the future.
+    fn accept_header(&self, header: BlockHeader, current_time: u32) -> Result<(), BlockchainError>;
     /// Not used for now, but in a future blockchain with mempool, we can process transactions
     /// that are not in a block yet.
     fn handle_transaction(&self) -> Result<(), BlockchainError>;
@@ -263,8 +264,8 @@ impl<T: UpdatableChainstate> UpdatableChainstate for Arc<T> {
         T::connect_block(self, block, proof, inputs, del_hashes)
     }
 
-    fn accept_header(&self, header: BlockHeader) -> Result<(), BlockchainError> {
-        T::accept_header(self, header)
+    fn accept_header(&self, header: BlockHeader, current_time: u32) -> Result<(), BlockchainError> {
+        T::accept_header(self, header, current_time)
     }
 
     fn get_root_hashes(&self) -> Vec<BitcoinNodeHash> {

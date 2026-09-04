@@ -1539,6 +1539,9 @@ mod tests {
         );
     }
 
+    // A fixed timestamp far past all the test data timestamps
+    const MOCK_TIME: u32 = 2_000_000_000;
+
     fn get_test_chainstore(id: Option<u64>) -> Result<FlatChainStore, FlatChainstoreError> {
         let test_id = id.unwrap_or_else(rand::random::<u64>);
 
@@ -1901,7 +1904,7 @@ mod tests {
         let mut buffer = uncompressed.as_slice();
 
         while let Ok(header) = Header::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
         }
     }
 
@@ -1915,7 +1918,7 @@ mod tests {
         let mut buffer = uncompressed.as_slice();
 
         while let Ok(header) = Header::consensus_decode(&mut buffer) {
-            chain.accept_header(header).unwrap();
+            chain.accept_header(header, MOCK_TIME).unwrap();
         }
     }
 
