@@ -130,6 +130,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             serde_json::to_string_pretty(&client.get_deployment_info(blockhash)?)?
         }
         Methods::GetAddrManInfo => serde_json::to_string_pretty(&client.get_addrman_info()?)?,
+        Methods::GetChainTips => serde_json::to_string_pretty(&client.get_chain_tips()?)?,
     })
 }
 
@@ -464,4 +465,13 @@ pub enum Methods {
         disable_help_subcommand = true
     )]
     GetAddrManInfo,
+
+    #[doc = include_str!("../../../doc/rpc/getchaintips.md")]
+    #[command(
+        name = "getchaintips",
+        about = "Return information about all known tips in the block tree",
+        long_about = Some(include_str!("../../../doc/rpc/getchaintips.md")),
+        disable_help_subcommand = true
+    )]
+    GetChainTips,
 }
