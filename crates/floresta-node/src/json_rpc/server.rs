@@ -331,9 +331,12 @@ async fn handle_json_rpc_request(
             let vout = get_at(&params, 1, "vout")?;
             let script: String = get_at(&params, 2, "script")?;
             let script = ScriptBuf::from_hex(&script).map_err(|_| JsonRpcError::InvalidScript)?;
-            let height = get_at(&params, 3, "height")?;
+            let height = get_at(&params, 3, "height_hint")?;
 
-            state.clone().find_tx_out(txid, vout, script, height).await
+            state
+                .find_tx_out(txid, vout, script, height)
+                .await
+                .map(|v| serde_json::to_value(v).expect(SERIALIZATION_EXPECT_MSG))
         }
 
         "getblock" => {
