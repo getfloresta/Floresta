@@ -347,6 +347,7 @@ mod tests {
         pub heights: HashMap<BlockHash, u32>,
         pub storage_errors: HashSet<BlockHash>,
         pub chain_height: u32,
+        pub fail_get_height: bool,
     }
 
     impl MockBlockchainInterface {
@@ -356,6 +357,7 @@ mod tests {
                 heights: HashMap::new(),
                 storage_errors: HashSet::new(),
                 chain_height: 0,
+                fail_get_height: false,
             }
         }
 
@@ -385,22 +387,41 @@ mod tests {
         }
 
         fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
-            self.heights
+            let hash = self
+                .heights
                 .iter()
                 .find(|(_, h)| **h == height)
                 .map(|(hash, _)| *hash)
-                .ok_or(MockBlockchainError::NotFound)
+                .ok_or(MockBlockchainError::NotFound)?;
+
+            if self.storage_errors.contains(&hash) {
+                return Err(MockBlockchainError::Storage);
+            }
+
+            Ok(hash)
         }
 
         fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
+            if self.storage_errors.contains(hash) {
+                return Err(MockBlockchainError::Storage);
+            }
+
             Ok(self.heights.get(hash).cloned())
         }
 
         fn get_height(&self) -> Result<u32, Self::Error> {
+            if self.fail_get_height {
+                return Err(MockBlockchainError::Storage);
+            }
+
             Ok(self.chain_height)
         }
 
-        fn get_work(&self, _tip: BlockHash) -> Result<Work, Self::Error> {
+        fn get_work(&self, tip: BlockHash) -> Result<Work, Self::Error> {
+            if self.storage_errors.contains(&tip) {
+                return Err(MockBlockchainError::Storage);
+            }
+
             let work_hex = "00000000000000000000000000000000000000000000000000000bb80bb80bb8";
             Ok(Work::from_hex(&format!("0x{work_hex}")).expect("hardcoded work"))
         }
@@ -521,6 +542,69 @@ mod tests {
         (mock_chain, headers)
     }
 
+    /// Real mainnet headers of the two BIP-30 duplicated blocks.
+    const BLOCK_91722_HEADER_HEX: &str = "0100000042ba7629c32525ff7c74ca323fdc4c6d5b5c4410901aeb4f04300a000000000068b45f58b674e94eb881cd67b04c2cba07fe5552dbf1d5385637b0d4073dbfe3c89fdf4c56720e1ba67373ee";
+    const BLOCK_91812_HEADER_HEX: &str = "010000000f362bdc16f2f880097c71fd3296c01b835c8b034e4d2939e8af02000000000065a62f2f6b9102d6eb5eee95be5ec3fcdfa27cf2117deeebefc6be53761d99499423e04c56720e1bb4518a45";
+
+    fn bip30_block(header_hex: &str) -> Block {
+        let header: Header = deserialize_hex(header_hex).expect("Failed to deserialize header");
+        Block {
+            header,
+            txdata: vec![],
+        }
+    }
+
+    #[test]
+    fn test_bip30_height_91722_true() {
+        let block = bip30_block(BLOCK_91722_HEADER_HEX);
+        assert!(block.is_bip30_unspendable(91722));
+    }
+
+    #[test]
+    fn test_bip30_height_91812_true() {
+        let block = bip30_block(BLOCK_91812_HEADER_HEX);
+        assert!(block.is_bip30_unspendable(91812));
+    }
+
+    #[test]
+    fn test_bip30_wrong_height_returns_false() {
+        let block_91722 = bip30_block(BLOCK_91722_HEADER_HEX);
+        let block_91812 = bip30_block(BLOCK_91812_HEADER_HEX);
+
+        // Each hash is only "unspendable" at its own height
+        assert!(!block_91722.is_bip30_unspendable(91812));
+        assert!(!block_91812.is_bip30_unspendable(91722));
+    }
+
+    #[test]
+    fn test_bip30_other_heights_return_false() {
+        let block_91722 = bip30_block(BLOCK_91722_HEADER_HEX);
+        let block_91812 = bip30_block(BLOCK_91812_HEADER_HEX);
+
+        for height in [0, 1, 91721, 91723, 91811, 91813] {
+            assert!(
+                !block_91722.is_bip30_unspendable(height),
+                "91722 hash should not be unspendable at height {height}"
+            );
+            assert!(
+                !block_91812.is_bip30_unspendable(height),
+                "91812 hash should not be unspendable at height {height}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bip30_unrelated_block_returns_false() {
+        let block = Block {
+            header: get_genesis_header(),
+            txdata: vec![],
+        };
+
+        for height in [0, 91722, 91812] {
+            assert!(!block.is_bip30_unspendable(height));
+        }
+    }
+
     #[test]
     fn test_calculate_median_time_past_more_than_11_blocks() {
         let (mock_chain, headers) = get_chain_and_headers(21);
@@ -632,6 +716,69 @@ mod tests {
     }
 
     #[test]
+    fn test_get_next_block_hash_swallows_errors() {
+        let (mut mock_chain, headers) = get_chain_and_headers(5);
+
+        // The block at height 3 fails to load, so requesting the next hash
+        // of the block at height 2 must be treated as "no next block".
+        let next_hash = headers[3].block_hash();
+        mock_chain.storage_errors.insert(next_hash);
+
+        let header = headers[2];
+        let next = header
+            .get_next_block_hash(&mock_chain)
+            .expect("Lookup errors should be swallowed and return Ok");
+
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_get_previous_block_header() {
+        let (mock_chain, headers) = get_chain_and_headers(5);
+
+        // headers[1].prev_blockhash points to the genesis header
+        let header = headers[1];
+        let prev_header = header
+            .get_previous_block_header(&mock_chain)
+            .expect("Failed to get previous block header");
+
+        assert_eq!(prev_header, headers[0]);
+    }
+
+    #[test]
+    fn test_get_previous_block_header_missing() {
+        let (mock_chain, headers) = get_chain_and_headers(5);
+
+        // Point the header to a block that is not in the chain
+        let mut header = headers[1];
+        header.prev_blockhash = BlockHash::from_byte_array([0xabu8; 32]);
+
+        let result = header.get_previous_block_header(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "Missing previous header should be propagated as a Chain error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_get_previous_block_header_storage_error() {
+        let (mut mock_chain, headers) = get_chain_and_headers(5);
+
+        let genesis_hash = headers[0].block_hash();
+        mock_chain.storage_errors.insert(genesis_hash);
+
+        // headers[1].prev_blockhash = genesis hash, which now fails to load
+        let header = headers[1];
+        let result = header.get_previous_block_header(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "Storage failure should be propagated as a Chain error, got {result:?}"
+        );
+    }
+
+    #[test]
     fn test_get_bits() {
         let header = get_genesis_header();
         let bits_hex = header.get_bits_hex();
@@ -660,6 +807,32 @@ mod tests {
     }
 
     #[test]
+    fn test_get_confirmations_at_tip() {
+        let (mock_chain, headers) = get_chain_and_headers(5);
+
+        let tip = headers[headers.len() - 1];
+        let confirmations = tip
+            .get_confirmations(&mock_chain)
+            .expect("Failed to get confirmations");
+
+        assert_eq!(confirmations, 1);
+    }
+
+    #[test]
+    fn test_get_confirmations_propagates_chain_height_error() {
+        let (mut mock_chain, headers) = get_chain_and_headers(5);
+        mock_chain.fail_get_height = true;
+
+        let header = headers[2];
+        let result = header.get_confirmations(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "Chain height failure should be propagated, got {result:?}"
+        );
+    }
+
+    #[test]
     fn test_get_height() {
         let (mock_chain, headers) = get_chain_and_headers(5);
         let height_expected = 3;
@@ -678,6 +851,38 @@ mod tests {
     }
 
     #[test]
+    fn test_get_height_returns_block_not_found() {
+        let (mock_chain, headers) = get_chain_and_headers(5);
+
+        // A header that is not in the chain at all
+        let mut header = headers[0];
+        header.nonce = 0;
+
+        let result = header.get_height(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::BlockNotFound)),
+            "Unknown block should map to BlockNotFound, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_get_height_propagates_storage_error() {
+        let (mut mock_chain, headers) = get_chain_and_headers(5);
+
+        let hash = headers[2].block_hash();
+        mock_chain.storage_errors.insert(hash);
+
+        let header = headers[2];
+        let result = header.get_height(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "Storage failure should be propagated as a Chain error, got {result:?}"
+        );
+    }
+
+    #[test]
     fn test_get_target() {
         let header = get_genesis_header();
         let target_hex = header.get_target_hex();
@@ -692,6 +897,22 @@ mod tests {
         let header = get_genesis_header();
         let version_hex = header.get_version_hex();
         assert_eq!(version_hex, "00000001");
+    }
+
+    #[test]
+    fn test_calculate_chain_work_propagates_storage_error() {
+        let (mut mock_chain, headers) = get_chain_and_headers(5);
+
+        let hash = headers[2].block_hash();
+        mock_chain.storage_errors.insert(hash);
+
+        let header = headers[2];
+        let result = header.calculate_chain_work(&mock_chain);
+
+        assert!(
+            matches!(result, Err(HeaderExtError::Chain(_))),
+            "Work lookup failure should be propagated, got {result:?}"
+        );
     }
 
     #[test]
@@ -730,6 +951,27 @@ mod tests {
     }
 
     #[test]
+    fn test_multiply_work_by_u32_factor_zero() {
+        let work = Work::from_be_bytes([0xffu8; 32]);
+        let result = work.multiply_work_by_u32(0).unwrap();
+
+        assert_eq!(result, Work::from_be_bytes([0u8; 32]));
+    }
+
+    #[test]
+    fn test_multiply_work_by_u32_factor_one() {
+        let work_bytes: [u8; 32] = [
+            0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0,
+            0, 0, 4,
+        ];
+        let work = Work::from_be_bytes(work_bytes);
+
+        let result = work.multiply_work_by_u32(1).unwrap();
+
+        assert_eq!(result, work);
+    }
+
+    #[test]
     fn test_calculate_chain_work() {
         let (mock_chain, headers) = get_chain_and_headers(3000);
         let header = headers[headers.len() - 1];
@@ -744,5 +986,19 @@ mod tests {
 
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(work, expected_work);
+    }
+
+    #[test]
+    fn test_work_to_string_hex() {
+        let work_bytes: [u8; 32] = [
+            0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0,
+            0, 0, 4,
+        ];
+        let work = Work::from_be_bytes(work_bytes);
+
+        assert_eq!(
+            work.to_string_hex(),
+            "0000000300000001000000000000000200000000000000030000000000000004"
+        );
     }
 }
