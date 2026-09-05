@@ -3,11 +3,13 @@
 use core::error;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use bitcoin::Amount;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::TxOut;
@@ -308,7 +310,29 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "max": MAX_COUNT,
                 })
             }
-            "blockchain.estimatefee" => json_rpc_res!(request, 0.0001),
+            "blockchain.estimatefee" => {
+                let target = request
+                    .params
+                    .first()
+                    .and_then(|v| v.as_u64())
+                    .and_then(|t| usize::try_from(t).ok())
+                    .unwrap_or(1);
+
+                // estimate_fee return sat/kvB.
+                // Electrum expects BTC/kb. Since kvB ≈ kB;
+                // sat/kvB / 100_000_000 = BTC/kB.
+                let fee_rate_sat_per_kvb = self
+                    .chain
+                    .estimate_fee(target)
+                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+                // u64 -> f64 conversion is exact for this value
+                #[allow(clippy::as_conversions)]
+                let fee_btc_per_kb =
+                    Amount::from_btc(fee_rate_sat_per_kvb / Amount::ONE_BTC.to_sat() as f64)
+                        .unwrap_or(Amount::ZERO)
+                        .to_btc();
+                json_rpc_res!(request, fee_btc_per_kb)
+            }
             "blockchain.headers.subscribe" => {
                 let (height, hash) = self
                     .chain
@@ -1315,7 +1339,7 @@ mod test {
 
         let batch_response = send_request(batch_req, port).await.unwrap();
 
-        assert_eq!(batch_response[0]["result"], 0.0001);
+        assert_eq!(batch_response[0]["result"], 0.00000001);
         assert_eq!(batch_response[1]["result"], 0.00001);
     }
 
