@@ -10,9 +10,9 @@ use bitcoin::consensus;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
+use bitcoin::hashes::HashEngine;
 use bitcoin::hashes::sha256;
-use sha2::Digest;
-use sha2::Sha512_256;
+use bitcoin::hashes::sha512_256;
 
 use crate::prelude::Box;
 use crate::prelude::Vec;
@@ -48,17 +48,19 @@ impl LeafData {
             .consensus_encode(&mut ser_utxo)
             .expect("serializing TxOut never fails: Vec<u8>::Write always returns Ok");
 
-        let leaf_hash = Sha512_256::new()
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(self.block_hash)
-            .chain_update(self.prevout.txid)
-            .chain_update(self.prevout.vout.to_le_bytes())
-            .chain_update(self.header_code.to_le_bytes())
-            .chain_update(ser_utxo)
-            .finalize();
+        let mut engine = sha512_256::Hash::engine();
 
-        sha256::Hash::from_byte_array(leaf_hash.into())
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&self.block_hash[..]);
+        engine.input(&self.prevout.txid[..]);
+        engine.input(&self.prevout.vout.to_le_bytes());
+        engine.input(&self.header_code.to_le_bytes());
+        engine.input(&ser_utxo);
+
+        let leaf_hash = sha512_256::Hash::from_engine(engine);
+
+        sha256::Hash::from_byte_array(leaf_hash.to_byte_array())
     }
 }
 
@@ -202,11 +204,11 @@ pub mod proof_util {
     use bitcoin::blockdata::script::Instruction;
     use bitcoin::consensus::Encodable;
     use bitcoin::hashes::Hash;
+    use bitcoin::hashes::HashEngine;
     use bitcoin::hashes::sha256;
+    use bitcoin::hashes::sha512_256;
     use floresta_common::impl_error_from;
     use rustreexo::node_hash::BitcoinNodeHash;
-    use sha2::Digest;
-    use sha2::Sha512_256;
 
     use super::LeafData;
     use crate::BlockchainError;
@@ -345,17 +347,19 @@ pub mod proof_util {
             height << 1
         };
 
-        let leaf_hash = Sha512_256::new()
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(UTREEXO_TAG_V1)
-            .chain_update(block_hash)
-            .chain_update(txid)
-            .chain_update(vout.to_le_bytes())
-            .chain_update(header_code.to_le_bytes())
-            .chain_update(ser_utxo)
-            .finalize();
+        let mut engine = sha512_256::Hash::engine();
 
-        sha256::Hash::from_byte_array(leaf_hash.into())
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&UTREEXO_TAG_V1);
+        engine.input(&block_hash[..]);
+        engine.input(&txid[..]);
+        engine.input(&vout.to_le_bytes());
+        engine.input(&header_code.to_le_bytes());
+        engine.input(&ser_utxo);
+
+        let leaf_hash = sha512_256::Hash::from_engine(engine);
+
+        sha256::Hash::from_byte_array(leaf_hash.to_byte_array())
     }
 
     /// From a block, gets the roots that will be included on the acc, certifying
@@ -589,6 +593,8 @@ mod test {
     use bitcoin::absolute::LockTime;
     use bitcoin::blockdata::script;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::hashes::Hash;
+    use bitcoin::hashes::sha256;
     use bitcoin::opcodes::all::OP_NOP;
     use bitcoin::opcodes::all::OP_PUSHBYTES_1;
     use bitcoin::transaction::Version;
@@ -825,5 +831,35 @@ mod test {
             "expected GenesisCreationHeight, got {:?}",
             err.kind
         );
+    }
+
+    #[test]
+    fn test_leaf_hash_known_vector() {
+        // Precomputed reference hash generated from the original sha2::Sha512_256 implementation
+        // using deterministic test inputs to ensure backwards compatibility.
+        let block_hash = BlockHash::from_byte_array([0xAA; 32]);
+        let txid = bitcoin::Txid::from_byte_array([0xBB; 32]);
+        let outpoint = OutPoint::new(txid, 42);
+        let header_code = 0xDEADBEEF;
+        let utxo = TxOut {
+            value: Amount::from_sat(100_000_000),
+            script_pubkey: ScriptBuf::new(),
+        };
+        let leaf = LeafData {
+            block_hash,
+            prevout: outpoint,
+            header_code,
+            utxo,
+        };
+
+        let hash = leaf._get_leaf_hashes();
+        // Precomputed reference hash generated from the original sha2::Sha512_256 implementation
+        // using deterministic test inputs to ensure backwards compatibility.
+        let expected: sha256::Hash =
+            "faa30cef15141c86d3066850efdbc4c67690c513c465fb97c67a0ed56f4b05ec"
+                .parse()
+                .unwrap();
+
+        assert_eq!(hash, expected, "Leaf hash changed unexpectedly!");
     }
 }

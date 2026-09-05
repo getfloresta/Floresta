@@ -6,9 +6,8 @@ use std::io::Write;
 use std::str::FromStr;
 
 use bitcoin::p2p::address::AddrV2;
+use bitcoin_hashes::sha3_256;
 use floresta_common::impl_error_from;
-use sha3::Digest;
-use sha3::Sha3_256;
 
 /// The base32 alphabet.
 ///
@@ -270,25 +269,22 @@ impl OnionV3Addr {
     /// These should be serialized as a byte-array and hashed. The checksum will be resulting
     /// hash's two lowest bytes.
     pub fn checksum(&self) -> OnionChecksum {
-        let mut hash = Sha3_256::new();
+        let mut data = Vec::with_capacity(14 + PUBKEY_LENGTH + VERSION_LENGTH);
 
         // to compute the checksum, we must write...
 
         // ... ".onion checksum" as bytes...
-        hash.write_all(".onion checksum".as_bytes())
-            .expect("in-memory hashers don't err");
+        data.extend_from_slice(".onion checksum".as_bytes());
 
         // ... the server pubkey bytes ...
-        hash.write_all(&self.pubkey.0)
-            .expect("in-memory hashers don't err");
+        data.extend_from_slice(&self.pubkey.0);
 
         // ... and finally, the protocol version as bytes ...
-        hash.write_all(&self.version.0.to_be_bytes())
-            .expect("in-memory hashers don't err");
+        data.extend_from_slice(&self.version.0.to_be_bytes());
 
-        let digest = hash.finalize();
+        let digest = sha3_256::Hash::hash(&data);
         let mut final_checksum = [0; CHECKSUM_LENGTH];
-        final_checksum.copy_from_slice(&digest[0..CHECKSUM_LENGTH]);
+        final_checksum.copy_from_slice(&digest.to_byte_array()[0..CHECKSUM_LENGTH]);
 
         final_checksum.into()
     }

@@ -25,7 +25,9 @@ rustls = { version = "=0.23.41", default-features = false, features = ["ring", "
 rustreexo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha3 = { version = "=0.10.9", default-features = false, features = ["asm"] }
+# TODO: remove this direct dep once rust-bitcoin >= 0.33.0 (which adds sha3_256),
+# and use bitcoin_hashes through rust-bitcoin instead.
+bitcoin_hashes = { version = "=0.20.0" }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 ureq = { version = "=3.3.0", features = ["socks-proxy", "json", "rustls-no-provider"], default-features = false }
