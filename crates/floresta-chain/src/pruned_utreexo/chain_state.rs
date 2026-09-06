@@ -939,20 +939,30 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         inner.best_block.depth = height;
     }
 
-    fn verify_script(&self, height: u32) -> Result<bool, PersistedState::Error> {
+    /// Returns the height of our assume-valid block, if the assumption applies.
+    ///
+    /// Scripts for blocks at or below the returned height may be assumed valid. Returns
+    /// `None` when no assume-valid block is configured, or when it isn't in our best
+    /// chain, in which case every script must be verified.
+    fn assume_valid_height(&self) -> Result<Option<u32>, PersistedState::Error> {
         let inner = self.inner.read();
-        match inner.assume_valid {
-            Some(hash) => {
-                match inner.chainstore.get_header(&hash)? {
-                    // If the assume-valid block is in the best chain, only verify scripts if we are higher
-                    Some(DiskBlockHeader::HeadersOnly(_, assume_h))
-                    | Some(DiskBlockHeader::FullyValid(_, assume_h)) => Ok(height > assume_h),
-                    // Assume-valid is not in the best chain, so verify all the scripts
-                    _ => Ok(true),
-                }
-            }
-            None => Ok(true),
+        let Some(hash) = inner.assume_valid else {
+            return Ok(None);
+        };
+
+        match inner.chainstore.get_header(&hash)? {
+            // If the assume-valid block is in the best chain, only verify scripts if we are higher
+            Some(DiskBlockHeader::HeadersOnly(_, assume_h))
+            | Some(DiskBlockHeader::FullyValid(_, assume_h)) => Ok(Some(assume_h)),
+            // Assume-valid is not in the best chain, so verify all the scripts
+            _ => Ok(None),
         }
+    }
+
+    fn verify_script(&self, height: u32) -> Result<bool, PersistedState::Error> {
+        Ok(self
+            .assume_valid_height()?
+            .is_none_or(|assume_h| height > assume_h))
     }
     pub fn acc(&self) -> Stump {
         read_lock!(self).acc.to_owned()
@@ -1503,7 +1513,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             },
             current_acc: acc,
             final_height,
-            assume_valid: false,
+            assume_valid_height: self.assume_valid_height()?,
             current_height: initial_height,
         };
 

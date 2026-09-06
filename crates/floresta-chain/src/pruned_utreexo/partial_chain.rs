@@ -64,9 +64,11 @@ pub(crate) struct PartialChainStateInner {
     pub(crate) error: Option<BlockValidationErrors>,
     /// The consensus parameters, we need this to validate the blocks.
     pub(crate) consensus: Consensus,
-    /// Whether we assume the signatures in this interval as valid, this is used to
-    /// speed up syncing, by assuming signatures in old blocks are valid.
-    pub(crate) assume_valid: bool,
+    /// The height of the assume-valid block, when it applies to this interval.
+    ///
+    /// Scripts are assumed valid for blocks at or below this height, and are verified for
+    /// every block above it. `None` disables the assumption, verifying every script.
+    pub(crate) assume_valid_height: Option<u32>,
 }
 
 /// A partial chain is a chain that only contains a subset of the blocks in the
@@ -118,6 +120,17 @@ impl PartialChainStateInner {
     /// Returns the parameters for this chain
     fn chain_params(&self) -> ChainParams {
         self.consensus.parameters.clone()
+    }
+
+    #[inline]
+    /// Whether we should verify the scripts for the block at `height`.
+    ///
+    /// Scripts are only assumed valid up to and including the assume-valid height, so
+    /// anything above it, or any block at all when no assume-valid height applies, is
+    /// fully verified. This mirrors `ChainState::verify_script`.
+    fn verify_script(&self, height: u32) -> bool {
+        self.assume_valid_height
+            .is_none_or(|assume_height| height > assume_height)
     }
 
     #[inline]
@@ -218,7 +231,7 @@ impl PartialChainStateInner {
                 .block_lock_time_cutoff(height, &block.header, || {
                     self.previous_median_time_past(height)
                 })?;
-        let verify_script = self.assume_valid;
+        let verify_script = self.verify_script(height);
 
         #[cfg(feature = "bitcoinkernel")]
         let flags = self
@@ -537,6 +550,52 @@ mod tests {
 
     const EASIEST_REGTEST_TARGET_BITS: u32 = 0x207f_ffff;
 
+    fn pchain_inner_with_assume_valid(assume_valid_height: Option<u32>) -> PartialChainStateInner {
+        PartialChainStateInner {
+            assume_valid_height,
+            consensus: Consensus::from(Network::Regtest),
+            current_height: 0,
+            current_acc: Stump::default(),
+            final_height: 0,
+            blocks: Vec::new(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn verifies_every_script_without_an_assume_valid_height() {
+        let chainstate = pchain_inner_with_assume_valid(None);
+
+        for height in [0, 1, 100, u32::MAX] {
+            assert!(
+                chainstate.verify_script(height),
+                "height {height} must be verified when no assume-valid height applies",
+            );
+        }
+    }
+
+    #[test]
+    fn verifies_only_scripts_above_the_assume_valid_height() {
+        let assume_valid_height = 100;
+        let chainstate = pchain_inner_with_assume_valid(Some(assume_valid_height));
+
+        // Blocks up to and including the assume-valid height are assumed valid
+        for height in [0, 1, assume_valid_height - 1, assume_valid_height] {
+            assert!(
+                !chainstate.verify_script(height),
+                "height {height} must be assumed valid",
+            );
+        }
+
+        // Everything above it must still have its scripts verified
+        for height in [assume_valid_height + 1, assume_valid_height + 1000] {
+            assert!(
+                chainstate.verify_script(height),
+                "height {height} is above assume-valid and must be verified",
+            );
+        }
+    }
+
     #[test]
     fn test_with_invalid_block() {
         fn run(block: &str, reason: BlockValidationErrors, caches_error: bool) {
@@ -579,7 +638,7 @@ mod tests {
 
     fn get_empty_pchain(blocks: Vec<Header>) -> PartialChainState {
         PartialChainStateInner {
-            assume_valid: true,
+            assume_valid_height: Some(u32::MAX),
             consensus: Consensus {
                 parameters: ChainParams::from(Network::Regtest),
             },
@@ -611,7 +670,7 @@ mod tests {
         }
 
         PartialChainStateInner {
-            assume_valid: true,
+            assume_valid_height: Some(u32::MAX),
             consensus: Consensus::from(Network::Regtest),
             current_height: 0,
             current_acc: Stump::default(),
@@ -669,7 +728,7 @@ mod tests {
             parsed_blocks.push(parse_block(block));
         }
         let chainstate: PartialChainState = PartialChainStateInner {
-            assume_valid: true,
+            assume_valid_height: Some(u32::MAX),
             consensus: Consensus {
                 parameters: ChainParams::from(Network::Regtest),
             },
@@ -705,7 +764,7 @@ mod tests {
         let split = parsed_blocks.clone();
         let (blocks1, blocks2) = split.split_at(101);
         let mut chainstate1 = PartialChainStateInner {
-            assume_valid: true,
+            assume_valid_height: Some(u32::MAX),
             consensus: Consensus {
                 parameters: ChainParams::from(Network::Regtest),
             },
@@ -749,7 +808,7 @@ mod tests {
         assert_eq!(chainstate1.current_acc, acc2);
 
         let chainstate2: PartialChainState = PartialChainStateInner {
-            assume_valid: true,
+            assume_valid_height: Some(u32::MAX),
             consensus: Consensus {
                 parameters: ChainParams::from(Network::Regtest),
             },
