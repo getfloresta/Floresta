@@ -89,6 +89,24 @@ class BaseClient:
         else:
             self._conn = s
 
+    def read_line(self) -> str:
+        """
+        Read a single newline terminated message from the server.
+        """
+        response = b""
+        while True:
+            chunk = self.conn.recv(1)
+            if not chunk:
+                break
+            response += chunk
+            if b"\n" in response:
+                break
+
+        response = response.decode("utf-8").strip()
+        self.log.debug(response)
+
+        return response
+
     def request(self, method, params) -> object:
         """
         Request something to Floresta server
@@ -106,18 +124,19 @@ class BaseClient:
         self.log.debug(f"GET electrum://{mnt_point}?params={params}")
         self.conn.sendall(request.encode("utf-8") + b"\n")
 
-        response = b""
+        # The server pushes unsolicited notifications (a new block header, an
+        # updated script hash) over this same socket, so skip anything that is
+        # not a response before handing one back.
         while True:
-            chunk = self.conn.recv(1)
-            if not chunk:
-                break
-            response += chunk
-            if b"\n" in response:
-                break
-        response = response.decode("utf-8").strip()
-        self.log.debug(response)
+            response = self.read_line()
+            if not response:
+                raise ConnectionError("Electrum server closed the connection")
 
-        return json.loads(response)
+            message = json.loads(response)
+            if isinstance(message, dict) and "id" in message:
+                return message
+
+            self.log.debug(f"Skipping electrum notification: {response}")
 
     def batch_request(self, calls: List[Tuple[str, List[Any]]]) -> object:
         """
@@ -137,15 +156,14 @@ class BaseClient:
         )
         self.conn.sendall(json.dumps(request_list).encode("utf-8") + b"\n")
 
-        response = b""
+        # As in `request`, drop any notification that lands before the batch
+        # response, which is the only message coming back as a list.
         while True:
-            chunk = self.conn.recv(1)
-            if not chunk:
-                break
-            response += chunk
-            if b"\n" in response:
-                break
+            response = self.read_line()
+            if not response:
+                raise ConnectionError("Electrum server closed the connection")
 
-        response = response.decode("utf-8").strip()
-        self.log.debug(response)
-        return response
+            if isinstance(json.loads(response), list):
+                return response
+
+            self.log.debug(f"Skipping electrum notification: {response}")
