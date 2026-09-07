@@ -1075,4 +1075,62 @@ mod test {
         assert_eq!(address.transactions.len(), 2);
         assert_eq!(address.utxos.len(), 1);
     }
+
+    /// Applying the same block twice must leave the cache exactly as one pass did.
+    ///
+    /// This is not hypothetical: a rescan walking over a block the wallet already
+    /// saw hands the very same block to [AddressCache::block_process] again.
+    #[test]
+    fn test_process_same_block_twice_is_idempotent() {
+        let block = deserialize_from_str(BLOCK_FIRST_UTXO);
+
+        let spk = ScriptBuf::from_hex("00142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a")
+            .expect("Valid address");
+        let script_hash = get_spk_hash(&spk);
+        let cache = get_test_cache();
+
+        cache.cache_address(spk);
+
+        cache.block_process(&block, 118510);
+
+        // The block pays us a single 1_000_000 sats output.
+        assert_eq!(cache.get_address_balance(&script_hash), Some(1_000_000));
+        assert_eq!(cache.get_address_utxos(&script_hash).unwrap().len(), 1);
+
+        cache.block_process(&block, 118510);
+
+        assert_eq!(cache.get_address_balance(&script_hash), Some(1_000_000));
+        assert_eq!(cache.get_address_utxos(&script_hash).unwrap().len(), 1);
+        assert_eq!(cache.get_address_history(&script_hash).unwrap().len(), 1);
+    }
+
+    /// A replayed block must not corrupt the utxo set for the blocks that follow it.
+    ///
+    /// `BLOCK_FIRST_UTXO` pays us 1_000_000 sats and `BLOCK_SPEND` spends that utxo,
+    /// paying 999_890 sats back to us. Replaying the first block must not change
+    /// where we land after the second one.
+    #[test]
+    fn test_replayed_block_does_not_corrupt_a_later_spend() {
+        let block1 = deserialize_from_str(BLOCK_FIRST_UTXO);
+        let block2 = deserialize_from_str(BLOCK_SPEND);
+
+        let spk = ScriptBuf::from_hex("00142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a")
+            .expect("Valid address");
+        let script_hash = get_spk_hash(&spk);
+        let cache = get_test_cache();
+
+        cache.cache_address(spk);
+
+        cache.block_process(&block1, 118510);
+        cache.block_process(&block1, 118510);
+        cache.block_process(&block2, 118511);
+
+        assert_eq!(cache.get_address_balance(&script_hash), Some(999_890));
+
+        // Only the output created by `BLOCK_SPEND` is still unspent. The utxo from
+        // `BLOCK_FIRST_UTXO` was spent and must not be listed anymore.
+        let utxos = cache.get_address_utxos(&script_hash).unwrap();
+        assert_eq!(utxos.len(), 1);
+        assert_eq!(utxos[0].0.value.to_sat(), 999_890);
+    }
 }
