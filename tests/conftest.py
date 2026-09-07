@@ -245,6 +245,56 @@ def florestad_bitcoind_utreexod_with_chain(
     return _create_nodes_with_chain
 
 
+@pytest.fixture
+def florestad_bitcoind_utreexod_with_filters(
+    node_manager,
+) -> Callable[..., tuple[Node, Node, Node]]:
+    """
+    Factory fixture that builds a three node network able to serve compact block filters.
+
+    florestad keeps its default configuration, which already enables the filters, but
+    it downloads them from a peer and no daemon here serves them out of the box, so
+    bitcoind is started with its block filter index on. utreexod mines every block to
+    `WALLET_ADDRESS` and serves the utreexo proofs florestad needs in order to sync.
+
+    No descriptor is loaded, so florestad's wallet starts out empty.
+    """
+
+    def _create_nodes_with_filters(blocks: int = 20) -> tuple[Node, Node, Node]:
+        florestad_node = node_manager.add_node_default_args(variant=NodeType.FLORESTAD)
+        node_manager.run_node(florestad_node)
+
+        bitcoind_node = node_manager.add_node_extra_args(
+            variant=NodeType.BITCOIND,
+            extra_args=["-blockfilterindex=1", "-peerblockfilters=1"],
+        )
+        node_manager.run_node(bitcoind_node)
+
+        utreexod_node = node_manager.add_node_extra_args(
+            variant=NodeType.UTREEXOD,
+            extra_args=[
+                f"--miningaddr={WALLET_ADDRESS}",
+                "--utreexoproofindex",
+                "--prune=0",
+            ],
+        )
+        node_manager.run_node(utreexod_node)
+
+        utreexod_node.rpc.generate(blocks)
+
+        node_manager.connect_nodes(florestad_node, utreexod_node)
+        time.sleep(3)
+        node_manager.connect_nodes(bitcoind_node, utreexod_node)
+        time.sleep(1)
+        node_manager.connect_nodes(florestad_node, bitcoind_node)
+
+        node_manager.wait_for_sync_nodes()
+
+        return florestad_node, bitcoind_node, utreexod_node
+
+    return _create_nodes_with_filters
+
+
 @pytest.fixture(scope="class")
 def shared_florestad_bitcoind_utreexod_with_chain(
     shared_florestad_node,
