@@ -29,11 +29,9 @@ use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
 #[cfg(feature = "json-rpc")]
 use floresta_common::NetworkExt;
 use floresta_common::try_and_log;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
-#[cfg(feature = "compact-filters")]
-use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::mempool::MempoolBase;
+use floresta_electrum::FlatFiltersStore;
+use floresta_electrum::NetworkFilters;
 use floresta_electrum::electrum_protocol::ElectrumServer;
 use floresta_electrum::electrum_protocol::client_accept_loop;
 use floresta_mempool::Mempool;
@@ -500,16 +498,62 @@ impl Florestad {
             }
         }
 
-        // Electrum Server configuration.
-
-        // Instantiate the Electrum Server.
-        let electrum_server = ElectrumServer::new(
+        self.start_electrum(
             wallet,
             blockchain_state,
             cfilters,
             chain_provider.get_handle(),
+            datadir,
         )
-        .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
+        .await?;
+
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+
+        let mut recv = self.stop_notify.lock().unwrap();
+        *recv = Some(receiver);
+
+        // Spawn the primary node task, which manages peer connections, chain synchronization,
+        // block processing and transaction relay.
+        task::spawn(chain_provider.run(sender));
+
+        // Metrics
+        #[cfg(feature = "metrics")]
+        {
+            let metrics_server_address =
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
+
+            task::spawn(floresta_metrics::metrics_server(metrics_server_address));
+            info!("Started metrics server on: {metrics_server_address}",);
+
+            // Periodically update memory usage
+            tokio::spawn(async {
+                let interval = Duration::from_secs(5);
+                let mut ticker = time::interval(interval);
+
+                loop {
+                    ticker.tick().await;
+                    floresta_metrics::get_metrics().update_memory_usage();
+                }
+            });
+        }
+
+        // All done, return Ok
+        Ok(())
+    }
+
+    async fn start_electrum(
+        &self,
+        wallet: Arc<AddressCache<KvDatabase>>,
+        blockchain_state: Arc<ChainState<ChainStore>>,
+        cfilters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
+        node_handle: floresta_wire::node_handle::NodeHandle,
+        datadir: &Path,
+    ) -> Result<(), FlorestadError> {
+        // Electrum Server configuration.
+
+        // Instantiate the Electrum Server.
+        let electrum_server = ElectrumServer::new(wallet, blockchain_state, cfilters, node_handle)
+            .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
         // Default Electrum Server port.
         let default_electrum_port: u16 =
@@ -610,37 +654,6 @@ impl Florestad {
         // Electrum Server's main loop.
         task::spawn(electrum_server.main_loop());
 
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-
-        let mut recv = self.stop_notify.lock().unwrap();
-        *recv = Some(receiver);
-
-        // Spawn the primary node task, which manages peer connections, chain synchronization,
-        // block processing and transaction relay.
-        task::spawn(chain_provider.run(sender));
-
-        // Metrics
-        #[cfg(feature = "metrics")]
-        {
-            let metrics_server_address =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
-
-            task::spawn(floresta_metrics::metrics_server(metrics_server_address));
-            info!("Started metrics server on: {metrics_server_address}",);
-
-            // Periodically update memory usage
-            tokio::spawn(async {
-                let interval = Duration::from_secs(5);
-                let mut ticker = time::interval(interval);
-
-                loop {
-                    ticker.tick().await;
-                    floresta_metrics::get_metrics().update_memory_usage();
-                }
-            });
-        }
-
-        // All done, return Ok
         Ok(())
     }
 
