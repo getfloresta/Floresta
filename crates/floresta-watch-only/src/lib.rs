@@ -872,6 +872,14 @@ mod test {
     const BLOCK_FIRST_UTXO: &str = "00000020b4f594a390823c53557c5a449fa12413cbbae02be529c11c4eb320ff8e000000dd1211eb35ca09dc0ee519b0f79319fae6ed32c66f8bbf353c38513e2132c435474d81633c4b011e195a220002010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff0403edce01feffffff028df2052a0100000016001481113cad52683679a83e76f76f84a4cfe36f75010000000000000000776a24aa21a9ed67863b4f356b7b9f3aab7a2037615989ef844a0917fb0a1dcd6c23a383ee346b4c4fecc7daa2490047304402203768ff10a948a2dd1825cc5a3b0d336d819ea68b5711add1390b290bf3b1cba202201d15e73791b2df4c0904fc3f7c7b2f22ab77762958e9bc76c625138ad3a04d290100012000000000000000000000000000000000000000000000000000000000000000000000000002000000000101be07b18750559a418d144f1530be380aa5f28a68a0269d6b2d0e6ff3ff25f3200000000000feffffff0240420f00000000001600142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a326f55d94c060000160014c2ed86a626ee74d854a12c9bb6a9b72a80c0ddc50247304402204c47f6783800831bd2c75f44d8430bf4d962175349dc04d690a617de6c1eaed502200ffe70188a6e5ad89871b2acb4d0f732c2256c7ed641d2934c6e84069c792abc012103ba174d9c66078cf813d0ac54f5b19b5fe75104596bdd6c1731d9436ad8776f41ecce0100";
     const BLOCK_SPEND: &str = "000000203ea734fa2c8dee7d3194878c9eaf6e83a629f79b3076ec857793995e01010000eb99c679c0305a1ac0f5eb2a07a9f080616105e605b92b8c06129a2451899225ab5481633c4b011e0b26720102020000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff0403efce01feffffff026ef2052a01000000225120a1a1b1376d5165617a50a6d2f59abc984ead8a92df2b25f94b53dbc2151824730000000000000000776a24aa21a9ed1b4c48a7220572ff3ab3d2d1c9231854cb62542fbb1e0a4b21ebbbcde8d652bc4c4fecc7daa2490047304402204b37c41fce11918df010cea4151737868111575df07f7f2945d372e32a6d11dd02201658873a8228d7982df6bdbfff5d0cad1d6f07ee400e2179e8eaad8d115b7ed001000120000000000000000000000000000000000000000000000000000000000000000000000000020000000001017ca523c5e6df0c014e837279ab49be1676a9fe7571c3989aeba1e5d534f4054a0000000000fdffffff01d2410f00000000001600142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a02473044022071b8583ba1f10531b68cb5bd269fb0e75714c20c5a8bce49d8a2307d27a082df022069a978dac00dd9d5761aa48c7acc881617fa4d2573476b11685596b17d437595012103b193d06bd0533d053f959b50e3132861527e5a7a49ad59c5e80a265ff6a77605eece0100";
 
+    /// The p2wpkh scriptPubKey of `tb1q9d4zjf92nvd3zhg6cvyckzaqumk4zre26x02q9`, the
+    /// address [get_test_address] hands out.
+    ///
+    /// It is the address both fixtures above pay: `BLOCK_FIRST_UTXO` creates its
+    /// 1_000_000 sats utxo, and `BLOCK_SPEND` spends that utxo and pays 999_890
+    /// sats back to it.
+    const TEST_ADDRESS_SPK: &str = "00142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a";
+
     fn deserialize_from_str<T: Decodable>(thing: &str) -> T {
         let hex = Vec::from_hex(thing).unwrap();
         deserialize(&hex).unwrap()
@@ -1059,8 +1067,7 @@ mod test {
         let block1 = deserialize_from_str(BLOCK_FIRST_UTXO);
         let block2 = deserialize_from_str(BLOCK_SPEND);
 
-        let spk = ScriptBuf::from_hex("00142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a")
-            .expect("Valid address");
+        let spk = ScriptBuf::from_hex(TEST_ADDRESS_SPK).expect("Valid address");
         let script_hash = get_spk_hash(&spk);
         let cache = get_test_cache();
 
@@ -1074,5 +1081,61 @@ mod test {
 
         assert_eq!(address.transactions.len(), 2);
         assert_eq!(address.utxos.len(), 1);
+    }
+
+    /// Applying the same block twice must leave the cache exactly as one pass did.
+    ///
+    /// This is not hypothetical: a rescan walking over a block the wallet already
+    /// saw hands the very same block to [AddressCache::block_process] again.
+    #[test]
+    fn test_process_same_block_twice_is_idempotent() {
+        let block = deserialize_from_str(BLOCK_FIRST_UTXO);
+
+        let spk = ScriptBuf::from_hex(TEST_ADDRESS_SPK).expect("Valid address");
+        let script_hash = get_spk_hash(&spk);
+        let cache = get_test_cache();
+
+        cache.cache_address(spk);
+
+        cache.block_process(&block, 118510);
+
+        // The block pays us a single 1_000_000 sats output.
+        assert_eq!(cache.get_address_balance(&script_hash), Some(1_000_000));
+        assert_eq!(cache.get_address_utxos(&script_hash).unwrap().len(), 1);
+
+        cache.block_process(&block, 118510);
+
+        assert_eq!(cache.get_address_balance(&script_hash), Some(1_000_000));
+        assert_eq!(cache.get_address_utxos(&script_hash).unwrap().len(), 1);
+        assert_eq!(cache.get_address_history(&script_hash).unwrap().len(), 1);
+    }
+
+    /// A replayed block must not corrupt the utxo set for the blocks that follow it.
+    ///
+    /// `BLOCK_FIRST_UTXO` pays us 1_000_000 sats and `BLOCK_SPEND` spends that utxo,
+    /// paying 999_890 sats back to us. Replaying the first block must not change
+    /// where we land after the second one.
+    #[test]
+    fn test_replayed_block_does_not_corrupt_a_later_spend() {
+        let block1 = deserialize_from_str(BLOCK_FIRST_UTXO);
+        let block2 = deserialize_from_str(BLOCK_SPEND);
+
+        let spk = ScriptBuf::from_hex(TEST_ADDRESS_SPK).expect("Valid address");
+        let script_hash = get_spk_hash(&spk);
+        let cache = get_test_cache();
+
+        cache.cache_address(spk);
+
+        cache.block_process(&block1, 118510);
+        cache.block_process(&block1, 118510);
+        cache.block_process(&block2, 118511);
+
+        assert_eq!(cache.get_address_balance(&script_hash), Some(999_890));
+
+        // Only the output created by `BLOCK_SPEND` is still unspent. The utxo from
+        // `BLOCK_FIRST_UTXO` was spent and must not be listed anymore.
+        let utxos = cache.get_address_utxos(&script_hash).unwrap();
+        assert_eq!(utxos.len(), 1);
+        assert_eq!(utxos[0].0.value.to_sat(), 999_890);
     }
 }

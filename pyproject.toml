@@ -47,6 +47,7 @@ markers = [
     "florestad: marks tests specific to the Florestad daemon",
     "rpc: marks tests focused on RPC calls",
     "p2p: marks tests related to peer-to-peer interactions",
+    "wallet: marks tests focused on the watch only wallet",
     "expensive: marks heavy-weight tests that only run when --run-expensive is passed",
 ]
 
