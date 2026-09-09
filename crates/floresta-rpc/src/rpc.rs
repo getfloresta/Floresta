@@ -130,11 +130,7 @@ pub trait FlorestaRPC {
     /// The peer can be referenced either by node_address or node_id.
     /// If referencing by node_id, an empty string must be passed as the node_address.
     fn disconnect_node(&self, node_address: String, node_id: Option<usize>) -> Result<Value>;
-    /// Finds an specific utxo in the chain
-    ///
-    /// You can use this to look for a utxo. If it exists, it will return the amount and
-    /// scriptPubKey of this utxo. It returns an empty object if the utxo doesn't exist.
-    /// You must have enabled block filters by setting the `blockfilters=1` option.
+    #[doc = include_str!("../../../doc/rpc/findtxout.md")]
     fn find_tx_out(
         &self,
         tx_id: Txid,
