@@ -32,6 +32,7 @@ use std::time::Duration;
 use bitcoin::Network;
 use clap::Parser;
 use cli::Cli;
+use floresta_common::NetworkExt;
 use floresta_node::Config;
 use floresta_node::Florestad;
 use tokio::sync::RwLock;
@@ -82,6 +83,16 @@ fn main() {
         zmq_address: params.zmq_address,
         #[cfg(feature = "json-rpc")]
         json_rpc_address: params.rpc_address,
+        #[cfg(feature = "json-rpc")]
+        rpc_user: params.rpc_user,
+        #[cfg(feature = "json-rpc")]
+        rpc_password: params.rpc_password,
+        #[cfg(feature = "json-rpc")]
+        rpc_auth: params.rpc_auth,
+        #[cfg(feature = "json-rpc")]
+        rpc_cookie_file: params.rpc_cookie_file,
+        #[cfg(feature = "json-rpc")]
+        no_rpc_cookie_file: params.no_rpc_cookie_file,
         generate_cert: params.generate_cert,
         wallet_descriptor: params.wallet_descriptor,
         filters_start_height: params.filters_start_height,
@@ -182,7 +193,7 @@ fn main() {
 ///
 /// Paths with redundant slashes are automatically normalized.
 fn datadir_path(base_dir: Option<impl AsRef<Path>>, network: Network) -> PathBuf {
-    let base_dir = base_dir
+    let mut base_dir = base_dir
         .map(|p| {
             let s = p.as_ref().to_string_lossy().replace('\\', "/");
             Path::new(&s).components().collect::<PathBuf>()
@@ -193,13 +204,10 @@ fn datadir_path(base_dir: Option<impl AsRef<Path>>, network: Network) -> PathBuf
                 .join(".floresta")
         });
 
-    match network {
-        Network::Bitcoin => base_dir,
-        Network::Signet => base_dir.join("signet"),
-        Network::Testnet => base_dir.join("testnet3"),
-        Network::Testnet4 => base_dir.join("testnet4"),
-        Network::Regtest => base_dir.join("regtest"),
+    if let Some(subdir) = network.data_subdir() {
+        base_dir.push(subdir);
     }
+    base_dir
 }
 
 #[cfg(test)]
