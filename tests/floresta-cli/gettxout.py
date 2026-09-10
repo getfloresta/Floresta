@@ -9,8 +9,6 @@ This functional test cli utility to interact with a Floresta node with `gettxout
 import pytest
 from test_framework.util import compare_fields
 
-IGNORE_FIELDS = ["bestblock", "confirmations"]
-
 
 # pylint: disable=too-many-locals
 @pytest.mark.rpc
@@ -25,7 +23,14 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain, node_m
     log.info("Waiting for Floresta and Bitcoind to sync with Utreexod...")
     node_manager.wait_for_sync_nodes()
 
+    # `bestblock` and `confirmations` are relative to the chain tip, so both
+    # nodes must agree on it for the comparison below to hold. Nothing is
+    # mined while the test runs, which keeps that true for the whole loop.
     log.info("Comparing gettxout results between Floresta and Bitcoind...")
+    assert (
+        florestad.rpc.get_bestblockhash() == bitcoind.rpc.get_bestblockhash()
+    ), "Nodes disagree on the chain tip."
+
     for height in range(2, blocks):
         block_hash = florestad.rpc.get_blockhash(height)
         block = florestad.rpc.get_block(block_hash)
@@ -39,4 +44,4 @@ def test_get_txout(setup_logging, florestad_bitcoind_utreexod_with_chain, node_m
             txout_bitcoind = bitcoind.rpc.get_txout(tx, vout=0, include_mempool=False)
             assert txout_bitcoind is not None, f"Txout for tx {tx} is None in Bitcoind."
 
-            compare_fields(txout_floresta, txout_bitcoind, ignore_fields=IGNORE_FIELDS)
+            compare_fields(txout_floresta, txout_bitcoind)

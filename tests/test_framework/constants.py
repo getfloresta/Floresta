@@ -35,11 +35,13 @@ JSONRPC_ERRCODE_INVALID_REQUEST = -32600
 JSONRPC_ERRCODE_METHOD_NOT_FOUND = -32601
 JSONRPC_ERRCODE_INVALID_PARAMS = -32602
 JSONRPC_ERRCODE_INTERNAL = -32603
+JSONRPC_ERRCODE_NO_BLOCK_FILTERS = -32092
 
 # JSON-RPC error message constants
 JSONRPC_ERRMSG_MISSING_PARAMS = "Missing parameter"
 JSONRPC_ERRMSG_WRONG_PARAM_TYPE = "Invalid parameter type"
 JSONRPC_ERRMSG_METHOD_NOT_FOUND = "Method not found"
+JSONRPC_ERRMSG_NO_BLOCK_FILTERS = "Block filters not available"
 JSONRPC_ERRMSG_INVALID_VERSION = "The request contains a invalid jsonrpc version"
 JSONRPC_ERRMSG_MALFORMATED_PARAMS = (
     "A parameter is malformated, the parameter MUST be an array or an object"
