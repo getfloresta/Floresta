@@ -25,6 +25,7 @@ use std::time::Instant;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use bitcoin::Txid;
+use bitcoin::p2p::Magic;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::address::AddrV2Message;
 pub(crate) use blocks::InflightBlock;
@@ -373,6 +374,7 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) config: UtreexoNodeConfig,
     pub(crate) datadir: PathBuf,
     pub(crate) network: Network,
+    pub(crate) magic: Magic,
     pub(crate) kill_signal: Arc<tokio::sync::RwLock<bool>>,
     pub(crate) witness_mode: WitnessMode,
 }
@@ -428,6 +430,7 @@ where
         address_man: AddressMan,
     ) -> Result<Self, WireError> {
         let (node_tx, node_rx) = unbounded_channel();
+        let magic = config.network_magic();
         let socks5 = config.proxy.map(Socks5StreamBuilder::new);
 
         // Dedup the resolved fixed peers so we don't open multiple connections to the same host.
@@ -459,6 +462,7 @@ where
                 peer_by_service: HashMap::new(),
                 mempool,
                 network: config.network,
+                magic,
                 node_rx,
                 node_tx,
                 address_man,
