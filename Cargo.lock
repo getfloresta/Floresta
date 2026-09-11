@@ -1160,6 +1160,7 @@ dependencies = [
  "rustreexo",
  "serde",
  "serde_json",
+ "tempfile",
  "time",
  "tokio",
  "tokio-rustls",
