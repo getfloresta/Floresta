@@ -48,6 +48,7 @@ use crate::node::NodeRequest;
 use crate::node::PeerStatus;
 use crate::node::UtreexoNode;
 use crate::node::sync_ctx::SyncNode;
+use crate::node_context::NodeContext;
 use crate::p2p_wire::block_proof::UtreexoProof;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
@@ -72,6 +73,15 @@ pub struct SimulatedPeer {
     peer_id: u32,
 }
 
+/// Services shared by the simulated peer and the node's local peer record.
+fn simulated_peer_services() -> ServiceFlags {
+    ServiceFlags::NETWORK
+        | service_flags::UTREEXO.into()
+        | service_flags::UTREEXO_ARCHIVE.into()
+        | ServiceFlags::WITNESS
+        | ServiceFlags::COMPACT_FILTERS
+}
+
 impl SimulatedPeer {
     pub async fn run(&mut self) {
         let version = Version {
@@ -80,11 +90,7 @@ impl SimulatedPeer {
             blocks: rand::random::<u32>() % 23,
             id: self.peer_id,
             address_id: rand::random::<u64>() as usize,
-            services: ServiceFlags::NETWORK
-                | service_flags::UTREEXO.into()
-                | service_flags::UTREEXO_ARCHIVE.into()
-                | ServiceFlags::WITNESS
-                | ServiceFlags::COMPACT_FILTERS,
+            services: simulated_peer_services(),
             time_offset: 0,
             kind: ConnectionKind::Regular(service_flags::UTREEXO.into()),
             transport_protocol: TransportProtocol::V2,
@@ -163,15 +169,18 @@ impl SimulatedPeer {
     }
 }
 
-pub fn create_peer(
-    headers: Vec<Header>,
-    blocks: HashMap<BlockHash, Block>,
-    accs: HashMap<BlockHash, Vec<u8>>,
+pub fn spawn_peer(
+    peer_data: PeerData,
     node_sender: UnboundedSender<NodeNotification>,
-    sender: UnboundedSender<NodeRequest>,
-    node_rcv: UnboundedReceiver<NodeRequest>,
     peer_id: u32,
 ) -> LocalPeerView {
+    let (sender, node_rcv) = unbounded_channel();
+    let PeerData {
+        headers,
+        blocks,
+        accs,
+    } = peer_data;
+
     let mut peer = SimulatedPeer::new(headers, blocks, accs, node_sender, node_rcv, peer_id);
     task::spawn(async move {
         peer.run().await;
@@ -180,7 +189,7 @@ pub fn create_peer(
     LocalPeerView {
         message_times: Ema::with_half_life_50(),
         address: "127.0.0.1:8333".parse().unwrap(),
-        services: service_flags::UTREEXO.into(),
+        services: simulated_peer_services(),
         user_agent: "/utreexo:0.1.0/".to_string(),
         height: 0,
         time_offset: 0,
@@ -248,6 +257,20 @@ pub fn signet_headers() -> Vec<Header> {
     headers
 }
 
+pub fn mainnet_headers() -> Vec<Header> {
+    let mut headers: Vec<Header> = Vec::new();
+
+    let file = include_bytes!("../../../../floresta-chain/testdata/headers.zst");
+    let uncompressed: Vec<u8> = zstd::decode_all(std::io::Cursor::new(file)).unwrap();
+    let mut buffer = uncompressed.as_slice();
+
+    while let Ok(header) = Header::consensus_decode(&mut buffer) {
+        headers.push(header);
+    }
+
+    headers
+}
+
 /// Returns the first 121 signet blocks, including genesis
 pub fn signet_blocks() -> HashMap<BlockHash, Block> {
     let file = include_str!("./test_data/blocks.json");
@@ -282,11 +305,9 @@ pub fn signet_roots() -> HashMap<BlockHash, Vec<u8>> {
     accs
 }
 
-/// Returns a mutated signet block at height 7
-pub fn mutated_block_h7() -> Block {
-    deserialize_hex(
-        "00000020daf3b60d374b19476461f97540498dcfa2eb7016238ec6b1d022f82fb60100007a7ae65b53cb988c2ec92d2384996713821d5645ffe61c9acea60da75cd5edfa1a944d5fae77031e9dbb050001010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025751feffffff0200f2052a01000000160014ef2dceae02e35f8137de76768ae3345d99ca68860000000000000000776a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf94c4fecc7daa2490047304402202b3f946d6447f9bf17d00f3696cede7ee70b785495e5498274ee682a493befd5022045fc0bcf9331073168b5d35507175f9f374a8eba2336873885d12aada67ea5f601000120000000000000000000000000000000000000000000000000000000000000000000000000"
-    ).unwrap()
+/// Flips a bit in the first output script, invalidating the block's Merkle root.
+pub fn mutate_block(block: &mut Block) {
+    block.txdata[0].output[0].script_pubkey.as_mut_bytes()[0] ^= 1;
 }
 
 // Nightly Clippy false positive in `Constructor`-generated code:
@@ -300,52 +321,52 @@ pub struct PeerData {
     accs: HashMap<BlockHash, Vec<u8>>,
 }
 
-pub async fn setup_node(
+// Nightly Clippy false positive in `Constructor`-generated code:
+// https://github.com/rust-lang/rust-clippy/issues/17525
+#[allow(clippy::redundant_field_names)]
+#[derive(Constructor)]
+/// The arguments needed to set up the test `UtreexoNode`
+pub struct SetupNodeArgs {
     peers: Vec<PeerData>,
     pow_fraud_proofs: bool,
     network: Network,
-    datadir: impl AsRef<Path>,
+    datadir: String,
     num_blocks: usize,
-) -> Arc<ChainState<FlatChainStore>> {
-    let config = FlatChainStoreConfig::new(&datadir);
+}
 
-    let chainstore = FlatChainStore::new(config).unwrap();
-    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
-    let chain = ChainState::open(chainstore, network, AssumeValidArg::Disabled).unwrap();
-    let chain = Arc::new(chain);
+type Chain = Arc<ChainState<FlatChainStore>>;
 
-    let mut headers = signet_headers();
-    headers.remove(0);
-    headers.truncate(num_blocks);
-    for header in headers {
+/// Builds and returns a node with spawned simulated peers. The caller can run its event loop.
+pub fn setup_node<T>(args: SetupNodeArgs) -> UtreexoNode<Chain, T>
+where
+    T: 'static + Default + NodeContext,
+{
+    let net = args.network;
+    let datadir = args.datadir;
+
+    // Create `ChainState` and add headers to it
+    let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(datadir.clone())).unwrap();
+    let chain = Arc::new(ChainState::open(chainstore, net, AssumeValidArg::Disabled).unwrap());
+
+    let headers = match net {
+        Network::Signet => signet_headers(),
+        Network::Bitcoin => mainnet_headers(),
+        _ => panic!("unavailable headers for net: {net}"),
+    };
+    for header in headers.into_iter().skip(1).take(args.num_blocks) {
         chain.accept_header(header).unwrap();
     }
 
-    let config = get_node_config(&datadir, network, pow_fraud_proofs);
+    // Create `UtreexoNode` and spawn the simulated peers
+    let config = get_node_config(datadir, net, args.pow_fraud_proofs);
+    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
     let kill_signal = Arc::new(RwLock::new(false));
-    let mut node = UtreexoNode::<Arc<ChainState<FlatChainStore>>, SyncNode>::new(
-        config,
-        chain.clone(),
-        mempool,
-        None,
-        kill_signal.clone(),
-        AddressMan::new(None, &[]),
-    )
-    .unwrap();
+    let addr_man = AddressMan::new(None, &[]);
+    let mut node = UtreexoNode::new(config, chain, mempool, None, kill_signal, addr_man).unwrap();
 
-    for (i, peer) in peers.into_iter().enumerate() {
-        let (sender, receiver) = unbounded_channel();
+    for (i, peer_data) in args.peers.into_iter().enumerate() {
         let peer_id = i as u32;
-
-        let peer = create_peer(
-            peer.headers,
-            peer.blocks,
-            peer.accs,
-            node.node_tx.clone(),
-            sender.clone(),
-            receiver,
-            peer_id,
-        );
+        let peer = spawn_peer(peer_data, node.node_tx.clone(), peer_id);
 
         // Add a fixed peer to avoid opening real P2P connections
         if i == 0 {
@@ -372,9 +393,16 @@ pub async fn setup_node(
         );
     }
 
-    timeout(Duration::from_secs(100), node.run(|_| {}))
-        .await
-        .unwrap();
+    node
+}
+
+const NODE_TIMEOUT: Duration = Duration::from_secs(100);
+
+pub async fn setup_sync_node(args: SetupNodeArgs) -> Arc<ChainState<FlatChainStore>> {
+    let node = setup_node::<SyncNode>(args);
+    let chain = node.chain.clone();
+
+    timeout(NODE_TIMEOUT, node.run(|_| {})).await.unwrap();
 
     chain
 }
@@ -384,8 +412,9 @@ mod tests {
     use bitcoin::BlockHash;
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::Hash;
+    use floresta_common::bhash;
 
-    use super::mutated_block_h7;
+    use super::mutate_block;
     use super::signet_blocks;
     use super::signet_headers;
     use super::signet_roots;
@@ -419,16 +448,23 @@ mod tests {
 
     #[test]
     fn test_get_mutated_block() {
-        let mutated_block = mutated_block_h7();
-        assert!(!mutated_block.txdata.is_empty(), "at least one tx");
+        let hash = bhash!("000002c45c8ea9e553d4b0ee5d50324e56fc76f13019873fe707ff44fc56183f");
+        let blocks = signet_blocks();
 
-        assert!(!mutated_block.check_merkle_root(), "invalid merkle root");
+        let mut block_25 = blocks.get(&hash).unwrap().clone();
+        mutate_block(&mut block_25);
+
+        assert!(!block_25.txdata.is_empty(), "at least one tx");
+        assert!(
+            !block_25.check_merkle_root(),
+            "invalid merkle root (txdata was tampered with)",
+        );
 
         let headers = signet_headers();
         assert_eq!(
-            mutated_block.header.prev_blockhash,
-            headers[6].block_hash(),
-            "invalid block is at height 7",
+            block_25.header.prev_blockhash,
+            headers[24].block_hash(),
+            "block is at height 25",
         );
     }
 

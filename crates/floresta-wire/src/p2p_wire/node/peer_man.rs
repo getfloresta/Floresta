@@ -597,30 +597,31 @@ where
 
     /// Checks whether some of our inflight requests have timed out.
     ///
-    /// This function will check if any of our inflight requests have timed out, and if so,
-    /// it will remove them from the inflight list and increase the banscore of the peer that
-    /// sent the request. It will also resend the request to another peer.
+    /// This function will check if any of our inflight requests have timed out,
+    /// and if so, it will remove them from the inflight list, apply the timeout
+    /// penalty, and resend the request to a peer.
     pub(crate) fn check_for_timeout(&mut self) -> Result<(), WireError> {
         let now = Instant::now();
 
-        let timed_out_fn = |req: &InflightRequests, time: &Instant| match req {
-            InflightRequests::Connect(_)
-                if now.duration_since(*time).as_secs() > T::CONNECTION_TIMEOUT =>
-            {
-                Some(req.clone())
+        let timed_out_fn = |req: &InflightRequests, time: &Instant| {
+            let elapsed_secs = now.duration_since(*time).as_secs();
+
+            match req {
+                InflightRequests::Connect(_) if elapsed_secs > T::CONNECTION_TIMEOUT => {
+                    Some(req.clone())
+                }
+                _ if elapsed_secs > T::REQUEST_TIMEOUT => Some(req.clone()),
+                _ => None,
             }
-
-            _ if now.duration_since(*time).as_secs() > T::REQUEST_TIMEOUT => Some(req.clone()),
-
-            _ => None,
         };
 
-        let timed_out = self
+        let timed_out: Vec<_> = self
             .inflight
             .iter()
             .filter_map(|(req, (_, time))| timed_out_fn(req, time))
-            .collect::<Vec<_>>();
+            .collect();
 
+        let mut retry_error = None;
         for req in timed_out {
             let Some((peer, time)) = self.inflight.remove(&req) else {
                 continue;
@@ -644,17 +645,36 @@ where
             }
 
             debug!("Request timed out: {req:?}");
-            // Increase the banscore and try banning the peer if needed, then re-request
+            // We only track latencies for these request kinds
+            if let InflightRequests::Blocks(_)
+            | InflightRequests::Headers
+            | InflightRequests::GetFilters
+            | InflightRequests::UtreexoState(_) = req
+            {
+                if let Some(peer) = self.peers.get_mut(&peer) {
+                    // Silence is at least this slow, score it now even if no response ever arrives
+                    let timeout_secs =
+                        u32::try_from(T::REQUEST_TIMEOUT).expect("timeout seconds fit u32");
+
+                    peer.message_times.add(f64::from(timeout_secs) * 1_000.0);
+                }
+            }
             try_and_log!(self.increase_banscore(peer, 1));
 
             if let Err(e) = self.redo_inflight_request(&req) {
-                // CRITICAL: never drop the request, so we retry it later
+                // CRITICAL: never drop the request, so we retry it later.
+                //
+                // Note that this failed `redo_inflight_request` will make us punish the
+                // unresponsive peer again on each tick while retries keep failing. We
+                // could keep track of requests that timed-out and failed to be retried,
+                // to punish them once, but this is uncommon and punishments are small.
                 self.inflight.insert(req, (peer, time));
-                return Err(e);
+                // One failed dispatch must not hide the remaining peers' timeouts.
+                retry_error = Some(e);
             }
         }
 
-        Ok(())
+        retry_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn handle_addresses_from_peer(
@@ -794,7 +814,7 @@ where
 
     // === METRICS AND HELPERS ===
 
-    /// Register a message on `self.inflights` and record the time taken to respond to it.
+    /// Records response latency for the peer currently assigned to the request.
     ///
     /// We need this information for two purposes:
     /// 1. To calculate the average time taken to respond to messages from peers, which we use
@@ -807,39 +827,25 @@ where
         peer: PeerId,
         read_at: Instant,
     ) -> Option<()> {
-        let sent_at = match notification {
-            PeerMessages::Block(block) => {
-                let inflight = self
-                    .inflight
-                    .get(&InflightRequests::Blocks(block.block_hash()))?;
-
-                inflight.1
-            }
-
-            PeerMessages::Ready(_) => {
-                let inflight = self.inflight.get(&InflightRequests::Connect(peer))?;
-                inflight.1
-            }
-
-            PeerMessages::Headers(_) => {
-                let inflight = self.inflight.get(&InflightRequests::Headers)?;
-                inflight.1
-            }
-
-            PeerMessages::BlockFilter((_, _)) => {
-                let inflight = self.inflight.get(&InflightRequests::GetFilters)?;
-                inflight.1
-            }
-
-            PeerMessages::UtreexoState(_) => {
-                let inflight = self.inflight.get(&InflightRequests::UtreexoState(peer))?;
-                inflight.1
-            }
-
+        let request = match notification {
+            PeerMessages::Block(block) => InflightRequests::Blocks(block.block_hash()),
+            PeerMessages::Ready(_) => InflightRequests::Connect(peer),
+            PeerMessages::Headers(_) => InflightRequests::Headers,
+            PeerMessages::BlockFilter(_) => InflightRequests::GetFilters,
+            PeerMessages::UtreexoState(_) => InflightRequests::UtreexoState(peer),
             _ => return None,
         };
+        let (request_peer, sent_at) = self.inflight.get(&request)?;
 
-        let elapsed = read_at.duration_since(sent_at).as_secs_f64();
+        // A late reply must not use another peer's retry timestamp.
+        if *request_peer != peer {
+            return None;
+        }
+
+        // A reply may be read just before a retry to the same peer, so `sent_at`
+        // will be overridden with the retry instant, which makes `read_at < sent_at`.
+        // Skip that stale sample instead of recording zero latency.
+        let elapsed = read_at.checked_duration_since(*sent_at)?.as_secs_f64();
         if let Some(peer) = self.peers.get_mut(&peer) {
             peer.message_times.add(elapsed * 1_000.0); // milliseconds
         }
