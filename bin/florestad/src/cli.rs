@@ -190,6 +190,15 @@ pub struct Cli {
     /// This will run in the background and wont't affect node's operation. However,
     /// to disable backfilling, run floresta using this flag.
     pub no_backfill: bool,
+    #[arg(long, default_value_t = false)]
+    /// Whether the JSON-RPC server should be disabled
+    pub disable_rpc: bool,
+    #[arg(long, default_value_t = false)]
+    /// Whether the Electrum server should be disabled
+    pub disable_electrum: bool,
+    #[arg(long, default_value_t = false)]
+    /// Whether the ZMQ server should be disabled
+    pub disable_zmq: bool,
 }
 
 impl Cli {
@@ -220,3 +229,29 @@ fn parse_assume_valid(s: &str) -> Result<AssumeValidArg, String> {
             .map_err(|e| format!("expected 0 or a block hash, got '{other}': {e}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Test that CLI interface disabling flags parse correctly.
+    fn test_disable_interface_flags() {
+        let cli = Cli::try_parse_from(["florestad"]).unwrap();
+        assert!(!cli.disable_rpc);
+        assert!(!cli.disable_electrum);
+        assert!(!cli.disable_zmq);
+
+        let cli = Cli::try_parse_from([
+            "florestad",
+            "--disable-rpc",
+            "--disable-electrum",
+            "--disable-zmq",
+        ])
+        .unwrap();
+        assert!(cli.disable_rpc);
+        assert!(cli.disable_electrum);
+        assert!(cli.disable_zmq);
+    }
+}
+
