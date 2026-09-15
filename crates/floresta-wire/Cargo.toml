@@ -42,6 +42,7 @@ floresta-domain = { workspace = true }
 floresta-metrics = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 zstd = { workspace = true }
 derive_more = { version = "=2.1.1", features = ["constructor"] }
 

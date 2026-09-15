@@ -287,6 +287,7 @@ where
 
         if let Some(peer_data) = self.common.peers.get_mut(&peer) {
             peer_data.services = version.services;
+            peer_data.address.set_services(version.services);
             peer_data.user_agent.clone_from(&version.user_agent);
             peer_data.height = version.blocks;
             peer_data.time_offset = version.time_offset;
@@ -781,14 +782,22 @@ where
             .peer_by_service
             .get(&service_flags::UTREEXO.into())
             .ok_or(WireError::NoUtreexoPeersAvailable)?;
-        let peers_usize: Vec<usize> = peers.iter().map(|&peer| peer as usize).collect();
-        if peers_usize.is_empty() {
+        let utreexo_peers: Vec<LocalAddress> = peers
+            .iter()
+            .filter_map(|peer_id| self.peers.get(peer_id))
+            .filter(|peer_view| {
+                peer_view.state == PeerStatus::Ready
+                    && peer_view.banscore < self.common.max_banscore
+            })
+            .map(|peer_view| peer_view.address.clone())
+            .collect();
+        if utreexo_peers.is_empty() {
             warn!("No connected Utreexo peers to save to disk");
             return Ok(());
         }
         info!("Saving utreexo peers to disk...");
         self.address_man
-            .dump_utreexo_peers(&self.datadir, &peers_usize)
+            .dump_utreexo_peers(&self.datadir, &utreexo_peers)
             .map_err(WireError::Io)
     }
 
