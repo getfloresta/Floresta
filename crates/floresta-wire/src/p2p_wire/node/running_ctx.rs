@@ -242,7 +242,7 @@ where
             }
         };
 
-        let backfill = UtreexoNode::<PartialChainState, SyncNode>::new(
+        let mut backfill = UtreexoNode::<PartialChainState, SyncNode>::new(
             self.config.clone(),
             chain,
             self.mempool.clone(),
@@ -251,6 +251,8 @@ where
             self.address_man.clone(),
         )
         .unwrap();
+
+        backfill.context.is_backfill = true;
 
         let datadir = self.config.datadir.clone();
         let outer_chain = self.chain.clone();
