@@ -205,7 +205,7 @@ impl StumpUpdater {
             let adds = adds.into_dense();
 
             let start = Instant::now();
-            let (new_acc, _) = self
+            let new_acc = self
                 .last_acc
                 .modify(&adds, &[], &Proof::default())
                 .expect("addition-only stump modification cannot fail");

@@ -46,6 +46,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -80,6 +81,7 @@ use crate::node::InflightRequests;
 use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
+use crate::node::WitnessMode;
 use crate::node::periodic_job;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
@@ -453,7 +455,10 @@ where
         peer: PeerId,
         block_hash: BlockHash,
     ) -> Result<InflightBlock, WireError> {
-        self.send_to_peer(peer, NodeRequest::GetBlock(vec![block_hash]))?;
+        self.send_to_peer(
+            peer,
+            NodeRequest::GetBlock(vec![block_hash], WitnessMode::Full),
+        )?;
 
         let timeout = Instant::now() + Duration::from_secs(60);
         let mut block = None;
@@ -517,8 +522,9 @@ where
 
                     return Ok(InflightBlock {
                         peer,
-                        block,
+                        block: Arc::new(block),
                         aux_data: Some((uproof.leaf_data, proof, peer)),
+                        processing_since: None,
                     });
                 }
                 _ => {}
@@ -744,7 +750,7 @@ where
 
                 self.context.state = ChainSelectorState::Done;
                 self.chain.mark_chain_as_assumed(acc, tips[0]).unwrap();
-                self.chain.update_ibd(IBDState::Done);
+                self.chain.update_ibd(IBDState::ProofSync);
             }
             // if we have more than one tip, we need to check if our best chain has an invalid block
             tips.remove(0); // no need to check our best one
@@ -897,7 +903,7 @@ where
         // We downloaded all headers in the most-pow chain, and all our peers agree
         // this is the most-pow chain, we're done!
         if self.context.state == ChainSelectorState::Done {
-            self.chain.update_ibd(IBDState::DownloadingBlocks);
+            self.chain.update_ibd(IBDState::ProofSync);
             try_and_log!(self.chain.flush());
             return Ok(LoopControl::Break);
         }
@@ -951,6 +957,10 @@ where
                     NodeNotification::FromUser(request, responder) => {
                         self.perform_user_request(request, responder).await;
                     }
+
+                    NodeNotification::FromWorker(msg) => {
+                        error!("Received a notification from the worker thread {msg:?}");
+                    }
                 }
             }
 
@@ -997,6 +1007,10 @@ where
 
             NodeNotification::DnsSeedAddresses(addresses) => {
                 self.address_man.push_addresses(&addresses);
+            }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
         Ok(())

@@ -14,6 +14,7 @@ use tracing::warn;
 use super::NodeRequest;
 use super::UtreexoNode;
 use crate::block_proof::Bitmap;
+use crate::node::WitnessMode;
 use crate::node::running_ctx::RunningNode;
 use crate::node_context::NodeContext;
 use crate::node_handle::NodeHandle;
@@ -77,7 +78,9 @@ where
                 return;
             }
 
-            UserRequest::Block(block_hash) => NodeRequest::GetBlock(vec![block_hash]),
+            UserRequest::Block(block_hash) => {
+                NodeRequest::GetBlock(vec![block_hash], WitnessMode::Full)
+            }
 
             UserRequest::UtreexoProof(block_hash) => {
                 NodeRequest::GetBlockProof((block_hash, Bitmap::default(), Bitmap::default()))
