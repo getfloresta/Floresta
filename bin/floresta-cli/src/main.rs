@@ -11,7 +11,11 @@ use clap::Parser;
 use clap::Subcommand;
 use floresta_common::NetworkExt;
 use floresta_rpc::jsonrpc_client::Client;
-use floresta_rpc::rpc::FlorestaRPC;
+use floresta_rpc::rpc_interfaces::BlockchainRpc;
+use floresta_rpc::rpc_interfaces::ControlRpc;
+use floresta_rpc::rpc_interfaces::NetworkRpc;
+use floresta_rpc::rpc_interfaces::RawTransactionRpc;
+use floresta_rpc::rpc_interfaces::WalletRpc;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_rpc::rpc_types::RescanConfidence;
 
@@ -55,24 +59,25 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
         Methods::GetBestBlockHash => serde_json::to_string_pretty(&client.get_best_block_hash()?)?,
         Methods::GetBlockCount => serde_json::to_string_pretty(&client.get_block_count()?)?,
         Methods::GetDifficulty => serde_json::to_string_pretty(&client.get_difficulty()?)?,
-        Methods::GetTxOut { txid, vout } => {
-            serde_json::to_string_pretty(&client.get_tx_out(txid, vout)?)?
-        }
-        Methods::GetTxOutProof { txids, blockhash } => {
-            serde_json::to_string_pretty(&client.get_txout_proof(txids, blockhash)?)?
-        }
-        Methods::GetRawTransaction {
+        Methods::GetTxOut {
             txid,
-            verbosity: verbose,
-        } => serde_json::to_string_pretty(&client.get_raw_transaction(txid, verbose)?)?,
+            vout,
+            include_mempool,
+        } => serde_json::to_string_pretty(&client.get_tx_out(txid, vout, include_mempool)?)?,
+        Methods::GetTxOutProof { txids, blockhash } => {
+            serde_json::to_string_pretty(&client.get_txout_proof(&txids, blockhash)?)?
+        }
+        Methods::GetRawTransaction { txid, verbosity } => {
+            serde_json::to_string_pretty(&client.get_raw_transaction(txid, verbosity)?)?
+        }
         Methods::RescanBlockchain {
             start_block,
             stop_block,
             use_timestamp,
             confidence,
-        } => serde_json::to_string_pretty(&client.rescanblockchain(
-            Some(start_block),
-            Some(stop_block),
+        } => serde_json::to_string_pretty(&client.rescan_blockchain(
+            start_block,
+            stop_block,
             use_timestamp,
             confidence,
         )?)?,
@@ -110,7 +115,7 @@ fn do_request(cmd: &Cli, client: Client) -> anyhow::Result<String> {
             height_hint,
         } => serde_json::to_string_pretty(&client.find_tx_out(txid, vout, script, height_hint)?)?,
         Methods::GetMemoryInfo { mode } => {
-            serde_json::to_string_pretty(&client.get_memory_info(mode)?)?
+            serde_json::to_string_pretty(&client.get_memory_info(mode.as_deref())?)?
         }
         Methods::GetRpcInfo => serde_json::to_string_pretty(&client.get_rpc_info()?)?,
         Methods::Uptime => serde_json::to_string_pretty(&client.uptime()?)?,
@@ -235,30 +240,17 @@ pub enum Methods {
     )]
     RescanBlockchain {
         /// The starting point for the rescan. (optional)
-        #[arg(required = false, default_value_t = 0)]
-        start_block: u32,
+        start_block: Option<u32>,
 
         /// The stopping height for the rescan. (optional)
-        #[arg(required = false, default_value_t = 0)]
-        stop_block: u32,
+        stop_block: Option<u32>,
 
         /// Treat the start parameter as a UNIX timestamp instead of block height.
-        #[arg(
-            short = 't',
-            long = "timestamp",
-            required = false,
-            default_value_t = false
-        )]
-        use_timestamp: bool,
+        #[arg(short = 't', long = "timestamp", required = false)]
+        use_timestamp: Option<bool>,
 
-        #[arg(
-            short = 'c',
-            long = "confidence",
-            required = false,
-            default_value_t = RescanConfidence::Medium,
-            value_enum
-        )]
-        confidence: RescanConfidence,
+        #[arg(short = 'c', long = "confidence", required = false, value_enum)]
+        confidence: Option<RescanConfidence>,
     },
 
     /// Submits a raw transaction to the network
@@ -350,7 +342,11 @@ pub enum Methods {
         long_about = Some(include_str!("../../../doc/rpc/gettxout.md")),
         disable_help_subcommand = true
     )]
-    GetTxOut { txid: Txid, vout: u32 },
+    GetTxOut {
+        txid: Txid,
+        vout: u32,
+        include_mempool: Option<bool>,
+    },
 
     #[doc = include_str!("../../../doc/rpc/stop.md")]
     #[command(

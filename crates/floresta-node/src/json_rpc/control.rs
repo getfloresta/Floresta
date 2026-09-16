@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::path::PathBuf;
-
-use serde::Deserialize;
-use serde::Serialize;
+use floresta_rpc::rpc_interfaces::ControlRpc;
+use floresta_rpc::rpc_types::ActiveCommand;
+use floresta_rpc::rpc_types::GetMemInfoRes;
+use floresta_rpc::rpc_types::GetMemInfoStats;
+use floresta_rpc::rpc_types::GetRpcInfoRes;
+use floresta_rpc::rpc_types::MemInfoLocked;
 
 use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;
 
-impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
-    pub(super) fn get_memory_info(&self, mode: &str) -> Result<GetMemInfoRes, JsonRpcError> {
+impl<Blockchain: RpcChain> ControlRpc for RpcImpl<Blockchain> {
+    type Error = JsonRpcError;
+
+    async fn get_memory_info(&self, mode: Option<&str>) -> Result<GetMemInfoRes, JsonRpcError> {
+        let mode = mode.unwrap_or("stats");
         #[cfg(target_env = "gnu")]
         match mode {
             "stats" => {
@@ -103,7 +108,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         }
     }
 
-    pub(super) async fn get_rpc_info(&self) -> Result<GetRpcInfoRes, JsonRpcError> {
+    async fn get_rpc_info(&self) -> Result<GetRpcInfoRes, JsonRpcError> {
         let active_commands = self
             .inflight
             .read()
@@ -125,48 +130,14 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // logging
 
     // stop
-    pub(super) async fn stop(&self) -> Result<&str, JsonRpcError> {
+    async fn stop(&self) -> Result<String, JsonRpcError> {
         *self.kill_signal.write().await = true;
 
-        Ok("Floresta stopping")
+        Ok("Floresta stopping".to_string())
     }
 
     // uptime
-    pub(super) fn uptime(&self) -> u64 {
-        self.start_time.elapsed().as_secs()
+    async fn uptime(&self) -> Result<u64, JsonRpcError> {
+        Ok(self.start_time.elapsed().as_secs())
     }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct GetMemInfoStats {
-    locked: MemInfoLocked,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct MemInfoLocked {
-    used: u64,
-    free: u64,
-    total: u64,
-    locked: u64,
-    chunks_used: u64,
-    chunks_free: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum GetMemInfoRes {
-    Stats(GetMemInfoStats),
-    MallocInfo(String),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ActiveCommand {
-    method: String,
-    duration: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetRpcInfoRes {
-    active_commands: Vec<ActiveCommand>,
-    logpath: PathBuf,
 }

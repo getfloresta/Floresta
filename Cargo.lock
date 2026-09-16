@@ -1126,7 +1126,6 @@ version = "0.9.0"
 dependencies = [
  "axum",
  "bitcoin",
- "corepc-types",
  "dns-lookup",
  "floresta-chain",
  "floresta-common",
@@ -1135,6 +1134,7 @@ dependencies = [
  "floresta-electrum",
  "floresta-mempool",
  "floresta-metrics",
+ "floresta-rpc",
  "floresta-watch-only",
  "floresta-wire",
  "libc",
@@ -1154,12 +1154,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "floresta-proc-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "floresta-rpc"
 version = "0.5.0"
 dependencies = [
  "bitcoin",
  "clap",
  "corepc-types",
+ "floresta-proc-macro",
  "jsonrpc",
  "rand 0.10.2",
  "rcgen",
