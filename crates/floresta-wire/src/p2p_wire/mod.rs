@@ -7,7 +7,14 @@ use core::net::SocketAddr;
 use std::path::PathBuf;
 
 use bitcoin::Network;
+use bitcoin::Script;
+use bitcoin::ScriptBuf;
+use bitcoin::consensus::Encodable;
+use bitcoin::hashes::Hash;
+use bitcoin::hashes::sha256d;
+use bitcoin::p2p::Magic;
 use floresta_chain::AssumeUtreexoValue;
+use floresta_chain::ChainParams;
 
 #[derive(Debug, Clone)]
 /// Configuration for the Utreexo node.
@@ -15,6 +22,10 @@ pub struct UtreexoNodeConfig {
     /// The blockchain we are in, defaults to Bitcoin. Possible values are Bitcoin,
     /// Testnet, Regtest and Signet.
     pub network: Network,
+    /// The BIP-325 challenge used to derive custom signet message-start bytes.
+    ///
+    /// [`None`] selects the default message-start bytes for `network`.
+    pub signet_challenge: Option<ScriptBuf>,
     /// Whether to use PoW fraud proofs. Defaults to false.
     ///
     /// PoW fraud proof is a mechanism to skip the verification of the whole blockchain,
@@ -32,6 +43,12 @@ pub struct UtreexoNodeConfig {
     /// Each entry is `host[:port]`, where `host` is an IPv4 address, a bracketed IPv6 address (`[::1]`), or a hostname;
     /// `port` is optional and defaults to the network's default port (for example, `"localhost"` or `"127.0.0.1:8333"`).
     pub fixed_peers: Vec<String>,
+
+    /// Peers used to bootstrap address discovery. Defaults to an empty list.
+    ///
+    /// Each entry is connected as a feeler and disconnected after it returns peer addresses.
+    pub seed_nodes: Vec<String>,
+
     /// Maximum ban score. Defaults to 100.
     ///
     /// If a peer misbehaves, we increase its ban score. If the ban score reaches this value,
@@ -68,14 +85,53 @@ pub struct UtreexoNodeConfig {
     pub disable_dns_seeds: bool,
 }
 
+impl UtreexoNodeConfig {
+    /// Returns the message-start bytes used by this node.
+    pub fn network_magic(&self) -> Magic {
+        match (self.network, self.signet_challenge.as_deref()) {
+            (Network::Signet, Some(challenge)) => signet_magic(challenge),
+            _ => self.network.magic(),
+        }
+    }
+
+    fn is_custom_signet(&self) -> bool {
+        self.network == Network::Signet
+            && self
+                .signet_challenge
+                .as_deref()
+                .is_some_and(|challenge| challenge != ChainParams::default_signet_challenge())
+    }
+
+    pub(crate) fn should_use_dns_seeds(&self) -> bool {
+        !self.disable_dns_seeds && !self.is_custom_signet()
+    }
+
+    pub(crate) fn should_use_fixed_seeds(&self) -> bool {
+        !self.is_custom_signet()
+    }
+}
+
+/// Derives the BIP-325 message-start bytes from a signet challenge.
+pub fn signet_magic(challenge: &Script) -> Magic {
+    let mut engine = sha256d::Hash::engine();
+    challenge
+        .consensus_encode(&mut engine)
+        .expect("hash engines are infallible");
+    let hash = sha256d::Hash::from_engine(engine).to_byte_array();
+
+    Magic::from_bytes([hash[0], hash[1], hash[2], hash[3]])
+}
+
 impl Default for UtreexoNodeConfig {
     fn default() -> Self {
         Self {
             disable_dns_seeds: false,
             network: Network::Bitcoin,
+            signet_challenge: None,
             pow_fraud_proofs: false,
             compact_filters: false,
             fixed_peers: Vec::new(),
+            seed_nodes: Vec::new(),
             max_banscore: 100,
             datadir: ".floresta-node".into(),
             proxy: None,
@@ -105,3 +161,59 @@ mod stump_updater;
 #[doc(hidden)]
 pub mod tests;
 pub mod transport;
+
+#[cfg(test)]
+mod magic_tests {
+    use floresta_chain::ChainParams;
+
+    use super::*;
+
+    #[test]
+    fn signet_magic_is_derived_from_serialized_challenge() {
+        let challenge = ScriptBuf::from_hex(
+            "512103ad5e0edad18cb1f0fc0d28a3d4f1f3e445640337489abb10404f2d1e086be43051ae",
+        )
+        .expect("BIP-325 example challenge");
+        let config = UtreexoNodeConfig {
+            network: Network::Signet,
+            signet_challenge: Some(challenge),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.network_magic(),
+            Magic::from_bytes([0x7e, 0xc6, 0x53, 0xa5])
+        );
+    }
+
+    #[test]
+    fn default_signet_challenge_derives_builtin_magic() {
+        let params = ChainParams::from(Network::Signet);
+        let challenge = params
+            .signet_challenge
+            .as_deref()
+            .expect("signet has a challenge");
+
+        assert_eq!(signet_magic(challenge), Magic::SIGNET);
+    }
+
+    #[test]
+    fn custom_signet_disables_builtin_seeds() {
+        let mut config = UtreexoNodeConfig {
+            network: Network::Signet,
+            signet_challenge: Some(ScriptBuf::from_bytes(vec![0x51])),
+            ..Default::default()
+        };
+
+        assert!(!config.should_use_dns_seeds());
+        assert!(!config.should_use_fixed_seeds());
+
+        config.signet_challenge = Some(ChainParams::default_signet_challenge().to_owned());
+        assert!(config.should_use_dns_seeds());
+        assert!(config.should_use_fixed_seeds());
+
+        config.disable_dns_seeds = true;
+        assert!(!config.should_use_dns_seeds());
+        assert!(config.should_use_fixed_seeds());
+    }
+}

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+
 # Running Floresta
 
 After building, florestad and floresta-cli will be available in the target directory. You can run the full node with
@@ -20,6 +22,37 @@ floresta-cli getblockchaininfo
 ```
 
 For more information on how to use the `floresta-cli` tool, you can check the [API documentation](https://github.com/getfloresta/Floresta/blob/master/bin/floresta-cli/README.md).
+
+## Custom Signets
+
+Select signet and pass its BIP-325 challenge as a hex-encoded script:
+
+```bash
+florestad --network signet --signet-challenge <hex-script>
+```
+
+The challenge can instead be placed at the top level of `config.toml`:
+
+```toml
+signet_challenge = "<hex-script>"
+seednode = ["seed.example.com:38333"]
+```
+
+Use `--config-file <path>` to select any other configuration location. Without
+an explicit path, Floresta discovers a file-based custom challenge in the
+default `<base>/signet/config.toml` location.
+
+Custom signets do not use the default Signet DNS or fixed seeds. Bootstrap
+discovery with one or more `--seednode <address[:port]>` options, or configure
+the `seednode` array shown above. A seed node is disconnected after returning
+peer addresses. Use `--connect <address[:port]>` instead to remain pinned to a
+specific peer.
+
+The default signet stores data in `<base>/signet`. Each custom signet uses
+`<base>/signet-<magic>`, where `<magic>` is its challenge-derived P2P
+message-start value. This prevents incompatible signet chainstates from sharing
+a directory. Public-signet assume-valid and assume-Utreexo checkpoints are
+disabled for custom signets.
 
 ## TLS
 

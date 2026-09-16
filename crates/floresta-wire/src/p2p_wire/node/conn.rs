@@ -7,7 +7,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use bitcoin::Network;
+use bitcoin::p2p::Magic;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
 use floresta_common::Ema;
@@ -107,7 +107,8 @@ where
 
         // Load hardcoded addresses to the address manager if no fixed or manual peers exist.
         let Some((peer_id, peer_address)) = candidate_peer else {
-            if !matches!(conn_kind, ConnectionKind::Manual) {
+            if !matches!(conn_kind, ConnectionKind::Manual) && self.config.should_use_fixed_seeds()
+            {
                 let net = self.network;
                 self.address_man.add_fixed_addresses(net);
             }
@@ -185,7 +186,7 @@ where
                     proxy.address,
                     kind,
                     self.mempool.clone(),
-                    self.network,
+                    self.magic,
                     self.node_tx.clone(),
                     peer_address.clone(),
                     requests_rx,
@@ -207,7 +208,7 @@ where
                     requests_rx,
                     self.peer_id_count,
                     self.mempool.clone(),
-                    self.network,
+                    self.magic,
                     self.node_tx.clone(),
                     self.config.user_agent.clone(),
                     self.chain
@@ -272,7 +273,7 @@ where
         requests_rx: UnboundedReceiver<NodeRequest>,
         peer_id_count: u32,
         mempool: Arc<Mutex<dyn MempoolBase>>,
-        network: Network,
+        magic: Magic,
         node_tx: UnboundedSender<NodeNotification>,
         our_user_agent: String,
         our_best_block: u32,
@@ -284,7 +285,7 @@ where
         let address = (ip_addr, peer_address.get_port());
 
         let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect(address, network, allow_v1_fallback).await?;
+            transport::connect(address, magic, allow_v1_fallback).await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);
@@ -320,7 +321,7 @@ where
         proxy: SocketAddr,
         kind: ConnectionKind,
         mempool: Arc<Mutex<dyn MempoolBase>>,
-        network: Network,
+        magic: Magic,
         node_tx: UnboundedSender<NodeNotification>,
         peer_address: LocalAddress,
         requests_rx: UnboundedReceiver<NodeRequest>,
@@ -330,8 +331,7 @@ where
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
         let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect_proxy(proxy, peer_address.clone(), network, allow_v1_fallback)
-                .await?;
+            transport::connect_proxy(proxy, peer_address.clone(), magic, allow_v1_fallback).await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);
@@ -406,7 +406,7 @@ where
 
         // Skip if address fetching from DNS seeds is disabled,
         // or if the [`AddressMan`] has enough addresses in its database.
-        if self.config.disable_dns_seeds || enough_addresses {
+        if !self.config.should_use_dns_seeds() || enough_addresses {
             return;
         }
 
@@ -431,7 +431,7 @@ where
     /// can't find a Utreexo peer in a context we need them. This function
     /// won't do anything if `--connect` was used
     fn maybe_use_hardcoded_addresses(&mut self) {
-        if self.has_fixed_peers() {
+        if self.has_fixed_peers() || !self.config.should_use_fixed_seeds() {
             return;
         }
 
@@ -459,7 +459,11 @@ where
         let anchors = self.common.address_man.start_addr_man(&self.common.datadir);
         let enough_addresses = self.common.address_man.enough_addresses();
 
-        if !self.config.disable_dns_seeds && !enough_addresses {
+        for address in core::mem::take(&mut self.seed_nodes) {
+            self.open_connection(ConnectionKind::Feeler, address, true)?;
+        }
+
+        if self.config.should_use_dns_seeds() && !enough_addresses {
             self.get_peers_from_dns()?;
             self.last_dns_seed_call = Instant::now();
         }
