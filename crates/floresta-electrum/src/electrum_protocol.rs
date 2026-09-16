@@ -3,11 +3,13 @@
 use core::error;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use bitcoin::Amount;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::TxOut;
@@ -308,7 +310,32 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "max": MAX_COUNT,
                 })
             }
-            "blockchain.estimatefee" => json_rpc_res!(request, 0.0001),
+            "blockchain.estimatefee" => {
+                let target = request
+                    .params
+                    .first()
+                    .and_then(|v| v.as_u64())
+                    .and_then(|t| usize::try_from(t).ok())
+                    .unwrap_or(1);
+
+                //estimate_fee returns FeeRate(sat/kwu)
+                let fee_rate = self
+                    .chain
+                    .estimate_fee(target)
+                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+
+                //sat/kvb = sat/kwu * 4, then sat/kbB -> BTC/kB
+                #[allow(clippy::as_conversions)]
+                let fee_rate_sat_per_kvb = fee_rate.to_sat_per_kwu().saturating_mul(4) as f64;
+
+                // u64 -> f64 conversion is exact for this value
+                #[allow(clippy::as_conversions)]
+                let fee_btc_per_kb =
+                    Amount::from_btc(fee_rate_sat_per_kvb / Amount::ONE_BTC.to_sat() as f64)
+                        .unwrap_or(Amount::ONE_SAT)
+                        .to_btc();
+                json_rpc_res!(request, fee_btc_per_kb)
+            }
             "blockchain.headers.subscribe" => {
                 let (height, hash) = self
                     .chain
@@ -1315,7 +1342,9 @@ mod test {
 
         let batch_response = send_request(batch_req, port).await.unwrap();
 
-        assert_eq!(batch_response[0]["result"], 0.0001);
+        // no params -> target defaults to 1 -> fee_estimation.0, which starts at
+        // FeeRate::BROADCAST_MIN (250 sat/kwu = 1000 sat/kvB = 0.00001 BTC/kvB)
+        assert_eq!(batch_response[0]["result"], 0.00001);
         assert_eq!(batch_response[1]["result"], 0.00001);
     }
 

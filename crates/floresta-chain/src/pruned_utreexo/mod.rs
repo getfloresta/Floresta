@@ -28,6 +28,7 @@ use core::error::Error;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Work;
 use bitcoin::block::Header as BlockHeader;
@@ -82,7 +83,7 @@ pub trait BlockchainInterface {
     fn get_height(&self) -> Result<u32, Self::Error>;
 
     /// Returns fee estimation for inclusion in `target` blocks.
-    fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error>;
+    fn estimate_fee(&self, target: usize) -> Result<FeeRate, Self::Error>;
 
     /// Returns a block with a given `hash` if any.
     fn get_block(&self, hash: &BlockHash) -> Result<Block, Self::Error>;
@@ -336,7 +337,7 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
         T::get_height(self)
     }
 
-    fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error> {
+    fn estimate_fee(&self, target: usize) -> Result<FeeRate, Self::Error> {
         T::estimate_fee(self, target)
     }
 

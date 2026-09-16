@@ -30,6 +30,7 @@ use core::ops::Add;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::FeeRate;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Target;
@@ -58,6 +59,7 @@ use super::chain_state_builder::ChainStateBuilder;
 use super::chainparams::ChainParams;
 use super::chainstore::ChainStoreWarning;
 use super::chainstore::DiskBlockHeader;
+use super::consensus::BlockTxStats;
 use super::consensus::Consensus;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
@@ -134,7 +136,7 @@ pub struct ChainStateInner<PersistedState: ChainStore> {
     /// be used during subscription (just keep the `Receiver` side.
     subscribers: Vec<Arc<dyn BlockConsumer>>,
     /// Fee estimation for 1, 10 and 20 blocks
-    fee_estimation: (f64, f64, f64),
+    fee_estimation: (FeeRate, FeeRate, FeeRate),
     /// What is our current IBD state?
     ibd: IBDState,
     /// Parameters for the chain and functions that verify the chain.
@@ -627,7 +629,11 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
                     alternative_tips: Vec::new(),
                 },
                 subscribers: Vec::new(),
-                fee_estimation: (1_f64, 1_f64, 1_f64),
+                fee_estimation: (
+                    FeeRate::BROADCAST_MIN,
+                    FeeRate::BROADCAST_MIN,
+                    FeeRate::BROADCAST_MIN,
+                ),
                 ibd: IBDState::HeadersSync,
                 consensus: Consensus { parameters },
                 assume_valid,
@@ -788,7 +794,11 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             acc,
             best_block,
             chainstore,
-            fee_estimation: (1_f64, 1_f64, 1_f64),
+            fee_estimation: (
+                FeeRate::BROADCAST_MIN,
+                FeeRate::BROADCAST_MIN,
+                FeeRate::BROADCAST_MIN,
+            ),
             subscribers: Vec::new(),
             ibd: IBDState::HeadersSync,
             consensus: Consensus {
@@ -1029,6 +1039,17 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
         inputs: HashMap<OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
+        self.validate_block_no_acc_inner(block, height, inputs)
+            .map(|_| ())
+    }
+
+    /// Like [`ChainState::validate_block_no_acc`], but also returns the block's fee/weight stats.
+    pub(crate) fn validate_block_no_acc_inner(
+        &self,
+        block: &Block,
+        height: u32,
+        inputs: HashMap<OutPoint, UtxoData>,
+    ) -> Result<BlockTxStats, BlockchainError> {
         let consensus = read_lock!(self).consensus.clone();
         consensus.check_block(block, height)?;
 
@@ -1045,7 +1066,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let flags = 0;
         let verify_script = self.verify_script(height)?;
 
-        Consensus::verify_block_transactions(
+        Consensus::verify_block_transactions_inner(
             height,
             lock_time_cutoff,
             inputs,
@@ -1053,8 +1074,44 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             subsidy,
             verify_script,
             flags,
-        )?;
+        )
+    }
+
+    fn update_fee_estimation(
+        &self,
+        height: u32,
+        avg_fee_rate: bitcoin::FeeRate,
+    ) -> Result<(), BlockchainError> {
+        let mut inner = write_lock!(self);
+        inner.chainstore.save_block_fee_rate(height, avg_fee_rate)?;
+        let rates: Vec<FeeRate> = (height.saturating_sub(59)..=height)
+            .filter_map(|h| inner.chainstore.get_block_fee_rate(h).ok().flatten())
+            .collect();
+        if !rates.is_empty() {
+            inner.fee_estimation = (
+                Self::median(&rates[rates.len().saturating_sub(6)..]),
+                Self::median(&rates[rates.len().saturating_sub(30)..]),
+                Self::median(rates.as_slice()),
+            );
+        }
         Ok(())
+    }
+
+    pub(crate) fn median(data: &[FeeRate]) -> FeeRate {
+        if data.is_empty() {
+            return FeeRate::ZERO;
+        }
+        let mut sorted = data.to_vec();
+        sorted.sort_unstable();
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            FeeRate::from_sat_per_kwu(u64::midpoint(
+                sorted[mid - 1].to_sat_per_kwu(),
+                sorted[mid].to_sat_per_kwu(),
+            ))
+        } else {
+            sorted[mid]
+        }
     }
 }
 
@@ -1127,6 +1184,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
             .try_height()?;
 
         self.validate_block_no_acc(block, height, inputs)
+            .map(|_| ())
     }
 
     fn get_block_locator_for_tip(&self, tip: BlockHash) -> Result<Vec<BlockHash>, BlockchainError> {
@@ -1187,14 +1245,12 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
         Ok(inner.best_block.depth)
     }
 
-    fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error> {
+    fn estimate_fee(&self, target: usize) -> Result<FeeRate, Self::Error> {
         let inner = read_lock!(self);
-        if target == 1 {
-            Ok(inner.fee_estimation.0)
-        } else if target == 10 {
-            Ok(inner.fee_estimation.1)
-        } else {
-            Ok(inner.fee_estimation.2)
+        match target {
+            0..=1 => Ok(inner.fee_estimation.0),
+            2..=10 => Ok(inner.fee_estimation.1),
+            _ => Ok(inner.fee_estimation.2),
         }
     }
 
@@ -1405,7 +1461,9 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .any(|subscriber| subscriber.wants_spent_utxos())
             .then(|| inputs.clone());
 
-        self.validate_block_no_acc(block, height, inputs)?;
+        let stats = self.validate_block_no_acc_inner(block, height, inputs)?;
+        let avg_fee_rate = stats.avg_fee_rate();
+
         let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
 
         self.update_view(height, &block.header, acc)?;
@@ -1425,6 +1483,11 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
 
         // Notify others we have a new block
         self.notify(block, height, inputs_for_notifications.as_ref());
+
+        if let Err(e) = self.update_fee_estimation(height, avg_fee_rate) {
+            warn!("Failed to update fee estimation {e}");
+        }
+
         Ok(height)
     }
 
@@ -1532,7 +1595,11 @@ impl<T: ChainStore> TryFrom<ChainStateBuilder<T>> for ChainState<T> {
             assume_valid: builder.assume_valid(),
             ibd: builder.ibd_state(),
             subscribers: Vec::new(),
-            fee_estimation: (1_f64, 1_f64, 1_f64),
+            fee_estimation: (
+                FeeRate::BROADCAST_MIN,
+                FeeRate::BROADCAST_MIN,
+                FeeRate::BROADCAST_MIN,
+            ),
             consensus: Consensus {
                 parameters: builder.chain_params()?,
             },
@@ -1572,7 +1639,9 @@ mod test {
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::CompactTarget;
+    use bitcoin::FeeRate;
     use bitcoin::Network;
+    use bitcoin::Network::Regtest;
     use bitcoin::OutPoint;
     use bitcoin::ScriptBuf;
     use bitcoin::Sequence;
@@ -2527,6 +2596,55 @@ mod test {
         );
     }
 
+    fn fr(n: u64) -> FeeRate {
+        FeeRate::from_sat_per_kwu(n)
+    }
+
+    #[test]
+    fn test_median() {
+        let cases: [(&[u64], u64); 6] = [
+            (&[], 0),
+            (&[42], 42),
+            (&[1, 3, 2], 2),
+            (&[1, 4, 2, 3], 2),
+            (&[7, 7, 7], 7),
+            (&[u64::MAX / 2, u64::MAX / 2 + 2], u64::MAX / 2 + 1),
+        ];
+
+        for (input, expected) in cases {
+            let data: Vec<FeeRate> = input.iter().copied().map(fr).collect();
+            assert_eq!(
+                ChainState::<FlatChainStore>::median(&data),
+                fr(expected),
+                "input = {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_median_empty() {
+        let data: &[FeeRate] = &[];
+        assert_eq!(ChainState::<FlatChainStore>::median(data), FeeRate::ZERO)
+    }
+
+    #[test]
+    fn test_median_large_values_even() {
+        let large = u64::MAX / 2;
+        assert_eq!(
+            ChainState::<FlatChainStore>::median(&[fr(large), fr(large + 2)]),
+            fr(large + 1)
+        );
+    }
+
+    #[test]
+    fn test_median_large_values_odd() {
+        let large = u64::MAX / 2;
+        assert_eq!(
+            ChainState::<FlatChainStore>::median(&[fr(large), fr(large + 2), fr(large + 1)]),
+            fr(large + 1)
+        );
+    }
+
     #[test]
     fn a_failed_reorg_leaves_the_chain_state_untouched() {
         let json_blocks = include_str!("../../testdata/test_reorg.json");
@@ -2590,5 +2708,56 @@ mod test {
         );
         assert_eq!(chain.get_block_hash(6).unwrap(), block_after_fork);
         assert_eq!(chain.acc(), acc);
+    }
+
+    #[test]
+    fn test_estimate_fee() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        {
+            let mut inner = chain.inner.write();
+            inner.fee_estimation = (fr(10), fr(20), fr(30)); // 0~1 : 10, 2~10: 20, 11~:30
+        }
+        let cases: [(usize, FeeRate); 7] = [
+            (0, fr(10)),
+            (1, fr(10)),
+            (2, fr(20)),
+            (5, fr(20)),
+            (10, fr(20)),
+            (11, fr(30)),
+            (1000, fr(30)),
+        ];
+
+        for (target, expected) in cases {
+            assert_eq!(
+                chain.estimate_fee(target).unwrap(),
+                expected,
+                "target = {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_fee_estimation() {
+        let chain = setup_test_chain(Regtest, AssumeValidArg::Disabled, None);
+        {
+            let mut inner = chain.inner.write();
+            inner
+                .chainstore
+                .save_height(&crate::BestChain {
+                    depth: 60,
+                    best_block: BlockHash::all_zeros(),
+                    validation_index: BlockHash::all_zeros(),
+                    alternative_tips: vec![],
+                })
+                .unwrap();
+        }
+        for h in 0..=59u32 {
+            chain.update_fee_estimation(h, fr(h as u64)).unwrap(); //rate = h
+        }
+
+        let (t0, t1, t2) = chain.inner.read().fee_estimation;
+        assert_eq!(t0, fr(56));
+        assert_eq!(t1, fr(44));
+        assert_eq!(t2, fr(29));
     }
 }

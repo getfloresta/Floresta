@@ -27,6 +27,7 @@ use core::cell::UnsafeCell;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::FeeRate;
 use bitcoin::block::Header as BlockHeader;
 use floresta_common::prelude::*;
 use rustreexo::node_hash::BitcoinNodeHash;
@@ -491,7 +492,7 @@ impl BlockchainInterface for PartialChainState {
         unimplemented!("partialChainState::subscribe")
     }
 
-    fn estimate_fee(&self, _target: usize) -> Result<f64, Self::Error> {
+    fn estimate_fee(&self, _target: usize) -> Result<FeeRate, Self::Error> {
         unimplemented!("partialChainState::estimate_fee")
     }
 
