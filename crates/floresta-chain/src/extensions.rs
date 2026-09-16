@@ -486,10 +486,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn estimate_fee(&self, _: usize) -> Result<f64, Self::Error> {
-            unimplemented!()
-        }
-
         fn get_block(&self, _: &BlockHash) -> Result<Block, Self::Error> {
             unimplemented!()
         }
