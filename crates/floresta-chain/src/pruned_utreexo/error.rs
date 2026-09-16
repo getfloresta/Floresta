@@ -131,6 +131,7 @@ pub enum BlockValidationErrors {
     EmptyOutputs,
     ScriptError,
     BlockTooBig,
+    TooManySigops,
     TooManyCoins,
     NotEnoughPow,
     BadMerkleRoot,
@@ -196,6 +197,7 @@ impl Display for BlockValidationErrors {
                 write!(f, "This transaction has no outputs")
             }
             Self::BlockTooBig => write!(f, "Block too big"),
+            Self::TooManySigops => write!(f, "Block has too many signature operations"),
             Self::InvalidCoinbase(e) => {
                 write!(f, "Invalid coinbase: {e:?}")
             }
