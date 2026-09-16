@@ -88,6 +88,8 @@ compact-filters = ["dep:floresta-compact-filters"]
 
 # floresta-domain
 domain = ["dep:floresta-domain"]
+domain-mempool = ["domain", "floresta-domain/mempool"]
+domain-wallet = ["domain", "floresta-domain/wallet"]
 
 # floresta-electrum
 electrum = ["dep:floresta-electrum"]
