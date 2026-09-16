@@ -21,6 +21,9 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+/// Bitcoin Core as a chain backend, for tests to compare ourselves against. Not for use.
+#[cfg(feature = "bitcoinkernel")]
+pub mod bitcoinkernelbackend;
 pub mod extensions;
 
 pub mod pruned_utreexo;
