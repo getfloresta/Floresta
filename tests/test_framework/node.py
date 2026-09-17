@@ -8,8 +8,12 @@ for different types of nodes in the test framework. It encapsulates the behavior
 including their daemon processes, RPC interfaces, and configurations.
 """
 
+import os
+import resource
 from enum import Enum
 from typing import List, Tuple, Optional
+
+from test_framework import timing
 
 from test_framework.daemon import ConfigP2P
 from test_framework.daemon.bitcoin import BitcoinDaemon
@@ -32,6 +36,15 @@ class NodeType(Enum):
     BITCOIND = "bitcoind"
     FLORESTAD = "florestad"
     UTREEXOD = "utreexod"
+
+
+# File whose presence means the daemon will open an existing chain state instead of
+# creating one, which is much slower for florestad (see TEST_ANALISIS.md).
+CHAIN_STATE_MARKERS = {
+    NodeType.FLORESTAD: os.path.join("regtest", "chaindata", "metadata.bin"),
+    NodeType.BITCOIND: os.path.join("regtest", "chainstate"),
+    NodeType.UTREEXOD: os.path.join("regtest", "blocks_ffldb"),
+}
 
 
 # pylint: disable=too-many-instance-attributes
@@ -283,15 +296,25 @@ class Node:
         if self.daemon.is_running:
             raise RuntimeError(f"Node '{self.variant}' is already running.")
 
-        self.daemon.start()
-        self.rpc.wait_on_socket(opened=True)
+        existing_chain_state = os.path.exists(
+            os.path.join(self.daemon.data_dir, CHAIN_STATE_MARKERS[self.variant])
+        )
+        with timing.span(
+            "node.start",
+            variant=self.variant.value,
+            existing_chain_state=existing_chain_state,
+        ):
+            self.daemon.start()
+            self.rpc.wait_on_socket(opened=True)
 
-        # Test if the node is already responding to RPC calls.
-        self.rpc.get_blockchain_info()
-        # When starting Floresta for the first time, it is ideal to check
-        # if the Electrum server is ready to receive requests.
-        if self.variant == NodeType.FLORESTAD and self.static_values is not True:
-            self.electrum.ping()
+            # Test if the node is already responding to RPC calls.
+            with timing.span("node.first_rpc", variant=self.variant.value):
+                self.rpc.get_blockchain_info()
+            # When starting Floresta for the first time, it is ideal to check
+            # if the Electrum server is ready to receive requests.
+            if self.variant == NodeType.FLORESTAD and self.static_values is not True:
+                with timing.span("node.electrum_ping", variant=self.variant.value):
+                    self.electrum.ping()
 
     def stop(self):
         """
@@ -299,14 +322,30 @@ class Node:
         """
         response = None
         if self.daemon.is_running:
-            try:
-                response = self.rpc.stop()
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                self.daemon.process.terminate()
+            with timing.span("node.stop", variant=self.variant.value) as extra:
+                # The daemon is reaped by `process.wait()` below, so the change in
+                # children usage is the CPU time it consumed over its whole lifetime.
+                usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+                extra["method"] = "rpc"
+                try:
+                    response = self.rpc.stop()
+                # pylint: disable=broad-exception-caught
+                except Exception:
+                    extra["method"] = "terminate"
+                    self.daemon.process.terminate()
 
-            self.daemon.process.wait()
-            self.rpc.wait_on_socket(opened=False)
+                with timing.span("node.process_exit", variant=self.variant.value):
+                    self.daemon.process.wait()
+                self.rpc.wait_on_socket(opened=False)
+
+                usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+                extra["lifetime_cpu_user"] = round(
+                    usage_after.ru_utime - usage_before.ru_utime, 3
+                )
+                extra["lifetime_cpu_sys"] = round(
+                    usage_after.ru_stime - usage_before.ru_stime, 3
+                )
+                extra["returncode"] = self.daemon.process.returncode
 
         return response
 

@@ -13,6 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from subprocess import Popen, PIPE
 from typing import List
+from test_framework import timing
 from test_framework.rpc import ConfigRPC
 from test_framework.daemon import ConfigP2P
 from test_framework.electrum import ConfigElectrum
@@ -170,11 +171,13 @@ class BaseDaemon(ABC):
         stdout_file = open(
             os.path.join(self._p2p_config.log_path), "w", encoding="utf-8"
         )
-        # pylint: disable=consider-using-with
-        self.process = Popen(cmd, text=True, stderr=PIPE, stdout=stdout_file)
+        with timing.span("daemon.spawn", variant=self.name):
+            # pylint: disable=consider-using-with
+            self.process = Popen(cmd, text=True, stderr=PIPE, stdout=stdout_file)
 
         # Wait a little to see if the process is running
-        time.sleep(1)
+        with timing.span("daemon.start_fixed_sleep", variant=self.name):
+            time.sleep(1)
         if not self.is_running:
             self.process.terminate()
             stderr = self.process.stderr.read()

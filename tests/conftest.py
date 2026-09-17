@@ -9,13 +9,17 @@ This module provides fixtures for creating and managing test nodes
 
 # pylint: disable=redefined-outer-name
 
+import json
 import logging
 import os
+import platform
+import subprocess
 import time
+from datetime import datetime, timezone
 from typing import Callable, List
 
 import pytest
-from test_framework import FlorestaTestFramework
+from test_framework import FlorestaTestFramework, timing
 from test_framework.constants import (
     FLORESTA_TEMP_DIR,
     WALLET_ADDRESS,
@@ -34,6 +38,145 @@ def pytest_addoption(parser):
         default=False,
         help="Run tests marked with the expensive marker",
     )
+
+
+TIMING_RUN_DIR = pytest.StashKey[str]()
+TIMING_SESSION_START = pytest.StashKey[float]()
+
+
+def _command_output(cmd: List[str]) -> str | None:
+    """Run a short command and return its first output line, or None on failure."""
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=10, check=False
+        )
+        lines = (result.stdout or result.stderr).strip().splitlines()
+        return lines[0] if lines else None
+    # pylint: disable=broad-exception-caught
+    except Exception:
+        return None
+
+
+def _timing_run_metadata(config) -> dict:
+    """Describe the host and invocation, so runs from different machines can be compared."""
+    binaries_dir = os.path.join(FLORESTA_TEMP_DIR or "", "binaries")
+    ci_vars = [
+        "CI",
+        "GITHUB_RUN_ID",
+        "GITHUB_RUN_ATTEMPT",
+        "GITHUB_SHA",
+        "GITHUB_REF_NAME",
+        "RUNNER_OS",
+        "RUNNER_ARCH",
+        "RUNNER_NAME",
+    ]
+    return {
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "label": os.getenv("FLORESTA_TIMINGS_LABEL"),
+        "git_commit": _command_output(["git", "rev-parse", "--short", "HEAD"]),
+        "florestad_version": _command_output(
+            [os.path.join(binaries_dir, "florestad"), "--version"]
+        ),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "python": platform.python_version(),
+        "cpu_count": os.cpu_count(),
+        "loadavg_start": os.getloadavg() if hasattr(os, "getloadavg") else None,
+        "numprocesses": config.getoption("numprocesses", None),
+        "dist": config.getoption("dist", None),
+        "args": list(config.invocation_params.args),
+        "ci": {var: os.getenv(var) for var in ci_vars if os.getenv(var)},
+    }
+
+
+def pytest_configure(config):
+    """Start the timing instrumentation, see `test_framework/timing.py`."""
+    if timing.is_disabled_by_env():
+        return
+
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is None:
+        run_id = datetime.now().strftime("%Y%m%dT%H%M%S") + f"-{os.getpid()}"
+        run_dir = os.path.join(timing.default_timings_dir(), run_id)
+        os.makedirs(run_dir, exist_ok=True)
+        with open(os.path.join(run_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"run_id": run_id, **_timing_run_metadata(config)}, f, indent=2)
+        config.stash[TIMING_RUN_DIR] = run_dir
+        worker = "main"
+    else:
+        run_dir = workerinput.get("floresta_timing_run_dir")
+        if run_dir is None:
+            return
+        worker = workerinput["workerid"]
+
+    config.stash[TIMING_SESSION_START] = time.perf_counter()
+    timing.configure(run_dir, worker)
+    timing.install_sleep_probe()
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node):
+    """Hand the timing run directory over to each xdist worker."""
+    run_dir = node.config.stash.get(TIMING_RUN_DIR, None)
+    if run_dir is not None:
+        node.workerinput["floresta_timing_run_dir"] = run_dir
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Store how long the whole run took, as seen by the controller."""
+    config = session.config
+    run_dir = config.stash.get(TIMING_RUN_DIR, None)
+    start = config.stash.get(TIMING_SESSION_START, None)
+    if run_dir is None or start is None:
+        return
+
+    with open(os.path.join(run_dir, "session.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "wall_time": time.perf_counter() - start,
+                "exitstatus": int(exitstatus),
+                "testsfailed": session.testsfailed,
+                "testscollected": session.testscollected,
+                "loadavg_end": (os.getloadavg() if hasattr(os, "getloadavg") else None),
+            },
+            f,
+            indent=2,
+        )
+
+
+# pylint: disable=unused-argument
+def pytest_unconfigure(config):
+    """Flush and close the timing instrumentation."""
+    timing.close()
+    timing.uninstall_sleep_probe()
+
+
+def _timing_phase(item, phase):
+    """Attribute every event recorded during a test phase to that test and phase."""
+    timing.set_context(item.nodeid, phase)
+    try:
+        yield
+    finally:
+        timing.flush_aggregates()
+        timing.set_context(None, None)
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_setup(item):
+    """Timing context for the setup phase."""
+    yield from _timing_phase(item, "setup")
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_call(item):
+    """Timing context for the call phase."""
+    yield from _timing_phase(item, "call")
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item):
+    """Timing context for the teardown phase."""
+    yield from _timing_phase(item, "teardown")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -85,6 +228,15 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
     setattr(item, f"rep_{rep.when}", rep)
+
+    timing.record(
+        "test.phase",
+        rep.duration,
+        test=item.nodeid,
+        phase=rep.when,
+        outcome=rep.outcome,
+        loadavg=os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
+    )
 
 
 def _create_logger(test_name):

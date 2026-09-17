@@ -57,6 +57,17 @@ test-functional-prepare arg="":
 test-functional-run arg="":
     bash tests/run.sh {{ arg }}
 
+# Run the functional tests `runs` times without stopping on failures, recording timings under `label`
+test-functional-timing runs="3" label="local" arg="":
+    for i in $(seq 1 {{ runs }}); do \
+        FLORESTA_TIMINGS_LABEL="{{ label }}" bash tests/run.sh --maxfail=0 {{ arg }} || true; \
+    done
+    @just test-functional-timing-report "--label {{ label }} --last {{ runs }}"
+
+# Summarize recorded functional test timings as Markdown (see tests/test_framework/timing_report.py)
+test-functional-timing-report arg="":
+    uv run python tests/test_framework/timing_report.py {{ arg }}
+
 # Execute tests/run.sh -n 1 --run-expensive ./tests/expensive
 test-expensive-functional-run:
     bash tests/run.sh -n 1 --run-expensive ./tests/expensive

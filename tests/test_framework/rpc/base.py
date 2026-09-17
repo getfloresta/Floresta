@@ -18,6 +18,7 @@ from urllib.parse import quote
 from requests import post
 from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
+from test_framework import timing
 from test_framework.rpc import ConfigRPC
 from test_framework.rpc.exceptions import JSONRPCError
 
@@ -145,7 +146,16 @@ class BaseRPC(ABC):
     ) -> Dict[str, Any]:
         """Send a standard JSON-RPC request and return the parsed response (no raise)."""
         request = self.build_request(method, params, request_id)
-        return self._send_request(request)
+        start = time.perf_counter()
+        try:
+            return self._send_request(request)
+        finally:
+            timing.accumulate(
+                "rpc.request",
+                time.perf_counter() - start,
+                rpc=self.__class__.__name__,
+                method=method,
+            )
 
     def noraise_raw_request(
         self,
@@ -220,17 +230,24 @@ class BaseRPC(ABC):
         Verifies that the RPC socket connection matches the expected one, retrying for
         the specified duration. Returns true if the connection matches, false otherwise.
         """
-        start = time.time()
-        while time.time() - start < timeout:
-            if self.is_socket_listening() == opened:
-                state = "open" if opened else "closed"
-                self.log.debug(
-                    self.log_msg(f"{self._config.host}:{self._config.port} {state}")
-                )
-                return True
-            time.sleep(0.5)
+        state = "open" if opened else "closed"
+        with timing.span(
+            f"rpc.wait_socket_{state}", rpc=self.__class__.__name__
+        ) as extra:
+            polls = 0
+            start = time.time()
+            while time.time() - start < timeout:
+                polls += 1
+                extra["polls"] = polls
+                if self.is_socket_listening() == opened:
+                    self.log.debug(
+                        self.log_msg(f"{self._config.host}:{self._config.port} {state}")
+                    )
+                    return True
+                time.sleep(0.5)
 
-        return False
+            extra["timed_out"] = True
+            return False
 
     def wait_on_socket(self, opened: bool):
         """
@@ -253,8 +270,10 @@ class BaseRPC(ABC):
         """
         Perform the `stop` RPC command to the daemon and wait for the connection to close
         """
-        result = self.perform_request("stop")
-        self.wait_on_socket(opened=False)
+        with timing.span("rpc.stop_call", rpc=self.__class__.__name__):
+            result = self.perform_request("stop")
+        with timing.span("rpc.stop_wait_shutdown", rpc=self.__class__.__name__):
+            self.wait_on_socket(opened=False)
         return result
 
     def addnode(self, node: str, command: str, v2transport: bool = False):

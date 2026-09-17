@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Runs the functional tests several times on the same runner and publishes the
+# timing report (see tests/test_framework/timing.py), so bottlenecks can be
+# measured with averages instead of a single noisy run.
+
+name: Functional Tests Timings
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many times to run the functional tests"
+        default: "3"
+      pytest_args:
+        description: "Extra arguments for tests/run.sh (e.g. '-n 8')"
+        default: ""
+  push:
+    branches:
+      - "timings/**"
+
+permissions: {}
+
+jobs:
+  timings:
+    name: Functional Timings
+    runs-on: ubuntu-latest
+    env:
+      RUNS: ${{ inputs.runs || '3' }}
+      PYTEST_ARGS: ${{ inputs.pytest_args }}
+      FLORESTA_TIMINGS_DIR: /tmp/floresta-timings
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+            persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Prepare environment
+        run: uv sync --all-extras --dev
+
+      # Required for compiling the project, as it depends on the bitcoinkernel
+      - name: Install Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Prepare functional tests tasks
+        run: |
+          tests/prepare.sh --release
+
+      - name: Run functional tests repeatedly
+        run: |
+          for i in $(seq 1 "$RUNS"); do
+            echo "::group::Run $i of $RUNS"
+            # Don't stop at the first failure, so every run covers the whole suite
+            # shellcheck disable=SC2086
+            FLORESTA_TIMINGS_LABEL="ci-${GITHUB_RUN_ID}" tests/run.sh --maxfail=0 $PYTEST_ARGS \
+              || echo "::warning::Functional tests run $i had failures"
+            echo "::endgroup::"
+          done
+
+      - name: Timing report
+        if: always()
+        run: |
+          uv run python tests/test_framework/timing_report.py "$FLORESTA_TIMINGS_DIR" \
+            --output "$FLORESTA_TIMINGS_DIR/report.md"
+          cat "$FLORESTA_TIMINGS_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: functional-timings-${{ github.run_id }}
+          path: /tmp/floresta-timings

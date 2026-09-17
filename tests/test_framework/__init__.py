@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Pattern, Tuple, Optional
 
+from test_framework import timing
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
@@ -244,9 +245,15 @@ class FlorestaTestFramework:
         connection is established. If the node fails to start, it is
         terminated and retried.
         """
-        for _ in range(3):
+        for attempt in range(3):
             try:
-                node.start()
+                with timing.span(
+                    "framework.run_node_attempt",
+                    variant=node.variant.value,
+                    attempt=attempt,
+                    site=timing.call_site(),
+                ):
+                    node.start()
                 # Mark the node as having static values
                 node.static_values = True
                 self.log.debug(f"Node '{node.variant}' started")
@@ -271,6 +278,7 @@ class FlorestaTestFramework:
         node = self.get_node(index)
         return node.stop()
 
+    @timing.timed("framework.stop_all")
     def stop(self):
         """
         Stop all nodes.
@@ -337,7 +345,16 @@ class FlorestaTestFramework:
 
             return self.check_connection(peer_one, peer_two, is_connected)
 
-        wait_until(predicate=check_peers_connection)
+        with timing.span(
+            "framework.wait_for_peers_connections",
+            peers=f"{peer_one.variant.value}-{peer_two.variant.value}",
+            is_connected=is_connected,
+            site=timing.call_site(),
+        ) as extra:
+            try:
+                wait_until(predicate=check_peers_connection)
+            finally:
+                extra["attempts"] = attempts
 
         self.log.debug(
             f"Peers {peer_one.variant} and {peer_two.variant} are "
@@ -360,6 +377,7 @@ class FlorestaTestFramework:
                 f"{peer_two.is_peer_connected(peer_one)}"
             )
 
+    @timing.timed("framework.connect_nodes")
     def connect_nodes(
         self,
         peer_one: Node,
@@ -413,6 +431,7 @@ class FlorestaTestFramework:
 
         return True
 
+    @timing.timed("framework.wait_for_sync_nodes")
     def wait_for_sync_nodes(self, is_finished_ibd: bool = True):
         """
         Wait for all nodes to be synced.
@@ -425,6 +444,7 @@ class FlorestaTestFramework:
 
         self.log.debug("All nodes are synced")
 
+    @timing.timed("framework.generate_blocks_and_sync")
     def generate_blocks_and_sync(
         self, blocks: int, is_finished_ibd: bool = True, address: None | str = None
     ):
@@ -453,6 +473,7 @@ class FlorestaTestFramework:
 
         self.wait_for_sync_nodes(is_finished_ibd=is_finished_ibd)
 
+    @timing.timed("framework.add_p2p_connection")
     def add_p2p_connection(
         self,
         node: Node,

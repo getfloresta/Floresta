@@ -10,6 +10,7 @@ import socket
 import subprocess
 import math
 
+from test_framework import timing
 from test_framework.constants import FLORESTA_TEMP_DIR
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
@@ -137,14 +138,26 @@ def wait_until_helper_internal(
     """
     timeout = timeout * timeout_factor
     time_end = time.time() + timeout
+    site = timing.call_site(skip_framework=False, depth=2)
+    origin = timing.call_site()
+    start = time.perf_counter()
 
     while time.time() < time_end:
         if lock:
             with lock:
                 if predicate():
+                    timing.accumulate(
+                        "wait_until",
+                        time.perf_counter() - start,
+                        site=site,
+                        origin=origin,
+                    )
                     return
         else:
             if predicate():
+                timing.accumulate(
+                    "wait_until", time.perf_counter() - start, site=site, origin=origin
+                )
                 return
         time.sleep(check_interval)
 
@@ -160,9 +173,18 @@ def wait_until(predicate, timeout=30, interval=0.5, error_msg="Condition not met
     """
     Wait until a predicate returns True or timeout is reached.
     """
+    site = timing.call_site(skip_framework=False, depth=2)
+    origin = timing.call_site()
     start = time.time()
     while time.time() - start < timeout:
         if predicate():
+            timing.accumulate(
+                "wait_until",
+                time.time() - start,
+                site=site,
+                origin=origin,
+                interval=interval,
+            )
             return True
         time.sleep(interval)
 
