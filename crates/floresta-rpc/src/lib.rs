@@ -33,6 +33,7 @@ mod tests {
     use std::process::Child;
     use std::process::Command;
     use std::process::Stdio;
+    use std::sync::OnceLock;
     use std::thread::sleep;
     use std::time::Duration;
 
@@ -56,6 +57,51 @@ mod tests {
         }
     }
 
+    /// Resolves the path to a release `florestad` binary for integration tests.
+    ///
+    /// This function builds `florestad` in release mode into `{root}/target` and
+    /// returns that path. It always uses release because debug is too slow for the
+    /// RPC readiness window, and it runs `cargo build` once per test process so a
+    /// stale binary cannot survive RPC type or server changes. Parallel tests share
+    /// that single build via `OnceLock` instead of each invoking cargo. It pins
+    /// `--target-dir` under `root` because libtest's cwd is the crate directory,
+    /// not the workspace.
+    ///
+    /// # Panics
+    ///
+    /// If `cargo build` fails or the release binary is missing afterward.
+    fn ensure_florestad(root: &str) -> String {
+        static FLORESTAD: OnceLock<String> = OnceLock::new();
+        FLORESTAD
+            .get_or_init(|| {
+                let target_dir = format!("{root}/target");
+                let release_path = format!("{target_dir}/release/florestad");
+
+                let status = Command::new(env!("CARGO"))
+                    .args([
+                        "build",
+                        "-p",
+                        "florestad",
+                        "--release",
+                        "--target-dir",
+                        &target_dir,
+                    ])
+                    .current_dir(root)
+                    .status()
+                    .unwrap_or_else(|e| panic!("failed to invoke cargo to build florestad: {e}"));
+                assert!(
+                    status.success(),
+                    "cargo build -p florestad --release failed with {status}"
+                );
+                assert!(
+                    Path::new(&release_path).try_exists().unwrap_or(false),
+                    "florestad missing after build at {release_path}"
+                );
+                release_path
+            })
+            .clone()
+    }
+
     /// A helper function for tests.
     ///
     /// This function will start a florestad process and return a client that can be used to
@@ -67,18 +113,10 @@ mod tests {
     /// for both RPC and Electrum. The datadir will be in the current dir, under a `tmp` subdir.
     /// If you're at $HOME/floresta it will run on $HOME/floresta/tmp/<random_name>/
     fn start_florestad() -> (Florestad, Client) {
-        // CARGO_MANIFEST_DIR is always floresta-cli's directory; PWD changes based on where the
+        // CARGO_MANIFEST_DIR is always floresta-rpc's directory; PWD changes based on where the
         // command is executed.
         let root = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
-        let release_path = format!("{root}/target/release/florestad");
-        let debug_path = format!("{root}/target/debug/florestad");
-
-        let release_found = Path::new(&release_path).try_exists().unwrap();
-        // If release target not found, default to the debug path
-        let florestad_path = match release_found {
-            true => release_path,
-            false => debug_path,
-        };
+        let florestad_path = ensure_florestad(&root);
 
         // Makes a temporary directory to store the chain db, TLS certificate, logs, etc.
         let test_code = rand::random::<u64>();
