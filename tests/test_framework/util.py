@@ -227,7 +227,12 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
             if key in ignore_fields:
                 continue
             assert key in candidate, f"Missing key in candidate: {key}"
-            compare_fields(candidate[key], ref_value, ignore_fields=ignore_fields)
+            compare_fields(
+                candidate[key],
+                ref_value,
+                ignore_fields=ignore_fields,
+                float_tol=float_tol,
+            )
 
         return
 
@@ -237,7 +242,9 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
             reference
         ), f"List length mismatch: expected {len(candidate)}, got {len(reference)}"
         for cand_item, ref_item in zip(candidate, reference):
-            compare_fields(cand_item, ref_item, ignore_fields=ignore_fields)
+            compare_fields(
+                cand_item, ref_item, ignore_fields=ignore_fields, float_tol=float_tol
+            )
         return
 
     # scalar
