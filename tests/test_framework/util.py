@@ -265,9 +265,9 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
 
     # list
     if isinstance(candidate, list) and isinstance(reference, list):
-        assert len(candidate) == len(reference), (
-            f"List length mismatch: expected {len(candidate)}, got {len(reference)}"
-        )
+        assert len(candidate) == len(
+            reference
+        ), f"List length mismatch: expected {len(candidate)}, got {len(reference)}"
         for cand_item, ref_item in zip(candidate, reference):
             compare_fields(
                 cand_item, ref_item, ignore_fields=ignore_fields, float_tol=float_tol
