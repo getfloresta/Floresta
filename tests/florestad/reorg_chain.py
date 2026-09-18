@@ -21,7 +21,7 @@ def test_reorg_chain(setup_logging, florestad_utreexod, node_manager):
     log = setup_logging
     florestad, utreexod = florestad_utreexod
 
-    node_manager.generate_blocks_and_sync(MINE_BLOCKS, is_finished_ibd=False)
+    node_manager.generate_blocks_and_sync(MINE_BLOCKS, is_ibd_finished=False)
 
     old_best_block_hash = florestad.rpc.get_bestblockhash()
 
@@ -37,7 +37,7 @@ def test_reorg_chain(setup_logging, florestad_utreexod, node_manager):
 
     log.info(f"Mining {count_invalid_block + EXTRA_BLOCKS} blocks to trigger reorg")
     node_manager.generate_blocks_and_sync(
-        count_invalid_block + EXTRA_BLOCKS, is_finished_ibd=False
+        count_invalid_block + EXTRA_BLOCKS, is_ibd_finished=False
     )
 
     assert old_best_block_hash != florestad.rpc.get_bestblockhash()

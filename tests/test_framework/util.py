@@ -183,9 +183,13 @@ def wait_until_helper_internal(
     )
 
 
-def wait_until(predicate, timeout=30, interval=0.5, error_msg="Condition not met"):
+def wait_until(predicate, timeout=30, interval=0.05, error_msg="Condition not met"):
     """
     Wait until a predicate returns True or timeout is reached.
+
+    The default interval matches `wait_until_helper_internal` above, which is
+    Bitcoin Core's: poll often enough that the wait costs about as much as the
+    condition it is waiting for.
     """
     start = time.time()
     while time.time() - start < timeout:
