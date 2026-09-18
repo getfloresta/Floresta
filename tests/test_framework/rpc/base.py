@@ -41,6 +41,8 @@ class BaseRPC(ABC):
 
     TIMEOUT: int = 30  # seconds
     POLL_INTERVAL: float = 0.05  # seconds
+    # Per-call budget for readiness probes, which are retried in a loop.
+    PROBE_TIMEOUT: float = 1.0  # seconds
 
     def __init__(self, config: ConfigRPC, log):
         self._config = config
@@ -223,19 +225,37 @@ class BaseRPC(ABC):
         A listening socket does not mean the daemon is ready: bitcoind accepts
         the connection and answers 503 until it finishes loading, so any failure
         here just means "not ready yet".
+
+        The probe uses `PROBE_TIMEOUT` instead of the full `TIMEOUT`: a process
+        that holds the port but never answers would otherwise block a single
+        probe for the whole startup budget, so the caller would poll exactly
+        once and never get to notice its own daemon dying in the meantime.
         """
         try:
-            self.get_blockchain_info()
-            return True
+            request = self.build_request("getblockchaininfo")
+            request["timeout"] = self.PROBE_TIMEOUT
+            resp = self._send_request(request)
+            if resp["status_code"] != 200:
+                return False
+            return resp["body"].get("error") is None
         # pylint: disable=broad-exception-caught
         except Exception:
             return False
 
-    def try_wait_on_socket(self, opened: bool, timeout: float) -> bool:
+    def try_wait_on_socket(
+        self, opened: bool, timeout: float | None = None, keep_waiting_if=None
+    ) -> bool:
         """
         Verifies that the RPC socket connection matches the expected one, retrying for
         the specified duration. Returns true if the connection matches, false otherwise.
+
+        `timeout` defaults to `TIMEOUT` seconds.
+
+        `keep_waiting_if` is an optional predicate checked on every poll; when it
+        returns False we give up early, so a daemon that died on startup is not
+        waited on until the timeout.
         """
+        timeout = self.TIMEOUT if timeout is None else timeout
         start = time.time()
         while time.time() - start < timeout:
             if self.is_socket_listening() == opened:
@@ -244,17 +264,19 @@ class BaseRPC(ABC):
                     self.log_msg(f"{self._config.host}:{self._config.port} {state}")
                 )
                 return True
-            time.sleep(0.5)
+            if keep_waiting_if is not None and not keep_waiting_if():
+                return False
+            time.sleep(self.POLL_INTERVAL)
 
         return False
 
-    def wait_on_socket(self, opened: bool):
+    def wait_on_socket(self, opened: bool, keep_waiting_if=None):
         """
         Ensure the RPC connection reaches the desired state within a timeout.
         Raises TimeoutError if the state is not reached.
         """
         timeout = self.TIMEOUT
-        success = self.try_wait_on_socket(opened, timeout)
+        success = self.try_wait_on_socket(opened, timeout, keep_waiting_if)
         if not success:
             state = "open" if opened else "closed"
             raise TimeoutError(f"{self.address} not {state} after {timeout} seconds")
@@ -267,11 +289,15 @@ class BaseRPC(ABC):
 
     def stop(self):
         """
-        Perform the `stop` RPC command to the daemon and wait for the connection to close
+        Perform the `stop` RPC command to the daemon.
+
+        Returns as soon as the daemon accepts the request. Callers that need the
+        daemon to be gone should wait on its process, which is what Bitcoin Core
+        does in `TestNode.is_node_stopped` (it polls `self.process.poll()`, never
+        the RPC socket):
+        https://github.com/bitcoin/bitcoin/blob/master/test/functional/test_framework/test_node.py
         """
-        result = self.perform_request("stop")
-        self.wait_on_socket(opened=False)
-        return result
+        return self.perform_request("stop")
 
     def addnode(self, node: str, command: str, v2transport: bool = False):
         """

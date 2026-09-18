@@ -8,7 +8,6 @@ that can be started in regtest mode.
 """
 
 import os
-import time
 
 from abc import ABC, abstractmethod
 from subprocess import Popen, PIPE
@@ -23,9 +22,9 @@ class BaseDaemon(ABC):
     """
     Base class for managing daemon processes (e.g., florestad, utreexod) in regtest mode.
 
-    This class provides the necessary methods to configure, start, and manage daemon processes.
-    It ensures proper initialization, validation, and graceful termination of the processes.
-    The class abstracts common functionality for handling RPC, P2P, and Electrum configurations.
+    This class provides the necessary methods to configure and spawn daemon processes,
+    abstracting common functionality for handling RPC, P2P, and Electrum configurations.
+    Waiting for a daemon to be up or gone is `Node`'s job, not this class's.
     """
 
     # pylint: disable=too-many-arguments too-many-instance-attributes too-many-positional-arguments
@@ -152,10 +151,14 @@ class BaseDaemon(ABC):
 
     def start(self):
         """
-        Start the daemon process in regtest mode.
+        Spawn the daemon process in regtest mode.
 
-        Validates if the process starts successfully; otherwise, logs the error
-        and terminates the process.
+        Builds the command line from `settings`, starts it with its stdout going
+        to the node's log file, records the process and returns; the only check
+        made here is that it did not die right away. Deciding when the daemon is
+        actually up is `Node.start`'s job: it waits for the RPC port and calls
+        `raise_if_died` on every poll, so a daemon that dies on startup is
+        reported with its own error rather than with a timeout.
         """
         if self.is_running:
             raise RuntimeError(f"Daemon '{self.name}' is already running")
@@ -173,20 +176,29 @@ class BaseDaemon(ABC):
         # pylint: disable=consider-using-with
         self.process = Popen(cmd, text=True, stderr=PIPE, stdout=stdout_file)
 
-        # Wait a little to see if the process is running
-        time.sleep(1)
-        if not self.is_running:
-            self.process.terminate()
-            stderr = self.process.stderr.read()
-
-            self.log.debug(
-                self.log_msg(
-                    f"Failed to start node '{self.name}'. Command: {' '.join(cmd)} "
-                )
-            )
-            raise RuntimeError(f"Failed to start node '{self.name}'. {stderr}")
-
+        self.raise_if_died()
         self.log.debug(self.log_msg(f"Starting node '{self.name}': {' '.join(cmd)}"))
+
+    def raise_if_died(self):
+        """
+        Raise if the daemon process is no longer running, reporting its stderr.
+
+        Callers wait for the daemon to open its RPC port instead of sleeping for
+        a fixed amount of time, so this is how a daemon that dies on startup
+        (bad config, port already taken) is turned into an error.
+        """
+        if self.process is None:
+            raise RuntimeError(f"Node '{self.name}' was never started")
+
+        if self.is_running:
+            return
+
+        stderr = self.process.stderr.read()
+        cmd = " ".join(str(a) for a in self.process.args)
+        self.log.debug(
+            self.log_msg(f"Failed to start node '{self.name}'. Command: {cmd} ")
+        )
+        raise RuntimeError(f"Failed to start node '{self.name}'. {stderr}")
 
     @abstractmethod
     def get_cmd_network(self) -> List[str]:

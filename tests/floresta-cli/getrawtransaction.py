@@ -7,7 +7,6 @@ Integrate test for the CLI utility that interacts with a Floresta node
 using the `getrawtransaction` RPC method.
 """
 
-import time
 import os
 import pytest
 from test_framework.node import NodeType
@@ -119,12 +118,16 @@ class TestGetRawTransaction:
 
         self.bitcoind.rpc.generate_block_to_address(COINBASE_BLOCKS, ADDRESS_COINBASE)
 
+        # Let utreexod catch up with Bitcoin Core before Florestad joins:
+        # utreexod drops `getutreexoproof` while it is still syncing, and
+        # Florestad keeps such a request inflight for REQUEST_TIMEOUT
+        # (2 minutes), long past the sync wait below.
         self.node_manager.connect_nodes(self.bitcoind, utreexod_node)
-        time.sleep(5)
+        self.node_manager.wait_for_sync_nodes(
+            is_ibd_finished=False, nodes=[self.bitcoind, utreexod_node]
+        )
 
         self.node_manager.connect_nodes(self.florestad, utreexod_node)
-        time.sleep(5)
-
         self.node_manager.connect_nodes(self.florestad, self.bitcoind)
 
         self.log.info("Waiting for Florestad to sync with Bitcoin Core")
