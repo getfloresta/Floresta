@@ -9,6 +9,7 @@ including their daemon processes, RPC interfaces, and configurations.
 """
 
 from enum import Enum
+from subprocess import TimeoutExpired
 from typing import List, Tuple, Optional
 
 from test_framework.daemon import ConfigP2P
@@ -109,6 +110,7 @@ class Node:
         self._tls = tls
         self._variant = variant
         self._static_values = True
+        self._stop_requested = False
         self._log = log
         self._log_path = p2p_config.log_path
 
@@ -284,7 +286,19 @@ class Node:
             raise RuntimeError(f"Node '{self.variant}' is already running.")
 
         self.daemon.start()
-        self.rpc.wait_on_socket(opened=True)
+        # The daemon is not given a fixed amount of time to boot: we wait for
+        # its RPC port and bail out as soon as the process dies.
+        socket_opened = self.rpc.try_wait_on_socket(
+            opened=True,
+            timeout=self.rpc.TIMEOUT,
+            keep_waiting=lambda: self.daemon.is_running,
+        )
+        # Report the daemon's own error rather than a timeout it never reached.
+        self.daemon.raise_if_died()
+        if not socket_opened:
+            raise TimeoutError(
+                f"{self.rpc.address} not open after {self.rpc.TIMEOUT} seconds"
+            )
 
         # An open port is not readiness: the daemon only answers RPC calls once
         # it is done loading, so poll it until it does.
@@ -294,27 +308,63 @@ class Node:
             interval=self.rpc.POLL_INTERVAL,
             error_msg=f"Node '{self.variant}' did not answer RPC calls",
         )
+        # A daemon that lost its port to another process exits soon after
+        # failing to bind, while that process may have been the one answering.
+        self.daemon.raise_if_died()
 
         # When starting Floresta for the first time, it is ideal to check
         # if the Electrum server is ready to receive requests.
         if self.variant == NodeType.FLORESTAD and self.static_values is not True:
             self.electrum.ping()
 
-    def stop(self):
+    def request_stop(self):
         """
-        Stop the node.
-        """
-        response = None
-        if self.daemon.is_running:
-            try:
-                response = self.rpc.stop()
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                self.daemon.process.terminate()
+        Ask the daemon to stop, without waiting for it to be gone.
 
+        Use together with `wait_stopped`, so several nodes can shut down at the
+        same time instead of one after the other.
+        """
+        if not self.daemon.is_running:
+            return None
+
+        self._stop_requested = True
+        try:
+            return self.rpc.stop()
+        # pylint: disable=broad-exception-caught
+        except Exception:
+            self.daemon.process.terminate()
+            return None
+
+    def wait_stopped(self):
+        """
+        Wait for a daemon asked to stop by `request_stop` to be gone.
+        """
+        if self.daemon.process is None or not self._stop_requested:
+            return
+
+        # Wait on the process itself instead of polling the RPC socket:
+        # it wakes up the moment the daemon is gone.
+        try:
+            self.daemon.process.wait(timeout=self.rpc.TIMEOUT)
+        except TimeoutExpired:
+            # Do not leave a hung daemon holding the ports and data dir of the
+            # next test on this worker.
+            self.daemon.process.kill()
             self.daemon.process.wait()
+            self._stop_requested = False
+            raise
+        # The port is released with the process, so one check is enough.
+        if self.rpc.is_socket_listening():
             self.rpc.wait_on_socket(opened=False)
 
+        self._stop_requested = False
+
+    def stop(self):
+        """
+        Stop the node and wait for it to be gone.
+        """
+        response = self.request_stop()
+        self.wait_stopped()
         return response
 
     def connect_node(
