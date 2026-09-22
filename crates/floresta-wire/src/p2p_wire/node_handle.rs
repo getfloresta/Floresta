@@ -20,6 +20,8 @@ use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::Txid;
+use bitcoin::bip158::BlockFilter;
+use bitcoin::p2p::message_filter::CFCheckpt;
 use bitcoin::p2p::message_filter::CFHeaders;
 use floresta_domain::mempool::MempoolError;
 use rustreexo::proof::Proof;
@@ -31,7 +33,6 @@ use super::UtreexoNodeConfig;
 use super::node::NodeNotification;
 use crate::address_man::ConnectionStats;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
-use crate::node_interface::ChainMethods;
 use crate::node_interface::MempoolMethods;
 use crate::node_interface::NetworkMethods;
 use crate::node_interface::NodeConfigMethods;
@@ -106,6 +107,21 @@ pub enum UserRequest {
         /// The remote node will send min(height(stop_hash), 2_000) headers on each request.
         stop_hash: BlockHash,
     },
+
+    /// Request basic compact block filters for consecutive blocks.
+    GetCFilters {
+        /// The height of the first requested block.
+        start_height: u32,
+
+        /// Ordered hashes of every requested block.
+        block_hashes: Vec<BlockHash>,
+    },
+
+    /// Request BIP157 filter-header checkpoints through a block.
+    GetCFCheckpt {
+        /// The final block in the checkpoint chain.
+        stop_hash: BlockHash,
+    },
 }
 
 #[derive(Debug)]
@@ -155,6 +171,12 @@ pub enum NodeResponse {
 
     /// Received compact block filter headers.
     CFilterHeaders(CFHeaders),
+
+    /// Received basic compact block filters.
+    CFilters(Vec<BlockFilter>),
+
+    /// Received BIP157 filter-header checkpoints.
+    CFCheckpt(CFCheckpt),
 }
 
 #[derive(Debug)]
@@ -196,7 +218,7 @@ impl NodeHandle {
     }
 }
 
-impl ChainMethods for NodeHandle {
+impl floresta_common::ChainMethods for NodeHandle {
     type Error = RecvError;
 
     async fn get_block(&self, block: BlockHash) -> Result<Option<Block>, Self::Error> {
@@ -219,6 +241,33 @@ impl ChainMethods for NodeHandle {
             .await?;
 
         extract_variant!(CFilterHeaders, val)
+    }
+
+    async fn get_cfilter(
+        &self,
+        start_height: u32,
+        block_hashes: Vec<BlockHash>,
+    ) -> Result<Vec<BlockFilter>, Self::Error> {
+        if block_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let val = self
+            .send_request(UserRequest::GetCFilters {
+                start_height,
+                block_hashes,
+            })
+            .await?;
+
+        extract_variant!(CFilters, val)
+    }
+
+    async fn get_cfcheckpt(&self, stop_hash: BlockHash) -> Result<CFCheckpt, Self::Error> {
+        let val = self
+            .send_request(UserRequest::GetCFCheckpt { stop_hash })
+            .await?;
+
+        extract_variant!(CFCheckpt, val)
     }
 }
 
@@ -331,3 +380,44 @@ macro_rules! extract_variant {
 }
 
 use extract_variant;
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::hashes::Hash;
+    use floresta_common::ChainMethods;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn requests_compact_filters_as_one_batch() {
+        let (node_sender, mut node_receiver) = unbounded_channel();
+        let handle = NodeHandle::new(node_sender);
+        let block_hashes = vec![
+            BlockHash::from_byte_array([1; 32]),
+            BlockHash::from_byte_array([2; 32]),
+        ];
+        let expected_hashes = block_hashes.clone();
+        let request =
+            tokio::spawn(async move { handle.get_cfilter(42, block_hashes).await.unwrap() });
+
+        let NodeNotification::FromUser(user_request, responder) =
+            node_receiver.recv().await.unwrap()
+        else {
+            panic!("expected a user request");
+        };
+        assert_eq!(
+            user_request,
+            UserRequest::GetCFilters {
+                start_height: 42,
+                block_hashes: expected_hashes,
+            }
+        );
+
+        let filters = vec![BlockFilter::new(&[1]), BlockFilter::new(&[2])];
+        responder
+            .send(NodeResponse::CFilters(filters.clone()))
+            .unwrap();
+        assert_eq!(request.await.unwrap(), filters);
+    }
+}
