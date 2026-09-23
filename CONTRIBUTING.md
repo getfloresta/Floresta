@@ -103,7 +103,7 @@ Where a patch set proposes to change the Bitcoin consensus, it must have been di
 Coding Conventions
 ------------------
 
-There's a few rules to make sure the code is readable and maintainable. Most of them are checked by `cargo-fmt` and `clippy`, and are enforced by CI. You can run locally `cargo +nightly fmt && cargo +nightly clippy --all` or, if you have the [Just Command Runner](https://github.com/casey/just) you might use `just lint`.
+There's a few rules to make sure the code is readable and maintainable. Most of them are checked by `cargo-fmt` and `clippy`, and are enforced by CI. You can run locally `cargo +nightly fmt && cargo +nightly clippy --all` or, if you have the [Just Command Runner](https://github.com/casey/just) you might use `just lint`. Note that many `just` recipes (e.g., `just build`, `just test` and `just lint`) also require [`jq`](https://jqlang.github.io/jq/download/) to list the crates of the workspace, so make sure it is installed.
 
 For the sake of clarity, **please use an empty line between items**, in both the Python and Rust code. Some examples:
 

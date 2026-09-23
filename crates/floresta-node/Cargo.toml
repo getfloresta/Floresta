@@ -11,7 +11,6 @@ authors = ["Floresta Developers <contact@getfloresta.org>"]
 # All dependencies MUST be pinned precisely with `X.Y.z`
 axum = { workspace = true, optional = true }
 bitcoin = { workspace = true }
-corepc-types = { workspace = true }
 dns-lookup = { workspace = true }
 miniscript = { workspace = true, features = ["std"] }
 rcgen = { workspace = true }
@@ -36,6 +35,7 @@ floresta-mempool = { workspace = true }
 floresta-watch-only = { workspace = true }
 floresta-wire = { workspace = true }
 floresta-metrics = { workspace = true, optional = true }
+floresta-rpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
 pretty_assertions = { version = "=1.4.1" }
