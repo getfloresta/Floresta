@@ -4,10 +4,6 @@
 
 use std::collections::BTreeMap;
 
-use corepc_types::v26::AddrManInfoNetwork;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v30::GetNetworkInfoNetwork;
 use floresta_common::PROTOCOL_VERSION;
 use floresta_common::advertised_services;
 use floresta_common::service_flags_strings;
@@ -20,6 +16,10 @@ use floresta_wire::node_interface::PeerInfo;
 use serde_json::Value;
 use serde_json::json;
 
+use super::res::RpcTypes::AddrManInfoNetwork;
+use super::res::RpcTypes::GetAddrManInfo;
+use super::res::RpcTypes::GetNetworkInfo;
+use super::res::RpcTypes::GetNetworkInfoNetwork;
 use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
 use super::server::RpcImpl;

@@ -6,10 +6,11 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-pub use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v31::GetRawTransactionVerbose;
+use RpcTypes::GetBlockHeaderVerbose;
+use RpcTypes::GetBlockVerboseOne;
+pub use RpcTypes::GetNetworkInfo;
+use RpcTypes::GetRawTransactionVerbose;
+pub(crate) use corepc_types::v31 as RpcTypes;
 use serde::Deserialize;
 use serde::Serialize;
 
