@@ -6,6 +6,8 @@ floresta_rpc.py
 A test framework for testing JsonRPC calls to a floresta node.
 """
 
+from typing import Optional
+
 from test_framework.rpc.base import BaseRPC
 
 
@@ -40,3 +42,11 @@ class FlorestaRPC(BaseRPC):
         Load a script descriptor into the wallet.
         """
         return self.perform_request("loaddescriptor", params=[descriptor])
+
+    def get_added_node_info(self, node: Optional[str] = None) -> list:
+        """
+        Get information about manually added nodes.
+        node: optional filter — return only this added node's info
+        """
+        params = [node] if node is not None else []
+        return self.perform_request("getaddednodeinfo", params)
