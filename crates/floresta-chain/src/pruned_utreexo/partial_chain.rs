@@ -164,14 +164,8 @@ impl PartialChainStateInner {
 
         if let Err(BlockchainError::BlockValidation(e)) = self.validate_block(block, height, inputs)
         {
-            // These errors may describe a mutated payload for an otherwise valid header.
-            // Another peer can still provide the valid block, so don't poison this chain.
-            if !matches!(
-                e,
-                BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment
-            ) {
-                self.error = Some(e.clone());
-            }
+            self.error = Some(e.clone());
+
             return Err(BlockchainError::BlockValidation(e));
         }
 
@@ -198,13 +192,16 @@ impl PartialChainStateInner {
     }
 
     /// Check whether a block is valid
+    ///
+    /// This method does not validate the block structure. [Self.consensus.check_block_structure]
+    ///  must be called before this method.
     fn validate_block(
         &self,
         block: &bitcoin::Block,
         height: u32,
         inputs: HashMap<bitcoin::OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
-        self.consensus.check_block(block, height)?;
+        self.consensus.check_block(block, height, false)?;
 
         let prev_block = self.get_ancestor(height)?;
         if block.header.prev_blockhash != prev_block.block_hash() {
@@ -303,6 +300,10 @@ impl UpdatableChainstate for PartialChainState {
     ) -> Result<u32, BlockchainError> {
         self.inner_mut()
             .process_block(block, proof, inputs, del_hashes)
+    }
+
+    fn check_block_structure(&self, block: &bitcoin::Block) -> Result<(), BlockchainError> {
+        Consensus::check_block_structure(block).map(|_| ())
     }
 
     fn get_root_hashes(&self) -> Vec<BitcoinNodeHash> {
@@ -560,17 +561,32 @@ mod tests {
             BlockValidationErrors::BlockExtendsAnOrphanChain,
             true,
         );
-        run(
-            "0000002000226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f40adbcd7823048d34357bdca86cd47172afe2a4af8366b5b34db36df89386d49b23ec964ffff7f20000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff165108feddb99c6b8435060b2f503253482f627463642fffffffff0100f2052a01000000160014806cef41295922d32ddfca09c26cc4acd36c3ed000000000",
-            BlockValidationErrors::BadMerkleRoot,
-            false, // Potentially mutated block, original txdata may be valid
-        );
-        // Valid Merkle root, but the coinbase has witness data without a witness commitment
-        run(
+    }
+
+    /// The mutated payloads that used to be exercised through `validate_block`
+    /// are now rejected by `check_block_structure`, before any utreexo proof is
+    /// requested.
+    #[test]
+    fn test_check_block_structure_rejects_mutated_payloads() {
+        // Valid merkle root, but the coinbase has witness data without a witness commitment
+        let block = parse_block(
             "0000002000226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f39adbcd7823048d34357bdca86cd47172afe2a4af8366b5b34db36df89386d49b23ec964ffff7f200000000001010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff165108feddb99c6b8435060b2f503253482f627463642fffffffff0100f2052a01000000160014806cef41295922d32ddfca09c26cc4acd36c3ed001010000000000",
-            BlockValidationErrors::BadWitnessCommitment,
-            false,
         );
+
+        match Consensus::check_block_structure(&block) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::BadWitnessCommitment)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+
+        // Merkle root doesn't match the block's txids
+        let block = parse_block(
+            "0000002000226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f40adbcd7823048d34357bdca86cd47172afe2a4af8366b5b34db36df89386d49b23ec964ffff7f20000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff165108feddb99c6b8435060b2f503253482f627463642fffffffff0100f2052a01000000160014806cef41295922d32ddfca09c26cc4acd36c3ed000000000",
+        );
+
+        match Consensus::check_block_structure(&block) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::BadMerkleRoot)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     fn parse_block(hex: &str) -> Block {

@@ -41,6 +41,7 @@ use super::error::BlockchainError;
 use super::udata;
 use crate::TransactionError;
 use crate::extensions::Bip30UnspendableExt;
+use crate::pruned_utreexo::merkle::compute_txid;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::swift_sync_agg::SipHashKeys;
 use crate::swift_sync_agg::TxidHashMidstate;
@@ -549,24 +550,18 @@ impl Consensus {
         Ok(out_value)
     }
 
-    /// Runs inexpensive, consensus-critical block checks that don't require script execution. If
+    /// Runs inexpensive, consensus-critical block checks that require no chain
+    /// context: the merkle root, the witness commitment and the block weight. If
     /// successful, returns the list of [`Txid`]s computed for the merkle root check.
     ///
     /// This verifies:
     /// - the header merkle root matches the block's txids
-    /// - BIP34 coinbase-encoded height once activated (at `bip34_height`)
     /// - if there are SegWit transactions, the witness commitment is present and correct
     /// - total block weight is within the 4,000,000 WU limit
-    pub fn check_block(&self, block: &Block, height: u32) -> Result<Vec<Txid>, BlockchainError> {
+    pub fn check_block_structure(block: &Block) -> Result<Vec<Txid>, BlockchainError> {
         let Some(txids) = Self::check_merkle_root(block) else {
             Err(BlockValidationErrors::BadMerkleRoot)?
         };
-
-        let bip34_height = self.parameters.params.bip34_height;
-        // If bip34 is active, check that the encoded block height is correct
-        if height >= bip34_height && Self::get_bip34_height(block) != Some(height) {
-            Err(BlockValidationErrors::BadBip34)?;
-        }
 
         if !block.check_witness_commitment() {
             Err(BlockValidationErrors::BadWitnessCommitment)?;
@@ -574,6 +569,29 @@ impl Consensus {
 
         if block.weight() > Weight::MAX_BLOCK {
             Err(BlockValidationErrors::BlockTooBig)?;
+        }
+
+        Ok(txids)
+    }
+
+    /// Runs [`Consensus::check_block_structure`] plus the BIP34 check, which
+    /// requires the block's height.
+    pub fn check_block(
+        &self,
+        block: &Block,
+        height: u32,
+        check_block_structure: bool,
+    ) -> Result<Vec<Txid>, BlockchainError> {
+        let txids = if check_block_structure {
+            Self::check_block_structure(block)?
+        } else {
+            block.txdata.iter().map(compute_txid).collect()
+        };
+
+        let bip34_height = self.parameters.params.bip34_height;
+        // If bip34 is active, check that the encoded block height is correct
+        if height >= bip34_height && Self::get_bip34_height(block) != Some(height) {
+            Err(BlockValidationErrors::BadBip34)?;
         }
 
         Ok(txids)
@@ -616,7 +634,7 @@ impl Consensus {
         unspent_indexes: HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
-        let txids = self.check_block(block, height)?;
+        let txids = self.check_block(block, height, true)?;
 
         Self::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)
     }
@@ -996,6 +1014,7 @@ mod tests {
     use bitcoin::TxIn;
     use bitcoin::TxOut;
     use bitcoin::Txid;
+    use bitcoin::Witness;
     use bitcoin::absolute::LockTime;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -1320,11 +1339,24 @@ mod tests {
         assert!(block.check_merkle_root());
         assert!(Consensus::check_merkle_root(&block).is_none());
 
-        let consensus = Consensus::from(Network::Bitcoin);
         assert!(matches!(
-            consensus.check_block(&block, 866_342),
+            Consensus::check_block_structure(&block),
             Err(BlockchainError::BlockValidation(
                 BlockValidationErrors::BadMerkleRoot
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_check_block_structure_bad_witness_commitement() {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata.truncate(6);
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        assert!(matches!(
+            Consensus::check_block_structure(&block),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::BadWitnessCommitment
             ))
         ));
     }
@@ -1334,8 +1366,7 @@ mod tests {
     fn build_oversized_866_342() -> Block {
         let mut block = decode_block("./testdata/block_866342/raw.zst");
 
-        let consensus = Consensus::from(Network::Bitcoin);
-        consensus.check_block(&block, 866_342).expect("valid block");
+        Consensus::check_block_structure(&block).expect("valid block");
 
         // This block is close but below to the max weight
         assert_eq!(block.weight().to_wu(), 3_993_209);
@@ -1359,8 +1390,6 @@ mod tests {
 
     #[test]
     fn test_block_too_big() {
-        let height = 866_342;
-        let consensus = Consensus::from(Network::Bitcoin);
         let block = build_oversized_866_342();
 
         // This block is now just over the weight limit, by one unit!
@@ -1373,9 +1402,191 @@ mod tests {
         assert!(block.check_witness_commitment());
         Consensus::check_merkle_root(&block).expect("merkle root matches");
 
-        match consensus.check_block(&block, height) {
+        match Consensus::check_block_structure(&block) {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::BlockTooBig)) => (),
             other => panic!("We should have `BlockValidationErrors::BlockTooBig`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_check_block() {
+        let height = 866_342;
+        let consensus = Consensus::from(Network::Bitcoin);
+        let block = decode_block("./testdata/block_866342/raw.zst");
+
+        let txids = consensus.check_block(&block, height, true).unwrap();
+        let expected_txid = block
+            .txdata
+            .iter()
+            .map(|tx| tx.compute_txid())
+            .collect::<Vec<_>>();
+
+        assert_eq!(txids, expected_txid);
+    }
+
+    #[test]
+    fn test_check_block_block_structure_error() {
+        let height = 866_342;
+        let consensus = Consensus::from(Network::Bitcoin);
+        let block = build_oversized_866_342();
+
+        match consensus.check_block(&block, height, true) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::BlockTooBig)) => (),
+            other => panic!("We should have `BlockValidationErrors::BlockTooBig`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_check_block_skip_block_structure_check() {
+        let height = 866_342;
+        let consensus = Consensus::from(Network::Bitcoin);
+        let block = build_oversized_866_342();
+
+        let txids = consensus.check_block(&block, height, false).unwrap();
+
+        let expected_txid = block
+            .txdata
+            .iter()
+            .map(|tx| tx.compute_txid())
+            .collect::<Vec<_>>();
+
+        assert_eq!(txids, expected_txid);
+    }
+
+    #[test]
+    fn test_check_block_bad_bip34() {
+        let consensus = Consensus::from(Network::Bitcoin);
+        let height = consensus.parameters.params.bip34_height + 3;
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+
+        // Encode a different height in the coinbase scriptSig.
+        block.txdata[0].input[0].script_sig = ScriptBuf::from_bytes(vec![0x03, 0x01, 0x00, 0x00]);
+
+        let error = consensus.check_block(&block, height, false).unwrap_err();
+        assert!(matches!(
+            error,
+            BlockchainError::BlockValidation(BlockValidationErrors::BadBip34)
+        ));
+
+        let height = consensus.parameters.params.bip34_height;
+        let error = consensus.check_block(&block, height, false).unwrap_err();
+        assert!(matches!(
+            error,
+            BlockchainError::BlockValidation(BlockValidationErrors::BadBip34)
+        ));
+    }
+
+    #[test]
+    fn test_check_block_bip34_not_active() {
+        let consensus = Consensus::from(Network::Bitcoin);
+        let height = consensus.parameters.params.bip34_height - 1;
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+
+        // Encode a different height in the coinbase scriptSig.
+        block.txdata[0].input[0].script_sig = ScriptBuf::from_bytes(vec![0x03, 0x01, 0x00, 0x00]);
+
+        let txids = consensus.check_block(&block, height, false).unwrap();
+
+        let expected_txid = block
+            .txdata
+            .iter()
+            .map(|tx| tx.compute_txid())
+            .collect::<Vec<_>>();
+
+        assert_eq!(txids, expected_txid);
+    }
+
+    #[test]
+    fn test_get_bip34_height() {
+        let block = decode_block("./testdata/block_866342/raw.zst");
+
+        assert_eq!(Consensus::get_bip34_height(&block), Some(866_342));
+    }
+
+    #[test]
+    fn test_get_bip34_height_no_coinbase() {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = Vec::new();
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_empty_coinbase() {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = vec![Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: Vec::new(),
+            output: Vec::new(),
+        }];
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_invalid_script() {
+        let tx = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::from_bytes(vec![0x02, 0x01]),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: Vec::new(),
+        };
+
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = vec![tx];
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_non_push_instruction() {
+        let tx = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::from_bytes(vec![]),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: Vec::new(),
+        };
+
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = vec![tx];
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_op_pushnum() {
+        for (opcode, expected) in (0x51..=0x60).zip(1..=16) {
+            let tx = Transaction {
+                version: Version::ONE,
+                lock_time: LockTime::ZERO,
+                input: vec![TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::from_bytes(vec![opcode]),
+                    sequence: Sequence::MAX,
+                    witness: Witness::default(),
+                }],
+                output: Vec::new(),
+            };
+
+            let mut block = decode_block("./testdata/block_866342/raw.zst");
+            block.txdata = vec![tx];
+
+            assert_eq!(
+                Consensus::get_bip34_height(&block),
+                Some(expected),
+                "opcode {opcode:#x}"
+            );
         }
     }
 

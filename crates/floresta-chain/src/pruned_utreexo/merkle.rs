@@ -188,7 +188,7 @@ impl MerkleBackend for ConsensusMerkle {
 /// with its `cpufeatures`-enabled ARM SHA2 implementation.
 ///
 /// TODO: Remove this helper once our rust-bitcoin dependency provides the same acceleration.
-fn compute_txid(tx: &Transaction) -> Txid {
+pub(crate) fn compute_txid(tx: &Transaction) -> Txid {
     struct NewTxidEngine(bitcoin_hashes::sha256d::HashEngine);
 
     impl bitcoin::io::Write for NewTxidEngine {
