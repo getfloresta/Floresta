@@ -178,6 +178,15 @@ where
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
         let (requests_tx, requests_rx) = unbounded_channel();
+        let peer_count = self.peer_id_count;
+
+        // Record the connection start time before spawning the peer task.
+        // Otherwise, a fast handshake could appear to finish before the connection started.
+        self.inflight.insert(
+            InflightRequests::Connect(peer_count),
+            (peer_count, Instant::now()),
+        );
+
         if let Some(ref proxy) = self.socks5 {
             spawn(timeout(
                 Duration::from_secs(10),
@@ -218,13 +227,6 @@ where
                 ),
             ));
         }
-
-        let peer_count: u32 = self.peer_id_count;
-
-        self.inflight.insert(
-            InflightRequests::Connect(peer_count),
-            (peer_count, Instant::now()),
-        );
 
         self.peers.insert(
             peer_count,

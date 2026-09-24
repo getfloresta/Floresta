@@ -462,6 +462,7 @@ where
                 return Err(WireError::PeerTimeout);
             }
 
+            // TODO: Bound this receive by the deadline, even when no messages arrive.
             let Some(NodeNotification::FromPeer(id, message, _)) = self.node_rx.recv().await else {
                 // Keep waiting until peer message is read or timeout
                 continue;
@@ -655,6 +656,7 @@ where
                     return Ok(());
                 }
 
+                // TODO: Check for a nonempty archive peer list to avoid panicking after disconnection.
                 let has_peers = self
                     .peer_by_service
                     .contains_key(&service_flags::UTREEXO_ARCHIVE.into());

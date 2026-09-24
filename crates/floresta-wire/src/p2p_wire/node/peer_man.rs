@@ -12,7 +12,6 @@ use bitcoin::p2p::message_blockdata::Inventory;
 use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::service_flags_strings;
-use floresta_common::try_and_log;
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::IteratorRandom;
@@ -426,6 +425,13 @@ where
         msg: PeerMessages,
         peer: PeerId,
     ) -> Result<Option<PeerMessages>, WireError> {
+        // Ignore queued replies from removed peers, even if retrying their requests failed.
+        // They must not complete requests now assigned to another peer.
+        // Still handle `Disconnected` so each node context can finish its cleanup.
+        if !self.peers.contains_key(&peer) && !matches!(msg, PeerMessages::Disconnected(_)) {
+            return Ok(None);
+        }
+
         match msg {
             PeerMessages::Addr(addresses) => {
                 self.handle_addresses_from_peer(peer, addresses)?;
@@ -507,6 +513,11 @@ where
             v.retain(|&id| id != peer);
         }
 
+        // User requests have no automatic retry. Dropping their response senders
+        // gives callers an error instead of leaving them waiting for this peer.
+        self.inflight_user_requests
+            .retain(|_, (requested_peer, _, _)| *requested_peer != peer);
+
         let inflight = self
             .inflight
             .clone()
@@ -514,20 +525,22 @@ where
             .filter(|(_k, v)| v.0 == peer)
             .collect::<Vec<_>>();
 
+        let mut retry_error = None;
         for req in inflight {
             self.inflight.remove(&req.0);
 
             if let Err(e) = self.redo_inflight_request(&req.0) {
                 // CRITICAL: never drop the request, so we retry it later
                 self.inflight.insert(req.0, req.1);
-                return Err(e);
+                // Retry the remaining requests before returning an error.
+                retry_error = Some(e);
             }
         }
 
         #[cfg(feature = "metrics")]
         self.update_peer_metrics();
 
-        Ok(())
+        retry_error.map_or(Ok(()), Err)
     }
 
     /// Increases the "banscore" of a peer.
@@ -597,9 +610,8 @@ where
 
     /// Checks whether some of our inflight requests have timed out.
     ///
-    /// This function will check if any of our inflight requests have timed out, and if so,
-    /// it will remove them from the inflight list and increase the banscore of the peer that
-    /// sent the request. It will also resend the request to another peer.
+    /// Disconnects unresponsive peers without banning them and retries their requests.
+    /// Address timeouts only disconnect feeler peers.
     pub(crate) fn check_for_timeout(&mut self) -> Result<(), WireError> {
         let now = Instant::now();
 
@@ -615,46 +627,54 @@ where
             _ => None,
         };
 
-        let timed_out = self
+        let timed_out: Vec<_> = self
             .inflight
             .iter()
             .filter_map(|(req, (_, time))| timed_out_fn(req, time))
-            .collect::<Vec<_>>();
+            .collect();
 
+        let mut retry_error = None;
         for req in timed_out {
-            let Some((peer, time)) = self.inflight.remove(&req) else {
+            let Some(&(peer, time)) = self.inflight.get(&req) else {
                 continue;
             };
 
-            // If a feeler connection times out, we ban them at the first message
+            // This request was timed out when collected, but an earlier iteration
+            // disconnecting the same peer may have retried it. So re-check timeouts.
+            if timed_out_fn(&req, &time).is_none() {
+                continue;
+            }
+            // Remove it now to avoid retrying it both during disconnection and below.
+            self.inflight.remove(&req);
+
+            debug!("Request timed out: {req:?}");
             if let Some(peer_data) = self.peers.get(&peer) {
-                if peer_data.kind == ConnectionKind::Feeler {
-                    debug!("Feeler peer {peer} timed out request");
-                    self.send_to_peer(peer, NodeRequest::Shutdown)?;
-                    self.peers.remove(&peer);
+                let is_feeler = peer_data.kind == ConnectionKind::Feeler;
+
+                // Do not disconnect peers on missing address replies, except for feelers.
+                if matches!(req, InflightRequests::GetAddresses) && !is_feeler {
                     continue;
+                }
+
+                let idx = peer_data.address.id;
+                let _ = self.send_to_peer(peer, NodeRequest::Shutdown);
+                // Remove the peer before retrying, without waiting for its task to stop.
+                // It cannot be selected again, and the common handler discards late replies.
+                if let Err(e) = self.handle_disconnection(peer, idx) {
+                    retry_error = Some(e);
                 }
             }
 
-            if let InflightRequests::Connect(_) = req {
-                // ignore the output as it might fail due to the task being cancelled
-                let _ = self.send_to_peer(peer, NodeRequest::Shutdown);
-                self.peers.remove(&peer);
-                continue;
-            }
-
-            debug!("Request timed out: {req:?}");
-            // Increase the banscore and try banning the peer if needed, then re-request
-            try_and_log!(self.increase_banscore(peer, 1));
-
             if let Err(e) = self.redo_inflight_request(&req) {
-                // CRITICAL: never drop the request, so we retry it later
+                // CRITICAL: never drop the request, so we retry it later, on the next tick.
+                // Keep the old timestamp so it stays expired. This does not restore the peer.
                 self.inflight.insert(req, (peer, time));
-                return Err(e);
+                // Retry the remaining requests before returning an error.
+                retry_error = Some(e);
             }
         }
 
-        Ok(())
+        retry_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn handle_addresses_from_peer(
@@ -752,8 +772,12 @@ where
                 if !self.has_compact_filters_peer() {
                     return Ok(());
                 }
+                let Some(filters) = self.block_filters.as_ref() else {
+                    return Ok(());
+                };
+
                 let peer = self.send_to_fast_peer(
-                    NodeRequest::GetFilter((self.chain.get_block_hash(0).unwrap(), 0)),
+                    NodeRequest::GetFilter((self.last_filter, filters.get_height()? + 1)),
                     ServiceFlags::COMPACT_FILTERS,
                 )?;
 
@@ -794,7 +818,7 @@ where
 
     // === METRICS AND HELPERS ===
 
-    /// Register a message on `self.inflights` and record the time taken to respond to it.
+    /// Records response latency for the peer currently assigned to the request.
     ///
     /// We need this information for two purposes:
     /// 1. To calculate the average time taken to respond to messages from peers, which we use
@@ -807,39 +831,25 @@ where
         peer: PeerId,
         read_at: Instant,
     ) -> Option<()> {
-        let sent_at = match notification {
-            PeerMessages::Block(block) => {
-                let inflight = self
-                    .inflight
-                    .get(&InflightRequests::Blocks(block.block_hash()))?;
-
-                inflight.1
-            }
-
-            PeerMessages::Ready(_) => {
-                let inflight = self.inflight.get(&InflightRequests::Connect(peer))?;
-                inflight.1
-            }
-
-            PeerMessages::Headers(_) => {
-                let inflight = self.inflight.get(&InflightRequests::Headers)?;
-                inflight.1
-            }
-
-            PeerMessages::BlockFilter((_, _)) => {
-                let inflight = self.inflight.get(&InflightRequests::GetFilters)?;
-                inflight.1
-            }
-
-            PeerMessages::UtreexoState(_) => {
-                let inflight = self.inflight.get(&InflightRequests::UtreexoState(peer))?;
-                inflight.1
-            }
-
+        let request = match notification {
+            PeerMessages::Block(block) => InflightRequests::Blocks(block.block_hash()),
+            PeerMessages::Ready(_) => InflightRequests::Connect(peer),
+            PeerMessages::Headers(_) => InflightRequests::Headers,
+            PeerMessages::BlockFilter(_) => InflightRequests::GetFilters,
+            PeerMessages::UtreexoState(_) => InflightRequests::UtreexoState(peer),
             _ => return None,
         };
+        let (request_peer, sent_at) = self.inflight.get(&request)?;
 
-        let elapsed = read_at.duration_since(sent_at).as_secs_f64();
+        // A late reply must not use another peer's retry timestamp.
+        if *request_peer != peer {
+            return None;
+        }
+
+        // A reply may be read just before a retry to the same peer, so `sent_at`
+        // will be overridden with the retry instant, which makes `read_at < sent_at`.
+        // Skip that stale sample instead of recording zero latency.
+        let elapsed = read_at.checked_duration_since(*sent_at)?.as_secs_f64();
         if let Some(peer) = self.peers.get_mut(&peer) {
             peer.message_times.add(elapsed * 1_000.0); // milliseconds
         }

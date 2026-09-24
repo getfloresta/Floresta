@@ -169,11 +169,7 @@ where
             self.maybe_open_connection(service_flags::UTREEXO.into())?;
         }
 
-        if !self.has_compact_filters_peer() {
-            if self.block_filters.is_none() {
-                return Ok(());
-            }
-
+        if self.block_filters.is_some() && !self.has_compact_filters_peer() {
             if self.connected_peers() >= RunningNode::MAX_OUTGOING_PEERS {
                 self.peers
                     .values()
