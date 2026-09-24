@@ -1214,6 +1214,7 @@ dependencies = [
  "rustreexo",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tonic",
  "tonic-prost",

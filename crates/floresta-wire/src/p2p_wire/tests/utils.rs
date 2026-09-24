@@ -444,4 +444,125 @@ mod tests {
             assert_eq!(i as u64, leaves, "one leaf added per block");
         }
     }
+    #[tokio::test]
+    async fn test_save_utreexo_peers_node_level() {
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        use bitcoin::Network;
+        use bitcoin::p2p::ServiceFlags;
+        use floresta_chain::AssumeValidArg;
+        use floresta_chain::ChainState;
+        use floresta_chain::FlatChainStore;
+        use floresta_chain::FlatChainStoreConfig;
+        use floresta_common::Ema;
+        use floresta_common::service_flags;
+        use floresta_mempool::Mempool;
+        use tokio::sync::Mutex;
+        use tokio::sync::RwLock;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        use super::TransportProtocol;
+        use super::get_node_config;
+        use crate::p2p_wire::address_man::AddressMan;
+        use crate::p2p_wire::address_man::LocalAddress;
+        use crate::p2p_wire::node::ConnectionKind;
+        use crate::p2p_wire::node::LocalPeerView;
+        use crate::p2p_wire::node::PeerStatus;
+        use crate::p2p_wire::node::UtreexoNode;
+        use crate::p2p_wire::node::sync_ctx::SyncNode;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let config = FlatChainStoreConfig::new(tempdir.path());
+        let chainstore = FlatChainStore::new(config).unwrap();
+        let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
+        let chain =
+            ChainState::open(chainstore, Network::Regtest, AssumeValidArg::Disabled).unwrap();
+        let chain = Arc::new(chain);
+
+        let config = get_node_config(tempdir.path(), Network::Regtest, false);
+        let kill_signal = Arc::new(RwLock::new(false));
+        let mut node = UtreexoNode::<Arc<ChainState<FlatChainStore>>, SyncNode>::new(
+            config,
+            chain,
+            mempool,
+            None,
+            kill_signal,
+            AddressMan::new(None, &[]),
+        )
+        .unwrap();
+
+        fn make_peer(addr: &str, state: PeerStatus, services: ServiceFlags) -> LocalPeerView {
+            let (sender, _receiver) = unbounded_channel();
+            let mut address: LocalAddress = addr.parse().unwrap();
+            address.set_services(services);
+            LocalPeerView {
+                message_times: Ema::with_half_life_50(),
+                address,
+                services,
+                user_agent: "/utreexo:0.1.0/".to_string(),
+                height: 0,
+                time_offset: 0,
+                state,
+                channel: sender,
+                kind: ConnectionKind::Regular(services),
+                banscore: 0,
+                _last_message: Instant::now(),
+                transport_protocol: TransportProtocol::V2,
+            }
+        }
+
+        // 1. Peer 0: Ready Utreexo peer -> Should be saved
+        let p0 = make_peer(
+            "127.0.0.1:8333",
+            PeerStatus::Ready,
+            service_flags::UTREEXO.into(),
+        );
+        let p0_addr = p0.address.clone();
+        node.peers.insert(0, p0);
+
+        // 2. Peer 1: Awaiting (unhandshaked) Utreexo peer -> Should be ignored
+        let p1 = make_peer(
+            "127.0.0.2:8333",
+            PeerStatus::Awaiting,
+            service_flags::UTREEXO.into(),
+        );
+        node.peers.insert(1, p1);
+
+        // 3. Peer 2: Banned Utreexo peer -> Should be ignored
+        let p2 = make_peer(
+            "127.0.0.3:8333",
+            PeerStatus::Banned,
+            service_flags::UTREEXO.into(),
+        );
+        node.peers.insert(2, p2);
+
+        // 4. Peer 3: Ready non-Utreexo peer -> Should be ignored
+        let p3 = make_peer("127.0.0.4:8333", PeerStatus::Ready, ServiceFlags::NETWORK);
+        node.peers.insert(3, p3);
+
+        // Populate peer_by_service for Utreexo peers (peers 0, 1, 2)
+        node.peer_by_service
+            .entry(service_flags::UTREEXO.into())
+            .or_default()
+            .extend([0, 1, 2]);
+
+        // Execute save_utreexo_peers on the node
+        node.save_utreexo_peers().unwrap();
+
+        // Read anchors.json back using start_addr_man
+        let loaded_anchors = node.address_man.start_addr_man(tempdir.path());
+
+        // Assert that ONLY the ready Utreexo peer (Peer 0) was saved
+        assert_eq!(loaded_anchors.len(), 1);
+        assert_eq!(
+            loaded_anchors[0].get_socket_addr(),
+            p0_addr.get_socket_addr()
+        );
+        assert!(
+            loaded_anchors[0]
+                .get_services()
+                .has(service_flags::UTREEXO.into())
+        );
+    }
 }
