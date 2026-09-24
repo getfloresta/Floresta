@@ -48,16 +48,21 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::block::Header;
 use bitcoin::network::Network;
 use bitcoin::p2p::ServiceFlags;
+use floresta_chain::BlockValidationErrors;
+use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::IBDState;
+use floresta_chain::pruned_utreexo::WallTime;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
@@ -163,7 +168,7 @@ where
     /// If we get an empty headers message, we'll check what to do next, depending on
     /// our current state. We may poke our peers to see if they have an alternative tip,
     /// or we may just finish the IBD, if no one have an alternative tip.
-    async fn handle_headers(
+    pub(crate) async fn handle_headers(
         &mut self,
         peer: PeerId,
         headers: Vec<Header>,
@@ -179,8 +184,24 @@ where
             headers[0].block_hash()
         );
 
+        let now: WallTime = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs() as WallTime;
+
         for header in headers.iter() {
-            if let Err(e) = self.chain.accept_header(*header) {
+            if let Err(e) = self.chain.accept_header(*header, now) {
+                // A header too far in the future may become valid later, and our own clock
+                // may be the one at fault, so don't punish the peer. Stop processing the
+                // batch, as the next headers would fail as orphans.
+                if let BlockchainError::BlockValidation(BlockValidationErrors::TimeTooNew(hash)) = e
+                {
+                    warn!(
+                        "Header {hash} time is too far in the future, please check your system clock"
+                    );
+                    break;
+                }
+
                 error!("Error while downloading headers from peer={peer} err={e}");
 
                 self.disconnect_and_ban(peer)?;
