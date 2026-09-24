@@ -12,9 +12,7 @@ use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 #[cfg(feature = "compact-filters")]
 use floresta_compact_filters::IterableFilterStoreError;
-use floresta_watch_only::WatchOnlyError;
-use floresta_watch_only::descriptor::DescriptorError;
-use floresta_watch_only::kv_database::KvDatabaseError;
+use floresta_domain::wallet::error::WatchOnlyError;
 use tokio_rustls::rustls::pki_types;
 
 #[derive(Debug)]
@@ -46,9 +44,6 @@ pub enum FlorestadError {
     /// TOML parsing error.
     TomlParsing(toml::de::Error),
 
-    /// Parsing registered HD version bytes from slip132.
-    WalletInput(DescriptorError),
-
     /// Parsing a bitcoin address.
     AddressParsing(bitcoin::address::ParseError),
 
@@ -79,11 +74,8 @@ pub enum FlorestadError {
     /// Data directory doesn't exist or is not writable.
     InvalidDataDir(PathBuf),
 
-    /// Obtaining a lock on the data directory.
-    CouldNotOpenKvDatabase(KvDatabaseError),
-
     /// Initializing the watch-only wallet.
-    CouldNotInitializeWallet(WatchOnlyError<KvDatabaseError>),
+    CouldNotInitializeWallet(WatchOnlyError),
 
     /// Setting up the watch-only wallet.
     CouldNotSetupWallet(String),
@@ -105,7 +97,7 @@ pub enum FlorestadError {
     CouldNotCreateTLSDataDir(PathBuf, std::io::Error),
 
     /// Failed to obtain the wallet cache.
-    CouldNotObtainWalletCache(WatchOnlyError<KvDatabaseError>),
+    CouldNotObtainWalletCache(WatchOnlyError),
 
     /// Failed to push a descriptor to the wallet.
     CouldNotPushDescriptor(String),
@@ -137,7 +129,6 @@ impl Display for FlorestadError {
                 write!(f, "Error with our blockchain backend: {err:?}")
             }
             Self::SerdeJson(err) => write!(f, "Error serializing object {err}"),
-            Self::WalletInput(err) => write!(f, "Error while parsing user input {err:?}"),
             Self::TomlParsing(err) => write!(f, "Error deserializing toml file {err}"),
             Self::AddressParsing(err) => write!(f, "Invalid address {err}"),
             Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
@@ -175,9 +166,6 @@ impl Display for FlorestadError {
                     "Data directory at path={} doesn't exist or is not writable",
                     path.display()
                 )
-            }
-            Self::CouldNotOpenKvDatabase(err) => {
-                write!(f, "Cannot open a key-value database: {err}")
             }
             Self::CouldNotInitializeWallet(err) => {
                 write!(f, "Could not initialize wallet: {err}")
@@ -248,11 +236,10 @@ impl_from_error!(Io, std::io::Error);
 impl_from_error!(ScriptValidation, bitcoin::blockdata::script::Error);
 impl_from_error!(Blockchain, BlockchainError);
 impl_from_error!(SerdeJson, serde_json::Error);
-impl_from_error!(WalletInput, DescriptorError);
 impl_from_error!(TomlParsing, toml::de::Error);
 impl_from_error!(BlockValidation, BlockValidationErrors);
 impl_from_error!(AddressParsing, bitcoin::address::ParseError);
 impl_from_error!(Miniscript, miniscript::Error);
-impl_from_error!(CouldNotObtainWalletCache, WatchOnlyError<KvDatabaseError>);
+impl_from_error!(CouldNotObtainWalletCache, WatchOnlyError);
 
 impl error::Error for FlorestadError {}
