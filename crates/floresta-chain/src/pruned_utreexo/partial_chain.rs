@@ -206,9 +206,12 @@ impl PartialChainStateInner {
     ) -> Result<(), BlockchainError> {
         self.consensus.check_block(block, height)?;
 
+        // We do have this height's ancestor, it's in the range we've been handed. If this
+        // block doesn't build on it, it simply isn't the block we have to validate next, which
+        // is what a full chainstate reports for the same mistake.
         let prev_block = self.get_ancestor(height)?;
         if block.header.prev_blockhash != prev_block.block_hash() {
-            Err(BlockValidationErrors::BlockExtendsAnOrphanChain)?;
+            Err(BlockValidationErrors::BlockDoesntExtendTip)?;
         }
 
         // Validate block transactions
@@ -557,7 +560,7 @@ mod tests {
         }
         run(
             "0000002000226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f39adbcd7823048d34357bdca86cd47172afe2a4af8366b5b34db36df89386d49b23ec964ffff7f20000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff165108feddb99c6b8435060b2f503253482f627463642fffffffff0100f2052a01000000160014806cef41295922d32ddfca09c26cc4acd36c3ed000000000",
-            BlockValidationErrors::BlockExtendsAnOrphanChain,
+            BlockValidationErrors::BlockDoesntExtendTip,
             true,
         );
         run(
