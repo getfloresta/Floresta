@@ -535,9 +535,13 @@ where
         leaf_data: &[CompactLeafData],
         height: u32,
     ) -> Result<Stump, WireError> {
-        let (del_hashes, _) = proof_util::process_proof(leaf_data, &block.txdata, height, |h| {
-            self.chain.get_block_hash(h)
-        })?;
+        let (del_hashes, _) = proof_util::process_proof(
+            leaf_data,
+            &block.txdata,
+            height,
+            |h| self.chain.get_block_hash(h),
+            |h| self.chain.get_mtp_by_height(h),
+        )?;
 
         Ok(self
             .chain
@@ -689,10 +693,13 @@ where
             .aux_data
             .expect("Block proof and leaf data should be present");
 
-        let (del_hashes, inputs) =
-            proof_util::process_proof(&leaf_data, &block.block.txdata, fork_height, |h| {
-                self.chain.get_block_hash(h)
-            })?;
+        let (del_hashes, inputs) = proof_util::process_proof(
+            &leaf_data,
+            &block.block.txdata,
+            fork_height,
+            |h| self.chain.get_block_hash(h),
+            |h| self.chain.get_mtp_by_height(h),
+        )?;
 
         let acc = self.find_accumulator_for_block(fork_height, fork).await?;
         let is_valid = self

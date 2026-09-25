@@ -214,6 +214,7 @@ pub mod proof_util {
     use crate::BlockchainError;
     use crate::CompactLeafData;
     use crate::ScriptPubKeyKind;
+    use crate::extensions::TransactionExt;
     use crate::prelude::*;
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::consensus::UTREEXO_TAG_V1;
@@ -415,14 +416,16 @@ pub mod proof_util {
     /// and a function to get the block hash for a given height. Then returns a [`Result`] containing
     /// a vector with hashes for deleted leaves, and a `UtxoMap`, which is defined
     /// as [`HashMap<OutPoint, UtxoData>`].
-    pub fn process_proof<F, E>(
+    pub fn process_proof<F, G, E>(
         leaves: &[CompactLeafData],
         txdata: &[Transaction],
         height: u32,
         get_block_hash: F,
+        get_mtp: G,
     ) -> Result<ProcessedProof, E>
     where
         F: Fn(u32) -> Result<BlockHash, E>,
+        G: Fn(u32) -> Result<u32, E>,
         E: From<UtreexoLeafError>,
     {
         // Initialize return values
@@ -430,6 +433,10 @@ pub mod proof_util {
         let mut utxos = HashMap::new();
 
         let mut leaves_iter = leaves.iter().cloned();
+
+        // Every output created in this block shares the same creation MTP, so compute it once
+        // instead of on every output.
+        let block_mtp = get_mtp(height.saturating_sub(1))?;
 
         // Skip coinbase transaction
         for tx in txdata.iter().skip(1) {
@@ -443,7 +450,7 @@ pub mod proof_util {
                         txout: out.clone(),
                         is_coinbase: tx.is_coinbase(),
                         creation_height: height,
-                        creation_time: 0, // TODO add MTP(`height` - 1)
+                        creation_time: block_mtp,
                     },
                 );
             }
@@ -483,6 +490,17 @@ pub mod proof_util {
                         kind: e,
                     })?;
 
+                // creation_time is only read by the BIP68 relative lock-time check, and only
+                // when the spending input's sequence actually encodes a time-based lock, so
+                // avoid the get_mtp call otherwise.
+                let is_time_locked = input.sequence.is_time_locked();
+
+                let creation_time = if tx.is_enforce_bip68() && is_time_locked {
+                    get_mtp(creation_height - 1)?
+                } else {
+                    0
+                };
+
                 // Push the UTXO to remove from the set and its leaf hash (deletion hash)
                 del_hashes.push(leaf._get_leaf_hashes());
                 utxos.insert(
@@ -491,7 +509,7 @@ pub mod proof_util {
                         txout: leaf.utxo,
                         is_coinbase,
                         creation_height,
-                        creation_time: 0, // TODO add MTP(`creation_height` - 1)
+                        creation_time,
                     },
                 );
             }
@@ -818,13 +836,15 @@ mod test {
             spk_ty: ScriptPubKeyKind::Other(Box::new([0x51])),
         }];
 
-        // The leaf must be rejected before any block-hash lookup happens.
+        // The leaf must be rejected before any block-hash lookup happens (get_mtp is called
+        // unconditionally up front, for the block's own outputs, so it isn't part of this check).
         let get_block_hash = |_height| -> Result<BlockHash, TestErr> {
             panic!("get_block_hash must not be called for a rejected genesis leaf")
         };
+        let get_mtp = |_height| -> Result<u32, TestErr> { Ok(0) };
 
-        let TestErr::Leaf(err) =
-            process_proof(&leaves, &txdata, 100, get_block_hash).expect_err("must be rejected");
+        let TestErr::Leaf(err) = process_proof(&leaves, &txdata, 100, get_block_hash, get_mtp)
+            .expect_err("must be rejected");
 
         assert!(
             matches!(err.kind, LeafErrorKind::GenesisCreationHeight),

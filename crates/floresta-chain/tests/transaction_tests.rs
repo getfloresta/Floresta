@@ -15,6 +15,7 @@ use bitcoin::Transaction;
 use bitcoinkernel::VERIFY_ALL;
 use floresta_chain::BlockchainError;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
+use floresta_chain::pruned_utreexo::consensus::LockTimeCutoff;
 use floresta_chain::pruned_utreexo::utxo_data::UtxoData;
 use serde_json::Value;
 use util::VERIFY_FLAGS_COUNT;
@@ -122,7 +123,19 @@ fn verify_tx(
         return Ok(Consensus::verify_coinbase(tx)?);
     }
     let mut coins = coins.clone();
-    Consensus::verify_transaction(tx, &mut coins, TX_HEIGHT, true, flags).map(|_| ())
+    // These test vectors exercise script verification, not BIP68 relative lock-time, and
+    // every prevout here uses a dummy creation_height/creation_time of 0 (see `PrevOut`'s
+    // `UtxoData` conversion above). Use a max cutoff so we never spuriously reject a vector
+    // due to an unrelated relative lock-time check.
+    Consensus::verify_transaction(
+        tx,
+        &mut coins,
+        TX_HEIGHT,
+        LockTimeCutoff::Mtp(u32::MAX),
+        true,
+        flags,
+    )
+    .map(|_| ())
 }
 
 /// Assert that `verify_tx(tx, coins, flags)` succeeds when `expected` and fails when `!expected`.

@@ -168,6 +168,10 @@ pub trait BlockchainInterface {
     fn get_warnings(&self) -> Vec<ChainStoreWarning> {
         vec![]
     }
+
+    /// Calculates the Median Time Past (MTP) for the block at `height`: the median of that
+    /// block's timestamp and up to the 10 timestamps before it.
+    fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error>;
 }
 
 /// [UpdatableChainstate] is a contract that a is expected from a chainstate
@@ -342,6 +346,10 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
         T::get_block_hash(self, height)
+    }
+
+    fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error> {
+        T::get_mtp_by_height(self, height)
     }
 
     fn get_best_block(&self) -> Result<(u32, BlockHash), Self::Error> {

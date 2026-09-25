@@ -283,15 +283,18 @@ where
         // The leaf data supplied by the utreexo peer is consumed here, before it is
         // authenticated, so errors must go through the same handling as `connect_block` ones;
         // otherwise a misbehaving peer would go unpunished and the block would silently stall.
-        let (del_hashes, inputs) =
-            match proof_util::process_proof(&leaf_data, &block.txdata, block_height, |h| {
-                self.chain.get_block_hash(h)
-            }) {
-                Ok(processed) => processed,
-                Err(err) => {
-                    return self.handle_process_block_error(err.into(), block, peer, utreexo_peer);
-                }
-            };
+        let (del_hashes, inputs) = match proof_util::process_proof(
+            &leaf_data,
+            &block.txdata,
+            block_height,
+            |h| self.chain.get_block_hash(h),
+            |h| self.chain.get_mtp_by_height(h),
+        ) {
+            Ok(processed) => processed,
+            Err(err) => {
+                return self.handle_process_block_error(err.into(), block, peer, utreexo_peer);
+            }
+        };
 
         if let Err(err) = self.chain.connect_block(&block, proof, inputs, del_hashes) {
             return self.handle_process_block_error(
@@ -401,7 +404,8 @@ where
             | BlockValidationErrors::BIP94TimeWarp
             | BlockValidationErrors::UnspendableUTXO
             | BlockValidationErrors::NonFinalTransaction
-            | BlockValidationErrors::CoinbaseNotMatured => {
+            | BlockValidationErrors::CoinbaseNotMatured
+            | BlockValidationErrors::BadRelativeLockTime => {
                 try_and_log!(self.chain.invalidate_block(hash));
 
                 warn!("Block {hash} is invalid, banning peer {block_peer}");

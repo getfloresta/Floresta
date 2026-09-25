@@ -7,10 +7,12 @@ use core::fmt::Formatter;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::Transaction;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::Hash;
+use bitcoin::transaction::Version;
 use floresta_common::bhash;
 use floresta_common::prelude::Box;
 use floresta_common::prelude::String;
@@ -37,6 +39,25 @@ impl Bip30UnspendableExt for Block {
             91812 => self.block_hash() == bhash_91812,
             _ => false,
         }
+    }
+}
+
+/// Provides additional methods for working with [`Transaction`] objects,
+pub trait TransactionExt {
+    /// Returns whether this transaction's version enforces BIP68 relative lock-time semantics.
+    ///
+    /// BIP68 only applies to version >= 2 transactions.
+    fn is_enforce_bip68(&self) -> bool;
+}
+
+impl TransactionExt for Transaction {
+    fn is_enforce_bip68(&self) -> bool {
+        // Bitcoin Core treats nVersion as a uint32_t (bitcoin/bitcoin#29325), but rust-bitcoin's
+        // `Version` still wraps an i32, so a signed comparison here would misclassify versions
+        // whose top bit is set (they'd read as negative and wrongly skip the BIP68 check).
+        // Cast to u32 on both sides to compare using the actual consensus semantics.
+        // TODO(jaoleal): remove this cast when https://github.com/rust-bitcoin/rust-bitcoin/pull/4040 lands in a release.
+        self.version.0 as u32 >= Version::TWO.0 as u32
     }
 }
 
@@ -315,6 +336,7 @@ mod tests {
     use bitcoin::OutPoint;
     use bitcoin::Transaction;
     use bitcoin::Txid;
+    use bitcoin::absolute::LockTime;
     use bitcoin::block::Header;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::hashes::sha256::Hash as Sha256Hash;
@@ -404,6 +426,13 @@ mod tests {
             }
 
             Ok(hash)
+        }
+
+        fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error> {
+            let hash = self.get_block_hash(height)?;
+            let header = self.get_block_header(&hash)?;
+
+            header.median_time_past_with(|current| self.get_block_header(&current.prev_blockhash))
         }
 
         fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error> {
@@ -1006,5 +1035,30 @@ mod tests {
             work.to_string_hex(),
             "0000000300000001000000000000000200000000000000030000000000000004"
         );
+    }
+
+    fn tx_with_version(version: Version) -> Transaction {
+        Transaction {
+            version,
+            lock_time: LockTime::ZERO,
+            input: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_is_enforce_bip68() {
+        assert!(!tx_with_version(Version::ONE).is_enforce_bip68());
+        assert!(tx_with_version(Version::TWO).is_enforce_bip68());
+        assert!(tx_with_version(Version::non_standard(3)).is_enforce_bip68());
+    }
+
+    #[test]
+    fn test_is_enforce_bip68_unsigned_comparison() {
+        // A version whose top bit is set reads as negative in rust-bitcoin's i32-backed
+        // `Version`, but Bitcoin Core treats nVersion as a uint32_t, so this must still
+        // enforce BIP68 (see the TODO on `TransactionExt::is_enforce_bip68`).
+        let high_bit_version = Version::non_standard(-1);
+        assert!(tx_with_version(high_bit_version).is_enforce_bip68());
     }
 }
