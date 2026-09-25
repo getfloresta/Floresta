@@ -89,10 +89,15 @@ jobs:
           mkdir -p ./.apt-cache/archives ./.apt-state/lists
           sudo -E apt-get update && sudo -E apt-get install -y build-essential cmake clang
 
-      # Install cargo-fuzz only if not found in cache
+      # Install cargo-fuzz when missing (use stable: nightly can break old rustix in cargo-fuzz deps)
       - name: Install cargo-fuzz
-        if: steps.cache-rust.outputs.cache-hit != 'true'
-        run: cargo +nightly install cargo-fuzz --version ${{ env.CARGO_FUZZ_VERSION }} --force
+        run: |
+          if command -v cargo-fuzz >/dev/null 2>&1; then
+            cargo-fuzz --version
+            exit 0
+          fi
+          rustup toolchain install stable --profile minimal --no-self-update
+          cargo +stable install cargo-fuzz --version ${{ env.CARGO_FUZZ_VERSION }} --force
 
       # Pull corpus data from the floresta-qa-assets repository
       - name: Pull corpus data
