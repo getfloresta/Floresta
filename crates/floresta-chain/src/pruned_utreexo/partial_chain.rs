@@ -31,7 +31,6 @@ use bitcoin::block::Header as BlockHeader;
 use floresta_common::prelude::*;
 use rustreexo::node_hash::BitcoinNodeHash;
 use rustreexo::stump::Stump;
-use tracing::info;
 
 use super::BlockchainInterface;
 use super::UpdatableChainstate;
@@ -184,13 +183,6 @@ impl PartialChainStateInner {
         };
 
         // ... If we came this far, we consider this block valid ...
-
-        if height % 10_000 == 0 {
-            info!(
-                "Downloading blocks: height={height} hash={}",
-                block.block_hash()
-            );
-        }
 
         self.update_state(height, acc);
 
