@@ -424,6 +424,43 @@ impl BitcoinSocketAddr {
         Self::parse_v4(address, network)
             .or_else(|_| Self::parse_and_resolve_dns(address, network, resolver))
     }
+
+    /// Parses an address string with an optional explicit port.
+    ///
+    /// This is a convenience wrapper around [`Self::parse_address`] for callers that receive the
+    /// address and port as separate values (e.g. from an RPC call). It handles the formatting
+    /// needed to produce a valid parseable string — in particular, wrapping IPv6 addresses in
+    /// brackets so the parser can distinguish colons in the address from the port separator.
+    ///
+    /// If `port` is [`None`], the address is parsed as-is and the port will come from the address
+    /// string itself or fall back to the network default.
+    pub fn parse_address_with_port(
+        address: &str,
+        port: Option<u16>,
+        network: Option<Network>,
+        resolver: impl DnsResolver,
+    ) -> Result<Self, InvalidAddressError> {
+        let is_ipv6 = address.parse::<Ipv6Addr>().is_ok();
+
+        match port {
+            Some(port) => {
+                let combined = if is_ipv6 {
+                    format!("[{address}]:{port}")
+                } else {
+                    format!("{address}:{port}")
+                };
+                Self::parse_address(&combined, network, resolver)
+            }
+            None => {
+                let address = if is_ipv6 {
+                    format!("[{address}]")
+                } else {
+                    address.to_string()
+                };
+                Self::parse_address(&address, network, resolver)
+            }
+        }
+    }
 }
 
 impl Display for BitcoinSocketAddr {
