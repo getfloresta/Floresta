@@ -4,6 +4,7 @@ use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
 use std::io;
+use std::net::IpAddr;
 
 use floresta_chain::BlockchainError;
 use floresta_common::impl_error_from;
@@ -95,6 +96,9 @@ pub enum WireError {
 
     /// Couldn't find the leaf data for a block
     LeafDataNotFound,
+
+    /// Peer is banned
+    PeerBanned(IpAddr),
 }
 
 impl Display for WireError {
@@ -142,6 +146,7 @@ impl Display for WireError {
                 "We tried to work on a block that we don't have a proof for yet"
             ),
             Self::LeafDataNotFound => write!(f, "Couldn't find the leaf data for a block"),
+            Self::PeerBanned(ip) => write!(f, "Peer {ip} is banned"),
         }
     }
 }
