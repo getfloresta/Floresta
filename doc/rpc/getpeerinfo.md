@@ -38,7 +38,12 @@ Returns a JSON array of objects, each representing a connected peer with the fol
 - `bip152_hb_from` - (boolean) Whether this peer selected us as a BIP152 high-bandwidth compact block relay peer. Always `false` in Floresta, since this relay mode is not implemented.
 - `initial_height` - (numeric) The block height this peer reported when the connection was first established. This may differ from the current chain tip if the peer has not announced new blocks since connecting.
 - `timeoffset` - (numeric) The peer time offset in seconds, computed from the peer's version message timestamp.
-- `kind` - (string) The connection type of this peer. Possible values are "feeler" (short-lived connections to test address validity), "regular" (standard persistent P2P connection), "extra", or "manual".
+- `kind` - (string) The connection type of this peer. Possible values are:
+    * `"outbound-full-relay"` - a regular outbound peer used to relay transactions, addresses, and blocks.
+    * `"block-relay-only"` - a peer used to relay blocks, but not transactions or addresses. Floresta also reports successful stale-tip extra peers this way, matching Bitcoin Core's public connection kind.
+    * `"manual"` - a peer explicitly requested by the user through `addnode`.
+    * `"feeler"` - a short-lived connection used to test whether a known peer is reachable.
+    * `"addr-fetch"` - a short-lived connection used to solicit addresses from a peer.
 - `state` - (string) The current state of this peer. Can be "Ready" (fully handshaked and active), "Awaiting" (still establishing connection), or "Banned" (connection rejected/dropped).
 - `permissions` - (array of strings) Special permissions granted to this peer. Always empty in Floresta, since Floresta does not implement Bitcoin Core's peer permission system.
 - `transport_protocol` - (string) The transport protocol used to communicate with the peer (e.g., "V1" or "V2").
@@ -50,3 +55,5 @@ Returns a JSON array of objects, each representing a connected peer with the fol
 ## Notes
 
 - This RPC method has a direct equivalent in Bitcoin Core. However, Floresta's `getpeerinfo` is a more lightweight version that currently returns a subset of essential connection and state information, whereas Bitcoin Core provides extensive additional telemetry (like bytes sent/received, ping times, etc.).
+- Floresta does not accept inbound P2P connections, so it does not report an `"inbound"` connection kind.
+- `"block-relay-only"` is also used for peers kept only for block relay after helping Floresta learn about a new chain tip.
