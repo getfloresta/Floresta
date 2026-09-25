@@ -518,9 +518,13 @@ pub(crate) mod test_transport {
     use core::fmt;
     use core::fmt::Display;
     use core::fmt::Formatter;
+    use std::collections::VecDeque;
     use std::io;
     use std::io::ErrorKind;
+    use std::num::NonZeroUsize;
     use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::Mutex;
     use std::task::Context;
     use std::task::Poll;
 
@@ -542,9 +546,180 @@ pub(crate) mod test_transport {
 
     impl error::Error for UnexpectedEofError {}
 
+    /// The I/O error returned when an injected fault fires.
+    #[derive(Debug, Clone, Copy)]
+    pub struct InjectedFaultError {
+        /// The absolute byte offset the reader had delivered when the fault fired.
+        pub offset: usize,
+    }
+
+    impl Display for InjectedFaultError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "injected fault at byte offset {}", self.offset)
+        }
+    }
+
+    impl error::Error for InjectedFaultError {}
+
+    /// How many bytes a [`Reader`] hands over on each `poll_read`.
+    ///
+    /// A real socket splits a message across an arbitrary number of reads, so parsing code
+    /// must reassemble it. Picking a policy other than [`ChunkPolicy::All`] is what lets a
+    /// test exercise that reassembly path.
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
+    pub enum ChunkPolicy {
+        /// Hand over as much as the caller asked for, capped by what is left.
+        ///
+        /// This is the well-behaved case where a whole message shows up at once.
+        #[default]
+        All,
+
+        /// Hand over at most `n` bytes per poll. Build with [`ChunkPolicy::fixed`].
+        ///
+        /// One byte is the harshest setting and the most useful one: it forces the
+        /// parser through a separate poll for every single byte.
+        Fixed(NonZeroUsize),
+
+        /// Walk a scripted sequence of per-poll size limits, one entry per poll. Build
+        /// with [`ChunkPolicy::scripted`].
+        ///
+        /// Use this to cut at specific offsets, e.g. in the middle of the 24-byte V1
+        /// header. Once the script runs out, the reader falls back to [`ChunkPolicy::All`].
+        ///
+        /// Each entry is an upper bound, not an exact size: the caller's `ReadBuf` and any
+        /// pending fault can cut a poll shorter than its scripted entry, and the entry is
+        /// consumed either way.
+        Scripted(VecDeque<NonZeroUsize>),
+    }
+
+    impl ChunkPolicy {
+        /// Hand over at most `n` bytes per poll.
+        ///
+        /// # Panics
+        ///
+        /// If `n` is zero. A poll that delivers zero bytes means end of stream in the
+        /// [`AsyncRead`] contract, so a zero-sized chunk cannot mean "a very short read";
+        /// end of stream is expressed by [`EndBehavior`] instead.
+        pub fn fixed(n: usize) -> Self {
+            Self::Fixed(Self::non_zero(n))
+        }
+
+        /// Walk `sizes` as per-poll upper bounds, one entry per poll.
+        ///
+        /// # Panics
+        ///
+        /// If any entry is zero; see [`ChunkPolicy::fixed`].
+        pub fn scripted(sizes: impl IntoIterator<Item = usize>) -> Self {
+            Self::Scripted(sizes.into_iter().map(Self::non_zero).collect())
+        }
+
+        fn non_zero(n: usize) -> NonZeroUsize {
+            NonZeroUsize::new(n).expect("a chunk size of zero would signal EOF, not a short read")
+        }
+
+        /// Returns the size limit for the next poll, consuming one scripted entry.
+        fn next_limit(&mut self) -> usize {
+            match self {
+                Self::All => usize::MAX,
+                Self::Fixed(n) => n.get(),
+                Self::Scripted(script) => script.pop_front().map_or(usize::MAX, NonZeroUsize::get),
+            }
+        }
+    }
+
+    /// What a [`Reader`] does once it has handed over all of its data.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub enum EndBehavior {
+        /// Fail with [`ErrorKind::UnexpectedEof`].
+        ///
+        /// This is the default, and it models a connection that is torn down mid-message.
+        #[default]
+        ErrorUnexpectedEof,
+
+        /// Report a clean end of stream: `Poll::Ready(Ok(()))` with zero bytes written.
+        ///
+        /// This is how a real socket signals an orderly close. It is distinct from an I/O
+        /// error, and a reader hitting this in the middle of a message should surface a
+        /// well-formed error rather than panicking.
+        CleanEof,
+
+        /// Never make progress again, modelling a peer that holds the socket open but
+        /// stops sending.
+        ///
+        /// This returns `Poll::Pending` *without* registering a waker, so the task parks
+        /// forever. Any test using it must impose its own deadline, e.g.
+        /// [`tokio::time::timeout`] under a paused clock.
+        Stall,
+    }
+
+    /// An [`AsyncRead`] that replays a fixed byte buffer under a configurable delivery
+    /// schedule, so tests can reproduce socket behaviour that a plain `Vec<u8>` cannot.
+    ///
+    /// By default it behaves like a cooperative peer that delivers everything at once and
+    /// then errors out ([`ChunkPolicy::All`] + [`EndBehavior::ErrorUnexpectedEof`]). The
+    /// builder methods turn it into a hostile one.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Feed a message one byte at a time, then close cleanly.
+    /// let reader = Reader::new(bytes)
+    ///     .with_chunking(ChunkPolicy::fixed(1))
+    ///     .with_end_behavior(EndBehavior::CleanEof);
+    /// ```
     #[derive(Debug, Default)]
     pub struct Reader {
+        /// Bytes not yet handed over.
         data: Vec<u8>,
+
+        /// How many bytes have been handed over so far, used to locate the fault offset.
+        position: usize,
+
+        /// Delivery schedule.
+        chunks: ChunkPolicy,
+
+        /// What to do once `data` is empty.
+        end_behavior: EndBehavior,
+
+        /// Optional `(absolute offset, kind)` fault.
+        fault: Option<(usize, ErrorKind)>,
+    }
+
+    impl Reader {
+        /// Creates a reader that replays `data` all at once, then errors with
+        /// [`ErrorKind::UnexpectedEof`].
+        pub fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                position: 0,
+                chunks: ChunkPolicy::All,
+                end_behavior: EndBehavior::ErrorUnexpectedEof,
+                fault: None,
+            }
+        }
+
+        /// Sets how many bytes each `poll_read` may deliver. See [`ChunkPolicy`].
+        pub fn with_chunking(mut self, chunks: ChunkPolicy) -> Self {
+            self.chunks = chunks;
+            self
+        }
+
+        /// Sets what happens once the data runs out. See [`EndBehavior`].
+        pub fn with_end_behavior(mut self, end_behavior: EndBehavior) -> Self {
+            self.end_behavior = end_behavior;
+            self
+        }
+
+        /// Makes the reader fail with `kind` once it has delivered exactly `offset` bytes.
+        ///
+        /// Delivery is clamped so a poll never steps past `offset`; the *following* poll
+        /// returns the error. This mirrors a socket that hands over whatever already
+        /// arrived and only then reports the failure. An `offset` beyond the length of the
+        /// data is never reached, so the [`EndBehavior`] applies instead.
+        pub fn with_fault_at(mut self, offset: usize, kind: ErrorKind) -> Self {
+            self.fault = Some((offset, kind));
+            self
+        }
     }
 
     impl AsyncRead for Reader {
@@ -553,25 +728,95 @@ pub(crate) mod test_transport {
             _cx: &mut Context<'_>,
             buf: &mut ReadBuf<'_>,
         ) -> Poll<io::Result<()>> {
-            let size = buf.capacity();
-            if size > self.data.len() {
-                return Poll::Ready(Err(io::Error::new(
-                    ErrorKind::UnexpectedEof,
-                    UnexpectedEofError,
-                )));
+            // An injected fault takes priority: once we are sitting on the offset, every
+            // further poll fails.
+            if let Some((offset, kind)) = self.fault {
+                if self.position >= offset {
+                    return Poll::Ready(Err(io::Error::new(kind, InjectedFaultError { offset })));
+                }
             }
 
-            buf.put_slice(&self.data.drain(0..size).collect::<Vec<_>>());
+            // `remaining()`, not `capacity()`: across the repeated polls of a partial read
+            // the buffer is already partly filled, and capacity would overcount.
+            let want = buf.remaining();
+            if want == 0 {
+                return Poll::Ready(Ok(()));
+            }
+
+            if self.data.is_empty() {
+                return match self.end_behavior {
+                    EndBehavior::ErrorUnexpectedEof => Poll::Ready(Err(io::Error::new(
+                        ErrorKind::UnexpectedEof,
+                        UnexpectedEofError,
+                    ))),
+                    EndBehavior::CleanEof => Poll::Ready(Ok(())),
+                    EndBehavior::Stall => Poll::Pending,
+                };
+            }
+
+            let mut size = self.chunks.next_limit().min(want).min(self.data.len());
+
+            // Never step past a pending fault, so it fires on a poll of its own.
+            if let Some((offset, _)) = self.fault {
+                size = size.min(offset - self.position);
+            }
+
+            let chunk = self.data.drain(0..size).collect::<Vec<_>>();
+            buf.put_slice(&chunk);
+            self.position += size;
 
             Poll::Ready(Ok(()))
         }
     }
 
+    /// Builds a V1 read transport over a cooperative reader that delivers everything at
+    /// once and then errors with [`ErrorKind::UnexpectedEof`].
     pub fn create_reader_v1(data: Vec<u8>) -> ReadTransport<Reader> {
-        ReadTransport::V1(Reader { data }, Network::Regtest)
+        ReadTransport::V1(Reader::new(data), Network::Regtest)
     }
 
-    pub struct Writer;
+    /// Builds a V1 read transport over a caller-configured [`Reader`].
+    ///
+    /// Use this when the point of the test is *how* the bytes arrive rather than what
+    /// they contain.
+    pub fn create_reader_v1_with(reader: Reader) -> ReadTransport<Reader> {
+        ReadTransport::V1(reader, Network::Regtest)
+    }
+
+    /// An [`AsyncWrite`] that swallows everything, optionally keeping a copy of the bytes.
+    ///
+    /// A no-op sink is enough for most peer tests. A test that needs to prove *what* went
+    /// out on the wire — rather than only that some code path was taken — needs the bytes
+    /// back, which is what [`Writer::recording`] is for.
+    #[derive(Debug, Default)]
+    pub struct Writer {
+        sink: Option<Arc<Mutex<Vec<u8>>>>,
+    }
+
+    impl Writer {
+        /// A writer that discards everything.
+        pub fn new() -> Self {
+            Self { sink: None }
+        }
+
+        /// A writer that discards everything but keeps a copy, returning the shared buffer.
+        pub fn recording() -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let sink = Arc::new(Mutex::new(Vec::new()));
+            let writer = Self {
+                sink: Some(Arc::clone(&sink)),
+            };
+
+            (writer, sink)
+        }
+
+        fn record(&self, bytes: &[u8]) {
+            if let Some(sink) = &self.sink {
+                sink.lock()
+                    .expect("the recording sink is never held across a panic")
+                    .extend_from_slice(bytes);
+            }
+        }
+    }
 
     impl AsyncWrite for Writer {
         fn poll_write(
@@ -579,7 +824,9 @@ pub(crate) mod test_transport {
             _cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
-            // No-op writer
+            // Discarded, but recorded first if this writer is a recording one.
+            self.record(buf);
+
             Poll::Ready(Ok(buf.len()))
         }
 
@@ -601,7 +848,14 @@ pub(crate) mod test_transport {
             bufs: &[io::IoSlice<'_>],
         ) -> Poll<io::Result<usize>> {
             let len = bufs.iter().map(|buf| buf.len()).sum();
-            // No-op writer
+
+            // Discarded, but recorded first if this writer is a recording one. Every slice
+            // is accepted, so every slice has to be recorded to keep the capture in step
+            // with the byte count we report back.
+            for buf in bufs {
+                self.record(buf);
+            }
+
             Poll::Ready(Ok(len))
         }
     }
@@ -610,16 +864,29 @@ pub(crate) mod test_transport {
 #[cfg(test)]
 mod tests {
     use std::io::ErrorKind;
+    use std::time::Duration;
 
     use bitcoin::Network;
     use bitcoin::consensus::serialize;
     use bitcoin::p2p::message::NetworkMessage;
     use bitcoin::p2p::message::RawNetworkMessage;
+    use tokio::io::AsyncReadExt;
 
     use super::test_transport::*;
     use crate::p2p_wire::transport::P2PV1MessageChecksum;
     use crate::p2p_wire::transport::TransportError;
     use crate::p2p_wire::transport::V1MessageHeader;
+
+    /// Size of the V1 message header, in bytes.
+    const V1_HEADER_LEN: usize = 24;
+
+    /// A valid regtest `ping` message: 24 bytes of header plus an 8-byte nonce.
+    fn valid_ping_bytes() -> Vec<u8> {
+        let message = RawNetworkMessage::new(Network::Regtest.magic(), NetworkMessage::Ping(0));
+        let data = serialize(&message);
+        assert_eq!(data.len(), V1_HEADER_LEN + 8, "unexpected ping encoding");
+        data
+    }
 
     #[tokio::test]
     async fn test_oversized_message() {
@@ -701,5 +968,253 @@ mod tests {
             .expect("Message should be a valid ping");
 
         assert_eq!(res, NetworkMessage::Ping(0));
+    }
+
+    /// The same message as `test_valid_message`, but dripped in one byte at a time.
+    ///
+    /// A real socket never promises to hand over a whole message in a single read, so the
+    /// V1 parser has to reassemble it. This is the harshest possible schedule, and it was
+    /// impossible to express before the reader gained a chunking policy.
+    #[tokio::test]
+    async fn test_valid_message_one_byte_per_poll() {
+        let data = valid_ping_bytes();
+        let reader = Reader::new(data).with_chunking(ChunkPolicy::fixed(1));
+        let mut transport_reader = create_reader_v1_with(reader);
+
+        let res = transport_reader
+            .read_message()
+            .await
+            .expect("a byte-by-byte ping must reassemble into the same message");
+
+        assert_eq!(res, NetworkMessage::Ping(0));
+    }
+
+    /// Delivers a message on a schedule whose boundaries fall inside the 24-byte header
+    /// and again inside the payload.
+    ///
+    /// The script is `[5, 3, 20, 1, 3]`, so the reads land at absolute offsets 5, 8 and 24
+    /// (splitting the header twice), then 25 and 28 inside the payload, and finally the
+    /// script runs out and the remainder arrives at once.
+    #[tokio::test]
+    async fn test_valid_message_scripted_chunks_split_header() {
+        let data = valid_ping_bytes();
+        let reader = Reader::new(data).with_chunking(ChunkPolicy::scripted([5, 3, 20, 1, 3]));
+        let mut transport_reader = create_reader_v1_with(reader);
+
+        let res = transport_reader
+            .read_message()
+            .await
+            .expect("a message split across the header boundary must still parse");
+
+        assert_eq!(res, NetworkMessage::Ping(0));
+    }
+
+    /// A peer that closes the connection cleanly in the middle of the header must produce
+    /// an error, not a panic.
+    #[tokio::test]
+    async fn test_clean_eof_mid_header() {
+        let mut data = valid_ping_bytes();
+        data.truncate(20); // cut inside the 24-byte header
+
+        let reader = Reader::new(data)
+            .with_chunking(ChunkPolicy::fixed(8))
+            .with_end_behavior(EndBehavior::CleanEof);
+        let mut transport_reader = create_reader_v1_with(reader);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        match error {
+            TransportError::Io(e) => assert_eq!(e.kind(), ErrorKind::UnexpectedEof),
+            other => panic!("expected an IO error, got {other:?}"),
+        }
+    }
+
+    /// Same as above, but the clean close lands after a complete header, partway through
+    /// the payload the header promised.
+    #[tokio::test]
+    async fn test_clean_eof_mid_payload() {
+        let mut data = valid_ping_bytes();
+        data.truncate(V1_HEADER_LEN + 4); // full header, half a nonce
+
+        let reader = Reader::new(data).with_end_behavior(EndBehavior::CleanEof);
+        let mut transport_reader = create_reader_v1_with(reader);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        match error {
+            TransportError::Io(e) => assert_eq!(e.kind(), ErrorKind::UnexpectedEof),
+            other => panic!("expected an IO error, got {other:?}"),
+        }
+    }
+
+    /// An I/O failure partway through the payload must surface as `TransportError::Io`
+    /// carrying the original [`ErrorKind`].
+    #[tokio::test]
+    async fn test_injected_io_error_in_payload() {
+        const FAULT_OFFSET: usize = V1_HEADER_LEN + 4;
+
+        let data = valid_ping_bytes();
+        let reader = Reader::new(data).with_fault_at(FAULT_OFFSET, ErrorKind::ConnectionReset);
+        let mut transport_reader = create_reader_v1_with(reader);
+
+        let error = transport_reader.read_message().await.unwrap_err();
+
+        match error {
+            TransportError::Io(e) => {
+                assert_eq!(e.kind(), ErrorKind::ConnectionReset);
+
+                let fault = e
+                    .get_ref()
+                    .and_then(|inner| inner.downcast_ref::<InjectedFaultError>())
+                    .expect("the error should carry the injected fault payload");
+                assert_eq!(fault.offset, FAULT_OFFSET);
+            }
+            other => panic!("expected an IO error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk size of zero")]
+    fn test_chunk_policy_rejects_zero_fixed() {
+        let _ = ChunkPolicy::fixed(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk size of zero")]
+    fn test_chunk_policy_rejects_zero_in_script() {
+        let _ = ChunkPolicy::scripted([4, 0, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_reader_chunk_policy_all_delivers_everything() {
+        let mut reader = Reader::new(vec![1, 2, 3, 4, 5]);
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 5);
+        assert_eq!(&buf[..5], &[1, 2, 3, 4, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_reader_chunk_policy_fixed_caps_each_poll() {
+        let mut reader = Reader::new(vec![1, 2, 3, 4, 5]).with_chunking(ChunkPolicy::fixed(2));
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+        assert_eq!(&buf[..2], &[1, 2]);
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+        assert_eq!(&buf[..2], &[3, 4]);
+
+        // Only one byte is left, so the cap is not the binding constraint.
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 1);
+        assert_eq!(&buf[..1], &[5]);
+    }
+
+    #[tokio::test]
+    async fn test_reader_chunk_policy_scripted_then_falls_back_to_all() {
+        let mut reader =
+            Reader::new(vec![1, 2, 3, 4, 5, 6]).with_chunking(ChunkPolicy::scripted([1, 3]));
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 1);
+        assert_eq!(&buf[..1], &[1]);
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 3);
+        assert_eq!(&buf[..3], &[2, 3, 4]);
+
+        // Script exhausted: the rest arrives in one go.
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+        assert_eq!(&buf[..2], &[5, 6]);
+    }
+
+    #[tokio::test]
+    async fn test_reader_end_behavior_error_unexpected_eof() {
+        let mut reader = Reader::new(vec![1, 2]);
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+
+        let error = reader.read(&mut buf).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn test_reader_end_behavior_clean_eof() {
+        let mut reader = Reader::new(vec![1, 2]).with_end_behavior(EndBehavior::CleanEof);
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+
+        // A clean close reports zero bytes read, and keeps doing so.
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 0);
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 0);
+    }
+
+    /// A stalled peer holds the socket open and never sends again, so the read future
+    /// simply never resolves.
+    ///
+    /// The paused clock keeps this honest: the one-hour deadline below costs no real time,
+    /// and the runtime auto-advances to it precisely because nothing else can make
+    /// progress.
+    #[tokio::test(start_paused = true)]
+    async fn test_reader_end_behavior_stall_never_completes() {
+        let mut reader = Reader::new(vec![1, 2]).with_end_behavior(EndBehavior::Stall);
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+
+        let outcome = tokio::time::timeout(Duration::from_secs(3600), reader.read(&mut buf)).await;
+        assert!(outcome.is_err(), "a stalled reader must never resolve");
+    }
+
+    #[tokio::test]
+    async fn test_reader_fault_clamps_delivery_then_fires() {
+        let mut reader =
+            Reader::new(vec![1, 2, 3, 4, 5, 6]).with_fault_at(4, ErrorKind::ConnectionAborted);
+        let mut buf = [0_u8; 8];
+
+        // The poll is clamped so it stops exactly on the fault offset instead of
+        // overshooting it.
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 4);
+        assert_eq!(&buf[..4], &[1, 2, 3, 4]);
+
+        let error = reader.read(&mut buf).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ConnectionAborted);
+
+        // The fault is sticky: it keeps failing rather than resuming.
+        let error = reader.read(&mut buf).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ConnectionAborted);
+    }
+
+    /// A fault offset past the end of the data is never reached, so the end behavior wins.
+    #[tokio::test]
+    async fn test_reader_fault_beyond_data_never_fires() {
+        let mut reader = Reader::new(vec![1, 2])
+            .with_fault_at(100, ErrorKind::ConnectionAborted)
+            .with_end_behavior(EndBehavior::CleanEof);
+        let mut buf = [0_u8; 8];
+
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 2);
+        assert_eq!(reader.read(&mut buf).await.unwrap(), 0);
+    }
+
+    /// Regression test for the reader consulting `ReadBuf::capacity` instead of
+    /// `ReadBuf::remaining`.
+    ///
+    /// `read_exact` reuses one `ReadBuf` across polls, so after the first chunk the buffer
+    /// is partly filled and `capacity` overstates how much room is left. Asking for 10
+    /// bytes in chunks of 8 from a larger source makes the second poll try to write 8 more
+    /// bytes into 2 bytes of space, which would panic inside `put_slice`.
+    #[tokio::test]
+    async fn test_reader_respects_remaining_not_capacity() {
+        let mut reader = Reader::new((0..100).collect()).with_chunking(ChunkPolicy::fixed(8));
+        let mut buf = [0_u8; 10];
+
+        reader
+            .read_exact(&mut buf)
+            .await
+            .expect("a partial read must not overrun the caller's buffer");
+
+        assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 }

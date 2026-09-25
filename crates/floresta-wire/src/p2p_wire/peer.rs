@@ -64,6 +64,17 @@ const PING_TIMEOUT: Duration = Duration::from_secs(30);
 /// If the last message we've got was more than 60, send out a ping
 const SEND_PING_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long a peer has to answer our `version` before we give up on the handshake.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the peer loop blocks waiting for a node request before waking up to
+/// re-check the liveness deadlines.
+///
+/// This is the resolution of every deadline below: a deadline can only be noticed
+/// on a loop iteration, so the *effective* timeout is the deadline rounded up to the
+/// next multiple of this interval.
+const REQUEST_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 /// The command string for the "utreexo proof" message
 const UTREEXO_PROOF_CMD_STRING: &str = "uproof";
 
@@ -98,6 +109,39 @@ enum State {
     SentVersion(Instant),
     SentVerack,
     Connected,
+}
+
+/// The liveness deadlines that govern a peer connection.
+///
+/// Production always uses [`PeerTimeouts::default`], which is wired to the module
+/// constants ([`PING_TIMEOUT`], [`SEND_PING_TIMEOUT`], [`HANDSHAKE_TIMEOUT`] and
+/// [`REQUEST_POLL_INTERVAL`]). Making them per-[`Peer`] data rather than hardcoded
+/// constants is what lets tests drive the very same code paths at millisecond scale,
+/// against the real clock, instead of needing a mockable clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerTimeouts {
+    /// If we send a ping and the peer takes longer than this to reply, disconnect.
+    pub ping_timeout: Duration,
+
+    /// If we haven't heard anything from the peer for this long, send it a ping.
+    pub send_ping_timeout: Duration,
+
+    /// How long the peer has to answer our `version` before we drop the connection.
+    pub handshake_timeout: Duration,
+
+    /// How often the peer loop wakes up to re-check the deadlines above.
+    pub request_poll_interval: Duration,
+}
+
+impl Default for PeerTimeouts {
+    fn default() -> Self {
+        Self {
+            ping_timeout: PING_TIMEOUT,
+            send_ping_timeout: SEND_PING_TIMEOUT,
+            handshake_timeout: HANDSHAKE_TIMEOUT,
+            request_poll_interval: REQUEST_POLL_INTERVAL,
+        }
+    }
 }
 
 pub struct MessageActor<R: AsyncRead + Unpin + Send> {
@@ -162,6 +206,7 @@ pub struct Peer<T: AsyncWrite + Unpin + Send + Sync> {
     // This is kept as an option to avoid the need to keep the other half around during tests.
     cancellation_sender: Option<oneshot::Sender<()>>,
     transport_protocol: TransportProtocol,
+    timeouts: PeerTimeouts,
 }
 
 #[derive(Debug)]
@@ -289,7 +334,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
         self.state = State::SentVersion(Instant::now());
         loop {
             tokio::select! {
-                request = tokio::time::timeout(Duration::from_secs(2), self.node_requests.recv()) => {
+                request = tokio::time::timeout(self.timeouts.request_poll_interval, self.node_requests.recv()) => {
                     match request {
                         Ok(None) => {
                             return Err(PeerError::Channel);
@@ -323,17 +368,18 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
 
             // If we send a ping and our peer doesn't respond in time, disconnect
             if let Some(when) = self.last_ping {
-                if when.elapsed() > PING_TIMEOUT {
+                if when.elapsed() > self.timeouts.ping_timeout {
                     return Err(PeerError::PingTimeout);
                 }
             }
 
-            // Send a ping to check if this peer is still good
+            // Send a ping to check if this peer is still good. If one is already in flight
+            // we simply let it be — the deadline above is what gives up on it. This used to
+            // `continue`, which also skipped every check below, most notably the handshake
+            // deadline: a peer that never answered our `version` but stayed quiet long
+            // enough to earn a ping would never be re-checked against `handshake_timeout`.
             let last_message = self.last_message.elapsed();
-            if last_message > SEND_PING_TIMEOUT {
-                if self.last_ping.is_some() {
-                    continue;
-                }
+            if last_message > self.timeouts.send_ping_timeout && self.last_ping.is_none() {
                 let nonce = rand::random();
                 self.last_ping = Some(Instant::now());
                 self.write(NetworkMessage::Ping(nonce)).await?;
@@ -356,7 +402,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             }
 
             if let State::SentVersion(when) = self.state {
-                if Instant::now().duration_since(when) > Duration::from_secs(10) {
+                if Instant::now().duration_since(when) > self.timeouts.handshake_timeout {
                     return Err(PeerError::UnexpectedMessage);
                 }
             }
@@ -749,6 +795,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             our_best_block,
             cancellation_sender: Some(cancellation_sender),
             transport_protocol,
+            timeouts: PeerTimeouts::default(),
         };
 
         spawn(peer.read_loop());
@@ -915,6 +962,7 @@ pub enum PeerMessages {
 mod tests {
     use std::net::Ipv4Addr;
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -938,11 +986,13 @@ mod tests {
     use crate::node::NodeRequest;
     use crate::p2p_wire::peer::Peer;
     use crate::p2p_wire::peer::PeerError;
+    use crate::p2p_wire::peer::PeerTimeouts;
     use crate::p2p_wire::peer::ReaderMessage;
     use crate::p2p_wire::peer::State;
     use crate::p2p_wire::peer::peer_utils;
     use crate::p2p_wire::transport::WriteTransport;
     use crate::p2p_wire::transport::test_transport::Writer;
+    use crate::p2p_wire::transport::test_transport::create_reader_v1;
 
     /// All the data needed to run a test.
     struct SetupData {
@@ -962,6 +1012,15 @@ mod tests {
     }
 
     fn create_peer() -> SetupData {
+        create_peer_with(PeerTimeouts::default())
+    }
+
+    /// Same as [`create_peer`], but with the liveness deadlines dialled down to whatever
+    /// the caller needs.
+    ///
+    /// Tests use millisecond-scale deadlines so the real code paths run against the real
+    /// clock in well under a second.
+    fn create_peer_with(timeouts: PeerTimeouts) -> SetupData {
         let (node_tx, node_receiver) = unbounded_channel();
         let (node_sender, node_requests) = unbounded_channel();
         let (actor_sender, actor_receiver) = unbounded_channel();
@@ -978,7 +1037,7 @@ mod tests {
         let peer = Peer {
             address,
             our_best_block: 0,
-            writer: WriteTransport::V1(Writer, Network::Regtest),
+            writer: WriteTransport::V1(Writer::new(), Network::Regtest),
             state: State::Connected,
             kind: ConnectionKind::Manual,
             id: 0,
@@ -1003,6 +1062,7 @@ mod tests {
             current_best_block: 0,
             transport_protocol: TransportProtocol::V1,
             cancellation_sender: Some(cancellation_sender),
+            timeouts,
         };
 
         SetupData {
@@ -1011,6 +1071,31 @@ mod tests {
             node_sender,
             node_receiver,
         }
+    }
+
+    /// Same as [`create_peer_with`], but the peer's writer keeps a copy of every byte it
+    /// sends, so a test can decode what actually went out on the wire.
+    fn create_recording_peer_with(timeouts: PeerTimeouts) -> (SetupData, Arc<StdMutex<Vec<u8>>>) {
+        let (writer, sent) = Writer::recording();
+        let mut setup = create_peer_with(timeouts);
+        setup.peer.writer = WriteTransport::V1(writer, Network::Regtest);
+
+        (setup, sent)
+    }
+
+    /// Decodes everything a recording [`Writer`] captured, so a test can assert on the
+    /// actual wire traffic rather than on a side effect of the code path.
+    ///
+    /// Stops at the first decoding failure, which is how the end of the captured bytes
+    /// shows up.
+    async fn decode_sent_messages(bytes: Vec<u8>) -> Vec<NetworkMessage> {
+        let mut transport = create_reader_v1(bytes);
+        let mut messages = Vec::new();
+        while let Ok(message) = transport.read_message().await {
+            messages.push(message);
+        }
+
+        messages
     }
 
     fn send_to_peer(
@@ -1082,5 +1167,331 @@ mod tests {
 
         // Prevents those channels from being dropped, so we don't get a `Channel` error
         drop(node_receiver);
+    }
+
+    /// A deadline far enough away that it cannot fire during a test.
+    ///
+    /// Each test below leaves every deadline it is not exercising far in the future, so
+    /// whichever error comes out identifies the deadline under test with no ambiguity and
+    /// no cross-deadline race.
+    const NEVER: Duration = Duration::from_secs(3600);
+
+    /// Baseline test deadlines: nothing fires, and the loop wakes up every 10ms.
+    ///
+    /// The poll interval matters as much as the deadlines: a deadline is only observed when
+    /// the loop wakes up, so the effective timeout is the deadline rounded up to the next
+    /// multiple of `request_poll_interval`. Keeping the poll interval well under the
+    /// deadline under test keeps that rounding negligible.
+    fn fast_timeouts() -> PeerTimeouts {
+        PeerTimeouts {
+            ping_timeout: NEVER,
+            send_ping_timeout: NEVER,
+            handshake_timeout: NEVER,
+            request_poll_interval: Duration::from_millis(10),
+        }
+    }
+
+    /// Walks the peer through `version`/`verack` so it reaches [`State::Connected`].
+    fn complete_handshake(actor_sender: &mut UnboundedSender<ReaderMessage>, peer: &LocalAddress) {
+        send_to_peer(
+            actor_sender,
+            peer_utils::build_version_message("/Floresta-test:0.0.0/".into(), 0, peer),
+        );
+        send_to_peer(actor_sender, NetworkMessage::Verack);
+    }
+
+    /// A peer that never answers our ping must be disconnected once `ping_timeout` elapses.
+    #[tokio::test]
+    async fn test_unanswered_ping_disconnects() {
+        let SetupData {
+            mut peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            ping_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+        let address = peer.address.clone();
+
+        // `create_peer_with` leaves a ping in flight, which we will never answer.
+        assert!(peer.last_ping.is_some());
+
+        // Re-stamped after `start` so the assertion below is sound: the deadline's reference
+        // instant must not predate `start`, or the error can surface just under 200ms.
+        let start = Instant::now();
+        peer.last_ping = Some(Instant::now());
+
+        let fut = tokio::spawn(peer.read_loop());
+        complete_handshake(&mut actor_sender, &address);
+
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never gave up on the unanswered ping")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::PingTimeout),
+            "expected the ping deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(200),
+            "the ping deadline fired early, after {:?}",
+            start.elapsed()
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    /// The positive counterpart to [`test_unanswered_ping_disconnects`]: a peer that *does*
+    /// answer our ping gets `last_ping` cleared and must stay connected.
+    ///
+    /// This is the case that had no coverage at all. Every other test either never sends a
+    /// pong or never waits long enough for the ping deadline to matter, so dropping the
+    /// `self.last_ping = None` from the `Pong` arm was completely invisible — a peer that
+    /// answers every ping perfectly would still be disconnected every 30 seconds.
+    #[tokio::test]
+    async fn test_pong_clears_ping_and_peer_stays_connected() {
+        let SetupData {
+            peer,
+            mut actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            ping_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+        let address = peer.address.clone();
+
+        let fut = tokio::spawn(peer.read_loop());
+        complete_handshake(&mut actor_sender, &address);
+
+        // Answer the ping that `create_peer_with` left in flight.
+        send_to_peer(&mut actor_sender, NetworkMessage::Pong(0));
+
+        // Well past `ping_timeout`: had the pong not cleared `last_ping`, the peer would
+        // already have bailed out with `PeerError::PingTimeout`.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            !fut.is_finished(),
+            "peer disconnected even though it received a pong"
+        );
+
+        node_sender.send(NodeRequest::Shutdown).unwrap();
+        let peer = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer did not honour the shutdown request")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            peer.last_ping.is_none(),
+            "a pong must clear the in-flight ping"
+        );
+
+        // Prevents this channel from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+    }
+
+    /// Exercises the other half of the liveness exchange: *we* ping *them*.
+    ///
+    /// The peer starts with nothing in flight and the remote goes quiet. After
+    /// `send_ping_timeout` the loop must put a ping on the wire, and then, with no pong
+    /// coming back, give up after `ping_timeout`.
+    ///
+    /// Decoding what the writer captured is what makes the first half real: `last_ping` is
+    /// stamped *before* the write, so reaching `PingTimeout` would still hold if the ping
+    /// were never actually sent. Only the bytes tell those two apart.
+    #[tokio::test]
+    async fn test_silent_peer_is_pinged_then_times_out() {
+        let (
+            SetupData {
+                mut peer,
+                mut actor_sender,
+                node_receiver,
+                node_sender,
+            },
+            sent,
+        ) = create_recording_peer_with(PeerTimeouts {
+            send_ping_timeout: Duration::from_millis(100),
+            ping_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+        let address = peer.address.clone();
+
+        // Nothing in flight: the loop itself has to decide to send a ping.
+        peer.last_ping = None;
+
+        // Re-stamped after `start` so the assertion below is sound; see
+        // `test_unanswered_ping_disconnects`.
+        let start = Instant::now();
+        peer.last_message = Instant::now();
+
+        let fut = tokio::spawn(peer.read_loop());
+        complete_handshake(&mut actor_sender, &address);
+
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never pinged the silent remote, or never timed it out")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::PingTimeout),
+            "expected the ping deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(300),
+            "the ping went out or timed out early, after {:?}",
+            start.elapsed()
+        );
+
+        // Clone the bytes out before awaiting: holding a std `MutexGuard` across an await
+        // is exactly what `clippy::await_holding_lock` is there to catch.
+        let bytes = sent
+            .lock()
+            .expect("the recording sink is never held across a panic")
+            .clone();
+        let messages = decode_sent_messages(bytes).await;
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, NetworkMessage::Ping(_))),
+            "the peer never put a ping on the wire; it sent {messages:?}"
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    /// A peer that opens a connection but never answers our `version` must be dropped once
+    /// `handshake_timeout` elapses.
+    #[tokio::test]
+    async fn test_handshake_timeout_disconnects() {
+        let SetupData {
+            mut peer,
+            actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            handshake_timeout: Duration::from_millis(200),
+            ..fast_timeouts()
+        });
+
+        // Only the handshake deadline may fire.
+        peer.last_ping = None;
+
+        let start = Instant::now();
+        let fut = tokio::spawn(peer.read_loop());
+
+        // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("peer never gave up on the unfinished handshake")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::UnexpectedMessage),
+            "expected the handshake deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(200),
+            "the handshake deadline fired early, after {:?}",
+            start.elapsed()
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(actor_sender);
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    /// A peer that never answers our `version` but goes quiet long enough to earn a ping must
+    /// still be dropped once `handshake_timeout` elapses.
+    ///
+    /// Before the fix, the bare `continue` skipped the rest of the loop body, so once a ping
+    /// was in flight the handshake deadline was never re-checked and only `ping_timeout` could
+    /// end the connection. Note that the production defaults hide this: a ping needs 60s of
+    /// silence (`send_ping_timeout`), by which point the 10s handshake deadline has long since
+    /// fired. Only configurable deadlines make the skipped check observable.
+    #[tokio::test]
+    async fn test_handshake_timeout_fires_with_ping_in_flight() {
+        let SetupData {
+            mut peer,
+            actor_sender,
+            node_receiver,
+            node_sender,
+        } = create_peer_with(PeerTimeouts {
+            // Quiet well before the handshake deadline, so a ping goes out while we are
+            // still in `SentVersion` and stays unanswered from then on.
+            send_ping_timeout: Duration::from_millis(50),
+            handshake_timeout: Duration::from_millis(200),
+            // Only the handshake deadline may fire.
+            ping_timeout: NEVER,
+            ..fast_timeouts()
+        });
+
+        peer.last_ping = None;
+
+        let start = Instant::now();
+        peer.last_message = Instant::now();
+
+        let fut = tokio::spawn(peer.read_loop());
+
+        // Never reply to the `version` we send out; the peer stays in `State::SentVersion`.
+        let err = tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .expect("the handshake deadline was never re-checked once a ping went out")
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PeerError::UnexpectedMessage),
+            "expected the handshake deadline to fire, got {err:?}"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(200),
+            "the handshake deadline fired early, after {:?}",
+            start.elapsed()
+        );
+
+        // Prevents those channels from being dropped, so we don't get a `Channel` error
+        drop(actor_sender);
+        drop(node_receiver);
+        drop(node_sender);
+    }
+
+    /// Pins down the production deadlines.
+    ///
+    /// [`PeerTimeouts`] exists so that behavioural tests can dial these down to milliseconds,
+    /// which means no such test says anything about the values a real peer uses. These are the
+    /// numbers the rest of the network sees, so they get asserted literally rather than against
+    /// the constants they come from — comparing a constant to itself would pass no matter what
+    /// it is changed to.
+    #[test]
+    fn test_default_timeouts_match_production_values() {
+        let defaults = PeerTimeouts::default();
+
+        assert_eq!(defaults.ping_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.send_ping_timeout, Duration::from_secs(60));
+        assert_eq!(defaults.handshake_timeout, Duration::from_secs(10));
+        assert_eq!(defaults.request_poll_interval, Duration::from_secs(2));
+
+        // A deadline is only noticed on a loop wake-up, so a poll interval coarser than a
+        // deadline would silently stretch that deadline out to the poll interval.
+        assert!(defaults.request_poll_interval < defaults.handshake_timeout);
+        assert!(defaults.request_poll_interval < defaults.ping_timeout);
+        assert!(defaults.request_poll_interval < defaults.send_ping_timeout);
+
+        // Policy sanity check rather than a correctness invariant: the two deadlines compose
+        // independently, but waiting longer for a pong than we wait before pinging at all
+        // would mean a silent peer takes over two minutes to be noticed.
+        assert!(defaults.ping_timeout < defaults.send_ping_timeout);
     }
 }
