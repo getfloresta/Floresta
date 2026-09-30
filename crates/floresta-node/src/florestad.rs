@@ -225,6 +225,15 @@ pub struct Config {
     /// and won't affect the node's operation. You may notice that this will take a lot of CPU
     /// and bandwidth to run.
     pub backfill: bool,
+
+    /// Whether the JSON-RPC server should be disabled
+    pub disable_rpc: bool,
+
+    /// Whether the Electrum server should be disabled
+    pub disable_electrum: bool,
+
+    /// Whether the ZMQ server should be disabled
+    pub disable_zmq: bool,
 }
 
 impl Config {
@@ -259,6 +268,9 @@ impl Config {
             tls_cert_path: None,
             allow_v1_fallback: false,
             backfill: false,
+            disable_rpc: false,
+            disable_electrum: false,
+            disable_zmq: false,
         }
     }
 }
@@ -457,18 +469,20 @@ impl Florestad {
         // ZMQ
         #[cfg(feature = "zmq-server")]
         {
-            info!("Starting ZMQ server");
-            if let Ok(zserver) = ZMQServer::new(
-                self.config
-                    .zmq_address
-                    .as_ref()
-                    .unwrap_or(&"tcp://127.0.0.1:5150".to_string()),
-            ) {
-                blockchain_state.subscribe(Arc::new(zserver));
-                info!("Done!");
-            } else {
-                error!("Could not create zmq server, skipping");
-            };
+            if !self.config.disable_zmq {
+                info!("Starting ZMQ server");
+                if let Ok(zserver) = ZMQServer::new(
+                    self.config
+                        .zmq_address
+                        .as_ref()
+                        .unwrap_or(&"tcp://127.0.0.1:5150".to_string()),
+                ) {
+                    blockchain_state.subscribe(Arc::new(zserver));
+                    info!("Done!");
+                } else {
+                    error!("Could not create zmq server, skipping");
+                };
+            }
         }
 
         info!("Starting server");
@@ -477,39 +491,104 @@ impl Florestad {
         // JSON-RPC
         #[cfg(feature = "json-rpc")]
         {
-            let server = tokio::spawn(json_rpc::server::RpcImpl::create(
-                blockchain_state.clone(),
-                wallet.clone(),
-                chain_provider.get_handle(),
-                self.stop_signal.clone(),
-                self.config.network,
-                cfilters.clone(),
-                self.config
-                    .json_rpc_address
-                    .as_ref()
-                    .map(|x| Self::resolve_hostname(x, self.config.network.default_rpc_port()))
-                    .transpose()?,
-                datadir.join("debug.log"),
-                self.config.user_agent.clone(),
-                proxy,
-                !self.config.allow_v1_fallback,
-            ));
+            if !self.config.disable_rpc {
+                let server = tokio::spawn(json_rpc::server::RpcImpl::create(
+                    blockchain_state.clone(),
+                    wallet.clone(),
+                    chain_provider.get_handle(),
+                    self.stop_signal.clone(),
+                    self.config.network,
+                    cfilters.clone(),
+                    self.config
+                        .json_rpc_address
+                        .as_ref()
+                        .map(|x| Self::resolve_hostname(x, self.config.network.default_rpc_port()))
+                        .transpose()?,
+                    datadir.join("debug.log"),
+                    self.config.user_agent.clone(),
+                    proxy,
+                    !self.config.allow_v1_fallback,
+                ));
 
-            if self.json_rpc.set(server).is_err() {
-                core::panic!("We should be the first one setting this");
+                if self.json_rpc.set(server).is_err() {
+                    core::panic!("We should be the first one setting this");
+                }
             }
         }
 
+        if !self.config.disable_electrum {
+            #[cfg(feature = "compact-filters")]
+            self.start_electrum(
+                wallet,
+                blockchain_state,
+                cfilters,
+                chain_provider.get_handle(),
+                datadir,
+            )
+            .await?;
+
+            #[cfg(not(feature = "compact-filters"))]
+            self.start_electrum(
+                wallet,
+                blockchain_state,
+                None,
+                chain_provider.get_handle(),
+                datadir,
+            )
+            .await?;
+        }
+
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+
+        let mut recv = self.stop_notify.lock().unwrap();
+        *recv = Some(receiver);
+
+        // Spawn the primary node task, which manages peer connections, chain synchronization,
+        // block processing and transaction relay.
+        task::spawn(chain_provider.run(sender));
+
+        // Metrics
+        #[cfg(feature = "metrics")]
+        {
+            let metrics_server_address =
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
+
+            task::spawn(floresta_metrics::metrics_server(metrics_server_address));
+            info!("Started metrics server on: {metrics_server_address}",);
+
+            // Periodically update memory usage
+            tokio::spawn(async {
+                let interval = Duration::from_secs(5);
+                let mut ticker = time::interval(interval);
+
+                loop {
+                    ticker.tick().await;
+                    floresta_metrics::get_metrics().update_memory_usage();
+                }
+            });
+        }
+
+        // All done, return Ok
+        Ok(())
+    }
+
+    async fn start_electrum(
+        &self,
+        wallet: Arc<AddressCache<KvDatabase>>,
+        blockchain_state: Arc<ChainState<ChainStore>>,
+        #[cfg(feature = "compact-filters")] cfilters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
+        #[cfg(not(feature = "compact-filters"))] _cfilters: Option<()>,
+        node_handle: floresta_wire::node_handle::NodeHandle,
+        datadir: &Path,
+    ) -> Result<(), FlorestadError> {
         // Electrum Server configuration.
 
+        #[cfg(not(feature = "compact-filters"))]
+        let cfilters = None;
+
         // Instantiate the Electrum Server.
-        let electrum_server = ElectrumServer::new(
-            wallet,
-            blockchain_state,
-            cfilters,
-            chain_provider.get_handle(),
-        )
-        .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
+        let electrum_server = ElectrumServer::new(wallet, blockchain_state, cfilters, node_handle)
+            .map_err(FlorestadError::CouldNotCreateElectrumServer)?;
 
         // Default Electrum Server port.
         let default_electrum_port: u16 =
@@ -610,37 +689,6 @@ impl Florestad {
         // Electrum Server's main loop.
         task::spawn(electrum_server.main_loop());
 
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-
-        let mut recv = self.stop_notify.lock().unwrap();
-        *recv = Some(receiver);
-
-        // Spawn the primary node task, which manages peer connections, chain synchronization,
-        // block processing and transaction relay.
-        task::spawn(chain_provider.run(sender));
-
-        // Metrics
-        #[cfg(feature = "metrics")]
-        {
-            let metrics_server_address =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
-
-            task::spawn(floresta_metrics::metrics_server(metrics_server_address));
-            info!("Started metrics server on: {metrics_server_address}",);
-
-            // Periodically update memory usage
-            tokio::spawn(async {
-                let interval = Duration::from_secs(5);
-                let mut ticker = time::interval(interval);
-
-                loop {
-                    ticker.tick().await;
-                    floresta_metrics::get_metrics().update_memory_usage();
-                }
-            });
-        }
-
-        // All done, return Ok
         Ok(())
     }
 

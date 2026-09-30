@@ -4,7 +4,24 @@
 Electrum configuration for tests
 """
 
+import socket
+import time
 from typing import Optional
+
+
+def wait_on_socket(host, port, timeout=10, expect_open=True):
+    """Poll until the port is open (or closed) or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                if expect_open:
+                    return True
+        except (ConnectionRefusedError, OSError):
+            if not expect_open:
+                return True
+        time.sleep(0.2)
+    return False
 
 
 # pylint: disable=too-few-public-methods
