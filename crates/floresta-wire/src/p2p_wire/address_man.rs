@@ -830,23 +830,20 @@ impl AddressMan {
         Ok(())
     }
 
-    /// Dumps the connected utreexo peers to a file on dir `datadir/anchors.json` in json format `
-    /// inputs are the directory to save the file and the list of ids of the connected utreexo peers
+    /// Dumps the connected utreexo peers to a file on dir `datadir/anchors.json` in json format
+    /// inputs are the directory to save the file and the list of connected utreexo peers
     pub fn dump_utreexo_peers(
-        &self,
         datadir: impl AsRef<Path>,
-        peers_id: &[usize],
+        utreexo_peers: &[LocalAddress],
     ) -> std::io::Result<()> {
         let datadir = datadir.as_ref();
 
-        let addresses: Vec<DiskLocalAddress> = peers_id
+        let addresses: Vec<DiskLocalAddress> = utreexo_peers
             .iter()
-            .filter_map(|id| Some(self.addresses.get(id)?.to_owned().into()))
+            .map(|addr| addr.clone().into())
             .collect();
-        let addresses: Result<String, serde_json::Error> = serde_json::to_string(&addresses);
-        if let Ok(addresses) = addresses {
-            std::fs::write(datadir.join("anchors.json"), addresses)?;
-        }
+        let file = std::fs::File::create(datadir.join("anchors.json"))?;
+        serde_json::to_writer(file, &addresses).map_err(std::io::Error::other)?;
         Ok(())
     }
 
@@ -1819,5 +1816,29 @@ mod test {
         let mut address_man = AddressMan::new(None, &ReachableNetworks::SUPPORTED);
         address_man.add_fixed_addresses(Network::Signet);
         assert!(!address_man.addresses.is_empty());
+    }
+
+    #[test]
+    fn test_dump_and_load_utreexo_anchors() {
+        let mut address_man = AddressMan::new(None, &ReachableNetworks::SUPPORTED);
+        let mut addr = "127.0.0.1:8333".parse::<LocalAddress>().unwrap();
+        addr.set_services(service_flags::UTREEXO.into());
+
+        let tempdir = tempfile::tempdir().unwrap();
+
+        AddressMan::dump_utreexo_peers(tempdir.path(), &[addr.clone()]).unwrap();
+
+        let anchors_content = std::fs::read_to_string(tempdir.path().join("anchors.json")).unwrap();
+        assert_ne!(anchors_content, "[]", "anchors.json must not be empty");
+
+        let loaded_anchors = address_man.start_addr_man(tempdir.path());
+
+        assert_eq!(loaded_anchors.len(), 1);
+        assert_eq!(loaded_anchors[0].get_socket_addr(), addr.get_socket_addr());
+        assert!(
+            loaded_anchors[0]
+                .get_services()
+                .has(service_flags::UTREEXO.into())
+        );
     }
 }
