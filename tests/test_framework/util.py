@@ -2,19 +2,27 @@
 
 """Utility helpers used by the test framework (paths, ports, TLS helpers)."""
 
-import os
-import time
 import inspect
-import random
+import itertools
+import math
+import os
+import re
 import socket
 import subprocess
-import math
+import time
 
 from test_framework.constants import FLORESTA_TEMP_DIR
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
 )
+
+# Ports are handed out per xdist worker, see `get_worker_port_block`.
+# The range stays below the ephemeral ports the OS hands out on its own
+# (32768 on Linux, 49152 on macOS), so it can't clash with them either.
+PORT_RANGE_START = 10000
+PORTS_PER_WORKER = 500
+_PORT_COUNTER = itertools.count()
 
 SERVICE_FLAGS_BY_NAME = {
     "NETWORK": 1 << 0,
@@ -83,19 +91,38 @@ class Utility:
         return log_dir
 
     @staticmethod
-    def get_available_random_port_by_range(start: int, end: int):
-        """Get an available random port in the range [start, end]"""
-        while True:
-            port = random.randint(start, end)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                # Check if the port is available
-                if s.connect_ex(("127.0.0.1", port)) != 0:
-                    return port
+    def get_worker_port_block() -> int:
+        """
+        First port of the block reserved for this xdist worker.
+
+        Two workers picking ports at random eventually pick the same one, and
+        the loser gets a daemon that dies on startup, or worse, a `stop` meant
+        for someone else's node. Giving each worker its own block makes that
+        impossible, the same way Bitcoin Core's `PortSeed` does.
+        """
+        worker = os.getenv("PYTEST_XDIST_WORKER", "gw0")
+        index = int(re.sub(r"\D", "", worker) or 0)
+
+        return PORT_RANGE_START + index * PORTS_PER_WORKER
 
     @staticmethod
     def get_random_port():
-        """Get a random port in the range [2000, 65535]"""
-        return Utility.get_available_random_port_by_range(2000, 65535)
+        """
+        Get a free port from this worker's block, in order.
+
+        Ports are handed out sequentially so a port is only reused after the
+        whole block has been, by which time the daemon that had it is long gone.
+        """
+        block = Utility.get_worker_port_block()
+
+        for _ in range(PORTS_PER_WORKER):
+            port = block + next(_PORT_COUNTER) % PORTS_PER_WORKER
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # Something outside the test suite may still hold it
+                if s.connect_ex(("127.0.0.1", port)) != 0:
+                    return port
+
+        raise RuntimeError(f"No free port in [{block}, {block + PORTS_PER_WORKER})")
 
     @staticmethod
     def create_tls_key_cert() -> tuple[str, str]:
@@ -227,7 +254,12 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
             if key in ignore_fields:
                 continue
             assert key in candidate, f"Missing key in candidate: {key}"
-            compare_fields(candidate[key], ref_value, ignore_fields=ignore_fields)
+            compare_fields(
+                candidate[key],
+                ref_value,
+                ignore_fields=ignore_fields,
+                float_tol=float_tol,
+            )
 
         return
 
@@ -237,7 +269,9 @@ def compare_fields(candidate, reference, ignore_fields=None, float_tol=1e-8):
             reference
         ), f"List length mismatch: expected {len(candidate)}, got {len(reference)}"
         for cand_item, ref_item in zip(candidate, reference):
-            compare_fields(cand_item, ref_item, ignore_fields=ignore_fields)
+            compare_fields(
+                cand_item, ref_item, ignore_fields=ignore_fields, float_tol=float_tol
+            )
         return
 
     # scalar

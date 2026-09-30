@@ -21,7 +21,7 @@ from test_framework.rpc.floresta import FlorestaRPC
 from test_framework.rpc.utreexo import UtreexoRPC
 from test_framework.electrum import ConfigElectrum, ConfigTls
 from test_framework.electrum.client import ElectrumClient
-from test_framework.util import Utility
+from test_framework.util import Utility, wait_until
 
 
 class NodeType(Enum):
@@ -286,8 +286,15 @@ class Node:
         self.daemon.start()
         self.rpc.wait_on_socket(opened=True)
 
-        # Test if the node is already responding to RPC calls.
-        self.rpc.get_blockchain_info()
+        # An open port is not readiness: the daemon only answers RPC calls once
+        # it is done loading, so poll it until it does.
+        wait_until(
+            self.rpc.is_responsive,
+            timeout=self.rpc.TIMEOUT,
+            interval=self.rpc.POLL_INTERVAL,
+            error_msg=f"Node '{self.variant}' did not answer RPC calls",
+        )
+
         # When starting Floresta for the first time, it is ideal to check
         # if the Electrum server is ready to receive requests.
         if self.variant == NodeType.FLORESTAD and self.static_values is not True:

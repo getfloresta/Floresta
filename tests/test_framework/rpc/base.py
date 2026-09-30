@@ -40,6 +40,7 @@ class BaseRPC(ABC):
     """
 
     TIMEOUT: int = 30  # seconds
+    POLL_INTERVAL: float = 0.05  # seconds
 
     def __init__(self, config: ConfigRPC, log):
         self._config = config
@@ -214,6 +215,21 @@ class BaseRPC(ABC):
             sock.settimeout(0.5)
             connected = sock.connect_ex((self._config.host, self._config.port))
             return connected == 0
+
+    def is_responsive(self) -> bool:
+        """
+        Check if the daemon already answers RPC calls.
+
+        A listening socket does not mean the daemon is ready: bitcoind accepts
+        the connection and answers 503 until it finishes loading, so any failure
+        here just means "not ready yet".
+        """
+        try:
+            self.get_blockchain_info()
+            return True
+        # pylint: disable=broad-exception-caught
+        except Exception:
+            return False
 
     def try_wait_on_socket(self, opened: bool, timeout: float) -> bool:
         """
