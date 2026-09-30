@@ -32,7 +32,6 @@ tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 ureq = { version = "=3.3.0", features = ["socks-proxy", "json", "rustls-no-provider"], default-features = false }
 tonic = { workspace = true }
-tonic-prost = { workspace = true }
 
 # Local dependencies
 floresta-chain = { workspace = true, features = ["flat-chainstore"] }
@@ -51,6 +50,7 @@ floresta-mempool = { workspace = true }
 [features]
 default = []
 metrics = ["dep:floresta-metrics"]
+fuzzing = []
 
 [lints]
 workspace = true
