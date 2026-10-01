@@ -13,6 +13,7 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 
 use bitcoin::BlockHash;
+use bitcoin::FeeRate;
 use bitcoin::block::Header as BlockHeader;
 use bitcoin::consensus::Decodable;
 use bitcoin::consensus::Encodable;
@@ -90,6 +91,12 @@ pub trait ChainStore {
     fn get_warnings(&self) -> Vec<ChainStoreWarning> {
         vec![]
     }
+
+    /// Persist the average fee rate for a block at the given height.
+    fn save_block_fee_rate(&mut self, height: u32, fee_rate: FeeRate) -> Result<(), Self::Error>;
+
+    /// Retrieve the stored average fee rate for a block at the given height, if any.
+    fn get_block_fee_rate(&mut self, height: u32) -> Result<Option<FeeRate>, Self::Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
