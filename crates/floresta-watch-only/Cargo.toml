@@ -22,6 +22,7 @@ miniscript = { workspace = true, features = ["compiler", "std"] }
 # Local dependencies
 floresta-chain = { workspace = true }
 floresta-common = { workspace = true }
+floresta-domain = { workspace = true, features = ["wallet"] }
 
 [dev-dependencies]
 rand = { workspace = true }

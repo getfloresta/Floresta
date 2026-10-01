@@ -13,6 +13,7 @@ use bitcoin::Txid;
 use bitcoin::hashes::sha256;
 use floresta_common::prelude::sync::RwLock;
 use floresta_common::prelude::*;
+use floresta_domain::wallet::error::WatchOnlyError;
 
 use super::AddressCacheDatabase;
 use super::CachedAddress;
@@ -48,6 +49,12 @@ impl Display for MemoryDatabaseError {
         match self {
             Self::PoisonedLock => write!(f, "Poisoned lock"),
         }
+    }
+}
+
+impl From<MemoryDatabaseError> for WatchOnlyError {
+    fn from(e: MemoryDatabaseError) -> Self {
+        Self::DatabaseError(e.to_string())
     }
 }
 

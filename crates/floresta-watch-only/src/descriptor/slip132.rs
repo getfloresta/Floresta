@@ -134,6 +134,9 @@ impl Display for Error {
     }
 }
 
+impl_error_from!(Error, base58::Error, Base58);
+impl_error_from!(Error, bip32::Error, Bip32);
+
 /// Extracts the 4-byte prefix from the SLIP132-encoded string and validates it.
 fn extract_slip132_prefix(s: &str) -> Result<[u8; 4], Error> {
     let data = base58::decode_check(s)?;
@@ -167,9 +170,6 @@ fn validate_slip132_prefix(prefix: [u8; 4]) -> Result<(), Error> {
         _ => Err(Error::UnknownSlip32Prefix),
     }
 }
-
-impl_error_from!(Error, base58::Error, Base58);
-impl_error_from!(Error, bip32::Error, Bip32);
 
 /// Trait for building standard BIP32 extended keys from SLIP132 variant.
 pub trait FromSlip132 {

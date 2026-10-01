@@ -12,4 +12,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/getfloresta/floresta-media/master/logo_png/Icon-Green(main).png"
 )]
 
+#[cfg(feature = "mempool")]
 pub mod mempool;
+
+#[cfg(feature = "wallet")]
+pub mod wallet;
