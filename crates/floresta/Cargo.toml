@@ -109,6 +109,7 @@ node-zmq-server = ["node", "floresta-node/zmq-server"]
 rpc = ["dep:floresta-rpc"]
 rpc-clap = ["rpc", "floresta-rpc/clap"]
 rpc-jsonrpc = ["rpc", "floresta-rpc/with-jsonrpc"]
+rpc-async = ["rpc", "floresta-rpc/async"]
 
 # floresta-watch-only
 watch-only = ["dep:floresta-watch-only"]

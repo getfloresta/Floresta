@@ -74,14 +74,4 @@ pub mod arg_parser {
         get_optional(params, index, field_name)?
             .ok_or_else(|| JsonRpcError::MissingParameter(field_name.to_string()))
     }
-
-    /// Like [`get_optional`], but substitutes `default` instead of returning `None`.
-    pub fn get_with_default<'de, T: Deserialize<'de>>(
-        v: &'de Value,
-        index: usize,
-        field_name: &str,
-        default: T,
-    ) -> Result<T, JsonRpcError> {
-        Ok(get_optional(v, index, field_name)?.unwrap_or(default))
-    }
 }

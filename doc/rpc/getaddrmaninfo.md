@@ -6,7 +6,7 @@ Return address statistics from the node's address manager, broken down by networ
 
 ### Synopsis
 
-```
+```bash
 floresta-cli getaddrmaninfo
 ```
 
