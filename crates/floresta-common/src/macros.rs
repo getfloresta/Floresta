@@ -159,7 +159,7 @@ pub const fn validate_hash_compile_time(s: &str) -> Result<(), &str> {
 macro_rules! try_and_log {
     ($what:expr) => {
         if let Err(error) = $what {
-            tracing::error!("{}: {} - {:?}", line!(), file!(), error);
+            $crate::tracing::error!("{}: {} - {:?}", line!(), file!(), error);
         }
     };
 }
@@ -171,7 +171,7 @@ macro_rules! try_and_log {
 macro_rules! try_and_warn {
     ($what:expr) => {
         if let Err(warning) = $what {
-            tracing::warn!("{}", warning);
+            $crate::tracing::warn!("{}", warning);
         }
     };
 }
@@ -208,6 +208,19 @@ mod test {
         fn test_assert_err_panics_on_ok() {
             // Should panic with our message
             assert_err!(ok_fn());
+        }
+    }
+
+    // Submodule to test that the logging macros work without `tracing` in the caller's scope
+    mod test_log_macros {
+        // Shadows the `tracing` crate in this module, so the macros only compile if they reach
+        // `tracing` through `$crate`, as they must for crates that do not depend on it.
+        mod tracing {}
+
+        #[test]
+        fn test_try_and_log_and_warn() {
+            try_and_log!(Err::<(), _>("error"));
+            try_and_warn!(Err::<(), _>("warning"));
         }
     }
 
