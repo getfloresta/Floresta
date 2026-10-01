@@ -14,9 +14,22 @@ pub struct Wallet {
     pub addresses: Option<Vec<String>>,
 }
 
+#[cfg(feature = "json-rpc")]
+#[derive(Default, Debug, Deserialize)]
+pub struct Rpc {
+    pub user: Option<String>,
+    pub password: Option<String>,
+    #[serde(default)]
+    pub auth: Vec<String>,
+    pub cookie_file: Option<String>,
+}
+
 #[derive(Default, Debug, Deserialize)]
 pub struct ConfigFile {
     pub wallet: Wallet,
+    #[cfg(feature = "json-rpc")]
+    #[serde(default)]
+    pub rpc: Rpc,
 }
 
 impl ConfigFile {
