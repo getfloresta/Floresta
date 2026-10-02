@@ -379,6 +379,10 @@ mod utreexo_proof_tests {
             _ => Err(BlockchainError::BlockNotPresent),
         };
 
+        // This test only cares about utreexo proof/accumulator behavior, not BIP68
+        // semantics, so a dummy MTP is fine here.
+        let get_mtp = |_height| Ok(0);
+
         let state = setup_test_chain(Network::Bitcoin, AssumeValidArg::Disabled);
         let acc = Stump {
             leaves: 4784881,
@@ -397,8 +401,14 @@ mod utreexo_proof_tests {
         };
 
         // STEP 1: Verify the accumulator and the block
-        let (del_hashes, utxos) =
-            process_proof(&proof.leaf_data, &block.txdata, height, get_block_hash).unwrap();
+        let (del_hashes, utxos) = process_proof(
+            &proof.leaf_data,
+            &block.txdata,
+            height,
+            get_block_hash,
+            get_mtp,
+        )
+        .unwrap();
         let r_proof = Proof {
             targets: proof.targets,
             hashes: proof.proof_hashes,
@@ -422,8 +432,14 @@ mod utreexo_proof_tests {
         let mut invalid_txdata = block.txdata.clone();
         invalid_txdata.insert(1, spending_tx);
 
-        let (del_hashes, _utxos) =
-            process_proof(&proof.leaf_data, &invalid_txdata, height, get_block_hash).unwrap();
+        let (del_hashes, _utxos) = process_proof(
+            &proof.leaf_data,
+            &invalid_txdata,
+            height,
+            get_block_hash,
+            get_mtp,
+        )
+        .unwrap();
 
         if acc.verify(&r_proof, &to_acc_hashes(del_hashes)).unwrap() {
             panic!("Proof must be invalid")
