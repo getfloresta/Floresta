@@ -7,6 +7,8 @@ use core::fmt::Formatter;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::Txid;
+use bitcoin::Weight;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
@@ -17,6 +19,7 @@ use floresta_common::prelude::String;
 use floresta_common::prelude::Vec;
 
 use crate::BlockchainInterface;
+use crate::pruned_utreexo::consensus::Consensus;
 
 const MEDIAN_TIME_PAST_BLOCK_COUNT: usize = 11;
 
@@ -38,6 +41,40 @@ impl Bip30UnspendableExt for Block {
             _ => false,
         }
     }
+}
+
+pub trait BlockExt {
+    /// Runs the non-contextual block checks, which only require the block
+    /// itself: the merkle root, the witness commitment and the block weight.
+    /// Bitcoin Core runs these as part of `CheckBlock`, its non-contextual
+    /// validation step. If successful, returns the list of [`Txid`]s computed
+    /// for the merkle root check.
+    fn check_block_structure(&self) -> Result<Vec<Txid>, BlockExtError>;
+}
+
+impl BlockExt for Block {
+    fn check_block_structure(&self) -> Result<Vec<Txid>, BlockExtError> {
+        let Some(txids) = Consensus::check_merkle_root(self) else {
+            Err(BlockExtError::BadMerkleRoot)?
+        };
+
+        if !self.check_witness_commitment() {
+            Err(BlockExtError::BadWitnessCommitment)?;
+        }
+
+        if self.weight() > Weight::MAX_BLOCK {
+            Err(BlockExtError::BlockTooBig)?;
+        }
+
+        Ok(txids)
+    }
+}
+
+#[derive(Debug)]
+pub enum BlockExtError {
+    BadMerkleRoot,
+    BadWitnessCommitment,
+    BlockTooBig,
 }
 
 /// Provides additional methods for working with [`Header`] objects,
@@ -312,11 +349,15 @@ mod tests {
 
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::Transaction;
+    use bitcoin::TxMerkleNode;
     use bitcoin::Txid;
     use bitcoin::block::Header;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::constants::genesis_block;
+    use bitcoin::hashes::Hash;
     use bitcoin::hashes::sha256::Hash as Sha256Hash;
     use bitcoin::params::Params;
     use rustreexo::proof::Proof;
@@ -327,6 +368,10 @@ mod tests {
     use crate::BlockchainError;
     use crate::UtxoData;
     use crate::pruned_utreexo::IBDState;
+    use crate::test_utils::build_oversized_866_342;
+    use crate::test_utils::decode_block_866342;
+    use crate::test_utils::mutate_block;
+    use crate::test_utils::update_witness_commitment;
 
     const SAMPLE_WORK_BYTES: [u8; 32] = [
         0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
@@ -1006,5 +1051,105 @@ mod tests {
             work.to_string_hex(),
             "0000000300000001000000000000000200000000000000030000000000000004"
         );
+    }
+
+    #[test]
+    fn test_check_block_structure_valid_block() {
+        let block = decode_block_866342();
+
+        let txids = block.check_block_structure().unwrap();
+
+        let expected_txids: Vec<Txid> = block.txdata.iter().map(|tx| tx.compute_txid()).collect();
+        assert_eq!(txids, expected_txids);
+    }
+
+    #[test]
+    fn test_check_block_structure_valid_block_without_witness() {
+        // The genesis block is pre-SegWit: witness commitments are optional when
+        // no transaction in the block has witness data
+        let block = genesis_block(Network::Bitcoin);
+
+        let txids = block.check_block_structure().unwrap();
+
+        let expected_txids: Vec<Txid> = block.txdata.iter().map(|tx| tx.compute_txid()).collect();
+        assert_eq!(txids, expected_txids);
+    }
+
+    #[test]
+    fn test_check_block_structure_bad_merkle_root() {
+        let mut block = decode_block_866342();
+        mutate_block(&mut block);
+
+        assert!(matches!(
+            block.check_block_structure(),
+            Err(BlockExtError::BadMerkleRoot)
+        ));
+    }
+
+    #[test]
+    fn test_check_block_structure_mutated_merkle_tree() {
+        let mut block = decode_block_866342();
+        block.txdata.truncate(6);
+        // Truncating a SegWit block breaks its witness commitment, so update it
+        // to keep every check but the merkle tree intact
+        update_witness_commitment(&mut block).unwrap();
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        // Sanity check: the truncated block is structurally valid
+        assert!(block.check_block_structure().is_ok());
+
+        // CVE-2012-2459: `[1, 2, 3, 4, 5, 6]` and `[1, 2, 3, 4, 5, 6, 5, 6]` have
+        // the same Merkle root
+        block.txdata.extend_from_within(4..6);
+
+        // A root-only check accepts it, but the consensus mutation detection
+        // must reject it
+        assert!(block.check_merkle_root());
+
+        assert!(matches!(
+            block.check_block_structure(),
+            Err(BlockExtError::BadMerkleRoot)
+        ));
+    }
+
+    #[test]
+    fn test_check_block_structure_bad_witness_commitment() {
+        let mut block = decode_block_866342();
+        block.txdata.truncate(6);
+        // Fix the merkle root so that only the witness commitment is broken
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        assert!(matches!(
+            block.check_block_structure(),
+            Err(BlockExtError::BadWitnessCommitment)
+        ));
+    }
+
+    #[test]
+    fn test_check_block_structure_block_too_big() {
+        let block = build_oversized_866_342();
+
+        // Both the merkle root and the witness commitment are valid, so only the
+        // weight check can reject it
+        assert!(block.check_merkle_root());
+        assert!(block.check_witness_commitment());
+        assert!(block.weight() > Weight::MAX_BLOCK);
+
+        assert!(matches!(
+            block.check_block_structure(),
+            Err(BlockExtError::BlockTooBig)
+        ));
+    }
+
+    #[test]
+    fn test_check_block_structure_empty_txdata_with_zero_merkle_root() {
+        let mut block = decode_block_866342();
+        block.txdata.clear();
+        // Bitcoin Core defines the merkle root of an empty transaction list as zero
+        block.header.merkle_root = TxMerkleNode::all_zeros();
+
+        let txids = block.check_block_structure().unwrap();
+
+        assert!(txids.is_empty());
     }
 }
