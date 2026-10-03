@@ -83,6 +83,17 @@ pub const UNSPENDABLE_BIP30_UTXO_91812: [u8; 32] = [
     0xa5, 0x40, 0x30, 0x83, 0xc3, 0x9e, 0xe3, 0x43, 0xb9, 0x85, 0xd5, 0x1f, 0xd0, 0x29, 0x5a, 0xd8,
 ];
 
+#[derive(Debug)]
+/// Aggregator delta, supply contribution and Utreexo addition leaf hashes returned by
+/// [`Consensus::process_block_swiftsync`].
+///
+/// `unspent_amount` includes both hinted unspent outputs and unspendable outputs.
+pub struct SwiftSyncDelta {
+    pub aggregator_delta: SwiftSyncAgg,
+    pub unspent_amount: Amount,
+    pub utreexo_adds: Vec<BitcoinNodeHash>,
+}
+
 /// This struct contains all the information and methods needed to validate a block,
 /// it is used by the [ChainState](crate::ChainState) to validate blocks and transactions.
 #[derive(Debug, Clone)]
@@ -254,7 +265,7 @@ impl Consensus {
         height: u32,
         block: &Block,
         txids: Vec<Txid>,
-        unspent_indexes: HashSet<u32>,
+        unspent_indexes: &HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
         let transactions = &block.txdata;
@@ -267,6 +278,8 @@ impl Consensus {
 
         // The block-wide output index to compare against unspent output hints
         let mut output_index = 0;
+        // Bad hints can overcount outputs in a valid block. Saturate and let final checks abort
+        // SwiftSync instead of returning `TooManyCoins`, which would wrongly invalidate the block.
         let mut unspent_amount = Amount::ZERO;
         let mut agg = SwiftSyncAgg::zero();
 
@@ -301,7 +314,7 @@ impl Consensus {
             for (vout, out) in transaction.output.iter().enumerate() {
                 // Special case: unspendable outputs do not count for the block `output_index`
                 if Self::is_unspendable(&out.script_pubkey) {
-                    unspent_amount += out.value;
+                    unspent_amount = unspent_amount.checked_add(out.value).unwrap_or(Amount::MAX);
                     continue;
                 }
 
@@ -309,7 +322,7 @@ impl Consensus {
                 let hinted_unspent = unspent_indexes.contains(&output_index);
 
                 if hinted_unspent {
-                    unspent_amount += out.value;
+                    unspent_amount = unspent_amount.checked_add(out.value).unwrap_or(Amount::MAX);
                 } else {
                     spent_vouts.push(vout as u32);
                 }
@@ -613,12 +626,26 @@ impl Consensus {
         &self,
         block: &Block,
         height: u32,
-        unspent_indexes: HashSet<u32>,
+        unspent_indexes: &HashSet<u32>,
         salt: &SipHashKeys,
-    ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
+    ) -> Result<SwiftSyncDelta, BlockchainError> {
         let txids = self.check_block(block, height)?;
 
-        Self::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)
+        let utreexo_adds = udata::proof_util::get_block_adds_from_hints(
+            block,
+            &txids,
+            height,
+            block.block_hash(),
+            unspent_indexes,
+        );
+        let (agg, amount) =
+            Self::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)?;
+
+        Ok(SwiftSyncDelta {
+            aggregator_delta: agg,
+            unspent_amount: amount,
+            utreexo_adds,
+        })
     }
 
     /// Removes and returns the UTXO spent by `input`.
@@ -793,7 +820,7 @@ impl Consensus {
         let adds = udata::proof_util::get_block_adds(block, height, block_hash);
 
         // Update the accumulator
-        let acc = acc.modify(&adds, &del_hashes, &proof)?.0;
+        let acc = acc.modify(&adds, &del_hashes, &proof)?;
         Ok(acc)
     }
 
@@ -1792,6 +1819,40 @@ mod tests {
     }
 
     #[test]
+    fn test_swift_sync_unspent_amount_saturates() {
+        let consensus = Consensus::from(Network::Bitcoin);
+        let salt = SipHashKeys::default();
+
+        for (script, unspent_indexes) in [
+            (ScriptBuf::new_op_return([]), HashSet::new()),
+            (ScriptBuf::new(), (0..=8_785).collect()),
+        ] {
+            let mut block = genesis_block(Network::Bitcoin);
+            block.txdata[0].output[0].value = Amount::ZERO;
+
+            // Individually valid output amounts can overflow their block-wide sum
+            for vout in 0..8_785 {
+                block.txdata.push(build_tx(
+                    vec![txin!(OutPoint::new(Txid::all_zeros(), vout))],
+                    vec![txout!(Amount::MAX_MONEY.to_sat(), script.clone())],
+                ));
+            }
+            block.header.merkle_root = block.compute_merkle_root().unwrap();
+            assert!(block.weight() <= Weight::MAX_BLOCK);
+
+            let processed = consensus
+                .process_block_swiftsync(&block, 1, &unspent_indexes, &salt)
+                .expect("overflow must remain available for the final supply check");
+
+            assert_eq!(
+                processed.unspent_amount,
+                Amount::MAX,
+                "overflow must saturate so the final supply check rejects it",
+            );
+        }
+    }
+
+    #[test]
     fn test_swift_sync_agg_blocks() {
         let consensus = Consensus::from(Network::Bitcoin);
         let mainnet_blocks = read_blocks_txt();
@@ -1813,37 +1874,40 @@ mod tests {
             match i {
                 // We add the only TxOut in this block to the aggregator (spent later).
                 9 => {
-                    let unspent_indexes = HashSet::new();
-                    let (agg_blk_9, amount) = consensus
+                    let unspent_indexes = &HashSet::new();
+                    let processed = consensus
                         .process_block_swiftsync(block, 9, unspent_indexes, &salt)
                         .unwrap();
+                    let agg_blk_9 = processed.aggregator_delta;
 
                     assert!(!agg_blk_9.is_zero(), "block aggregator shouldn't be zero");
                     assert!(agg.is_zero());
                     agg += agg_blk_9;
                     assert!(!agg.is_zero());
 
-                    supply += amount;
+                    supply += processed.unspent_amount;
                 }
                 // This block spends the TxOut that was added to the aggregator in block 9.
                 170 => {
-                    let unspent_indexes = HashSet::from_iter(vec![0, 1, 2]);
-                    let (agg_blk_170, amount) = consensus
+                    let unspent_indexes = &HashSet::from_iter(vec![0, 1, 2]);
+                    let processed = consensus
                         .process_block_swiftsync(block, 170, unspent_indexes, &salt)
                         .unwrap();
+                    let agg_blk_170 = processed.aggregator_delta;
 
                     assert!(!agg_blk_170.is_zero(), "block aggregator shouldn't be zero");
                     assert!(!agg.is_zero(), "global aggregator shouldn't be zero");
                     agg += agg_blk_170;
                     assert!(agg.is_zero(), "aggregators should cancel out to zero");
 
-                    supply += amount;
+                    supply += processed.unspent_amount;
                 }
                 i => {
-                    let unspent_indexes = default_unspent_idx.clone();
-                    let (agg_i, amount) = consensus
+                    let unspent_indexes = &default_unspent_idx;
+                    let processed = consensus
                         .process_block_swiftsync(block, i as u32, unspent_indexes, &salt)
                         .unwrap();
+                    let agg_i = processed.aggregator_delta;
 
                     assert!(agg_i.is_zero());
                     agg += agg_i;
@@ -1861,7 +1925,7 @@ mod tests {
                             "we remove the element after finding the input, agg should be zero"
                         );
                     }
-                    supply += amount;
+                    supply += processed.unspent_amount;
                 }
             }
         }
@@ -1874,12 +1938,14 @@ mod tests {
         let block_9 = &mainnet_blocks[9];
         let block_170 = &mainnet_blocks[170];
 
-        let (agg_9, _) = consensus
-            .process_block_swiftsync(block_9, 9, HashSet::new(), &salt)
+        let processed_9 = consensus
+            .process_block_swiftsync(block_9, 9, &HashSet::new(), &salt)
             .unwrap();
-        let (agg_170, _) = consensus
-            .process_block_swiftsync(block_170, 170, HashSet::from_iter(vec![0, 1, 2]), &salt)
+        let processed_170 = consensus
+            .process_block_swiftsync(block_170, 170, &HashSet::from_iter(vec![0, 1, 2]), &salt)
             .unwrap();
+        let agg_9 = processed_9.aggregator_delta;
+        let agg_170 = processed_170.aggregator_delta;
 
         assert!(!agg_9.is_zero(), "block aggregator shouldn't be zero");
         assert!(!agg_170.is_zero(), "block aggregator shouldn't be zero");

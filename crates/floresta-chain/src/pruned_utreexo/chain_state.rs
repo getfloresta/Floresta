@@ -1171,6 +1171,30 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
             .map(|header| header.height())
     }
 
+    fn get_assume_valid_height(&self) -> Result<Option<u32>, Self::Error> {
+        let inner = read_lock!(self);
+        let Some(hash) = inner.assume_valid else {
+            return Ok(None);
+        };
+        let height = match inner.chainstore.get_header(&hash)? {
+            Some(DiskBlockHeader::HeadersOnly(_, height))
+            | Some(DiskBlockHeader::FullyValid(_, height))
+            | Some(DiskBlockHeader::AssumedValid(_, height)) => height,
+            // `InFork`, `Orphan` or `InvalidChain`
+            _ => return Ok(None),
+        };
+
+        // Cross-check that the AssumeValid block is on the current best chain.
+        if height > inner.best_block.depth {
+            return Ok(None);
+        }
+        if inner.chainstore.get_block_hash(height)? != Some(hash) {
+            return Ok(None);
+        }
+
+        Ok(Some(height))
+    }
+
     fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {
         read_lock!(self)
             .chainstore
@@ -1298,18 +1322,27 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         assumed_hash: BlockHash,
     ) -> Result<bool, BlockchainError> {
         let assumed_header = self.get_disk_block_header(&assumed_hash)?;
-        let mut curr_header = assumed_header;
 
-        while let Ok(header) = self.get_disk_block_header(&curr_header.block_hash()) {
+        let mut header = assumed_header;
+        let mut hash = assumed_hash;
+        loop {
             if self.is_genesis(&header) {
                 break;
             }
 
             let height = header.try_height()?;
-            self.update_header(&DiskBlockHeader::FullyValid(*header, height))?;
-            curr_header = self.get_ancestor(&header)?;
+            self.update_header_and_index(
+                &DiskBlockHeader::FullyValid(*header, height),
+                hash,
+                height,
+            )?;
+
+            // Move to the previous block
+            header = self.get_ancestor(&header)?;
+            hash = header.block_hash();
         }
 
+        // Update the tip and accumulator data with our assumed tip
         self.update_view(assumed_header.try_height()?, &assumed_header, acc)?;
         self.flush()?;
 
@@ -1634,6 +1667,80 @@ mod test {
 
         let chainstore = FlatChainStore::new(config).unwrap();
         ChainState::open(chainstore, network, assume_valid_arg).unwrap()
+    }
+
+    #[test]
+    fn test_assume_valid_height_uses_configured_block() {
+        let genesis = genesis_block(Network::Regtest).block_hash();
+        for (setting, expected) in [
+            (AssumeValidArg::Disabled, None),
+            (AssumeValidArg::Hardcoded, Some(0)),
+            (AssumeValidArg::UserInput(genesis), Some(0)),
+            (AssumeValidArg::UserInput(BlockHash::all_zeros()), None),
+        ] {
+            // Arc must forward the setting too, as the wire node shares its chainstate
+            let chain = std::sync::Arc::new(setup_test_chain(Network::Regtest, setting, None));
+            assert_eq!(chain.get_assume_valid_height().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_assume_valid_height_requires_current_best_chain() {
+        let genesis = genesis_block(Network::Regtest);
+        let header = BlockHeader {
+            prev_blockhash: genesis.block_hash(),
+            time: genesis.header.time + 1,
+            ..genesis.header
+        };
+        let hash = header.block_hash();
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::UserInput(hash), None);
+        {
+            let mut inner = write_lock!(chain);
+            inner.best_block.best_block = hash;
+            inner.best_block.depth = 1;
+            inner.chainstore.update_block_index(1, hash).unwrap();
+        }
+
+        let active = DiskBlockHeader::HeadersOnly(header, 1);
+        // Only active-chain header states are eligible
+        for (stored, expected) in [
+            (DiskBlockHeader::FullyValid(header, 1), Some(1)),
+            (active, Some(1)),
+            (DiskBlockHeader::AssumedValid(header, 1), Some(1)),
+            (DiskBlockHeader::InFork(header, 1), None),
+            (DiskBlockHeader::Orphan(header), None),
+            (DiskBlockHeader::InvalidChain(header), None),
+        ] {
+            write_lock!(chain).chainstore.save_header(&stored).unwrap();
+            assert_eq!(chain.get_assume_valid_height().unwrap(), expected);
+        }
+
+        let other_header = BlockHeader {
+            time: header.time + 1,
+            ..header
+        };
+
+        #[rustfmt::skip]
+        let cases = [
+            // Different block at the same height
+            (DiskBlockHeader::HeadersOnly(other_header, 1), other_header.block_hash(), 1),
+            // Simulate a rollback to genesis, retaining the AssumeValid header at height 1
+            (active, genesis.block_hash(), 0),
+        ];
+        for (selected, tip_hash, depth) in cases {
+            {
+                let mut inner = write_lock!(chain);
+                inner.chainstore.save_header(&active).unwrap();
+                inner.chainstore.save_header(&selected).unwrap();
+                inner
+                    .chainstore
+                    .update_block_index(1, selected.block_hash())
+                    .unwrap();
+                inner.best_block.best_block = tip_hash;
+                inner.best_block.depth = depth;
+            }
+            assert_eq!(chain.get_assume_valid_height().unwrap(), None);
+        }
     }
 
     fn anyone_can_spend_script() -> ScriptBuf {
@@ -2613,7 +2720,7 @@ mod test {
 
         let acc = Stump {
             leaves: 42,
-            roots: vec![BitcoinNodeHash::Some([1; 32])],
+            roots: vec![BitcoinNodeHash::Some([1; 32]); 3],
         };
 
         let chain = ChainState::open(
