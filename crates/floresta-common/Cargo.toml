@@ -12,9 +12,10 @@ readme = "README.md"
 [dependencies]
 # All dependencies MUST be pinned precisely with `X.Y.z`
 bitcoin = { workspace = true }
+# Required for the `#[cfg(not(feature = "std"))]` prelude re-exports below;
+# the CI builds this crate for no_std targets (thumbv7em-none-eabi).
 hashbrown = { version = "=0.17.1" }
 spin = { workspace = true }
-tracing = { workspace = true }
 
 [features]
 default = ["std"]

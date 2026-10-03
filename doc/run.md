@@ -117,32 +117,3 @@ floresta-cli rescanblockchain 800000
 ```
 
 Once you have a transaction cached in your watch-only, you can use either the rpc or integrated electrum server to retrieve information about your wallet. You can use wallets like Electrum or Sparrow to connect to your node and retrieve information about your wallet. Just connect with the server running at `127.0.0.1:50001:t`. On electrum you may want to use the `--oneserver` flag to connect to a single server, for better privacy.
-
-## Using `tokio console`
-
-[tokio-console](https://github.com/tokio-rs/console) is an utility from the `tokio` project that let's you inspect all running tasks, with a tool reminiscent of `htop`. You can navigate through each task, see how often it runs, for how long, and which resources are being used. To use it, you must compile `floresta` with the following configuration
-
-```bash
-RUSTFLAGS=--cfg tokio_unstable cargo build --release --bin florestad --features tokio-console
-```
-
-Then you just need to install and run `tokio-console`, you can use `cargo` for that
-
-```bash
-cargo install tokio-console
-tokio-console
-```
-
-You should see something like this:
-
-![Screenshot_2025-06-23_20-35-03](https://github.com/user-attachments/assets/f89a5898-a531-4aa3-ade4-5feb27c5197b)
-
-The main screen shows all the tasks that were spawned, how many time it woken up, how long did it run, wait or blocked.
-
-![Screenshot_2025-06-23_20-35-25](https://github.com/user-attachments/assets/4697ca9c-5283-4d89-a129-51ff5e2e9b45)
-
-This is the resource tab, it shows all resources that `tokio` is menaging (locks, files, sockets, channels...). You can toggle this view by pressing `r`, and go back to tasks by pressing `t`.
-
-![Screenshot_2025-06-23_20-35-44](https://github.com/user-attachments/assets/e05bf099-87a7-422b-ae3e-d1326941a688)
-
-This shows some info about one specific task, like a histogram of CPU usage (you can toggle this by pressing ENTER while on the main screen)

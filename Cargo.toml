@@ -53,7 +53,6 @@ bitcoin = { version = "=0.32.8", default-features = false }
 bitcoin_hashes = { version = "=1.1.0", default-features = false }
 clap = { version = "=4.6.1", default-features = false, features = ["derive", "std", "error-context"] }
 corepc-types = { version = "=0.15.0" }
-console-subscriber = { version = "=0.5.0", default-features = false }
 dns-lookup = { version = "=2.1.1" }
 floresta-common = { version = "=1.0.0" }
 hex = { version = "=0.4.3" }
@@ -73,8 +72,6 @@ tracing = { version = "=0.1.44", default-features = false }
 zstd = { version = "=0.13.3" }
 # Pins for MSRV compatibility:
 time = { version = "=0.3.45" } # note: >0.3.45 requires Rust 1.88.0
-tonic = { version = "=0.14.5" } # note: >0.14.5 requires Rust 1.88.0
-tonic-prost = { version = "=0.14.5" } # note: >0.14.5 requires Rust 1.88.0
 
 # Local dependencies
 floresta-chain = { path = "crates/floresta-chain" }

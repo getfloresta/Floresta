@@ -219,11 +219,11 @@ impl MempoolBase for Mempool {
         // Perform context-free consensus checks
         Consensus::check_transaction_context_free(&transaction)
             .map_err(MempoolError::ConsensusValidation)
-            .map_err(&log_rejection)?;
+            .map_err(log_rejection)?;
 
         // Make sure transaction won't conflict with other mempool transaction
         self.check_for_conflicts(&transaction)
-            .map_err(&log_rejection)?;
+            .map_err(log_rejection)?;
 
         // List dependants for this transaction
         let depends = self.find_mempool_depends(&transaction);

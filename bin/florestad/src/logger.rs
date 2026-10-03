@@ -10,10 +10,6 @@
 //! The active log level is controlled (in descending priority) by:
 //! 1. The `RUST_LOG` environment variable.
 //! 2. The `--debug` flag (`debug` level) or its absence (`info` level).
-//!
-//! When the `tokio-console` feature is enabled, the registry also enables
-//! `tokio=trace` and `runtime=trace` so that `tokio-console` can connect,
-//! while the human-facing layers stay quiet through their own per-layer filters.
 
 use core::fmt;
 use std::fs;
