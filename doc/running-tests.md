@@ -7,7 +7,9 @@ This document is a guide for the different testing options available in Floresta
 The tests in `floresta-cli` depend on the compiled `florestad` binary. Make sure to build the entire project first by running:
 
 ```bash
-cargo build
+# Build florestad and floresta-cli separately
+cargo build -p florestad
+cargo build -p floresta-cli
 ```
 
 The functional tests also need some dependencies, we use python for writing them and `uv` to manage its dependencies.

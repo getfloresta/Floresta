@@ -34,7 +34,10 @@ cd Floresta/
 and build with cargo build
 
 ```bash
-cargo build --release
+# Build florestad and floresta-cli separately
+cargo build --release -p florestad
+cargo build --release -p floresta-cli
+
 
 # Alternatively, you can add florestad and floresta-cli to the path with
 cargo install --path ./bin/florestad --locked
