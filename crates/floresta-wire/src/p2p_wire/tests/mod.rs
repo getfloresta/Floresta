@@ -4,6 +4,7 @@ mod chain_selector;
 mod peer_latency;
 mod swift_sync;
 mod sync_node;
+mod user_request;
 mod utils;
 
 pub(crate) use utils::signet_headers;
