@@ -76,9 +76,17 @@ pub trait BlockExt {
     /// If successful, returns the list of [`Txid`]s computed for the merkle
     /// root check.
     fn check_block_structure(&self) -> Result<Vec<Txid>, BlockExtError>;
+
+    /// Returns whether the txdata or witnesses don't match the header's commitments,
+    /// i.e., a genuine header paired with an altered transaction set.
+    fn is_mutated(&self) -> bool;
 }
 
 impl BlockExt for Block {
+    fn is_mutated(&self) -> bool {
+        Consensus::check_merkle_root(self).is_none() || !self.check_witness_commitment()
+    }
+
     fn check_block_structure(&self) -> Result<Vec<Txid>, BlockExtError> {
         let Some(txids) = Consensus::check_merkle_root(self) else {
             Err(BlockExtError::BadMerkleRoot)?
@@ -382,6 +390,7 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::Network;
@@ -1378,5 +1387,19 @@ mod tests {
 
         assert_eq!(block_sigop_cost(&block), 0);
         assert!(block.check_block_structure().is_ok());
+    }
+
+    #[test]
+    fn is_mutated_detects_tampered_txdata() {
+        let mut block = genesis_block(Network::Regtest);
+        let hash = block.header.block_hash();
+
+        assert!(!block.is_mutated());
+
+        // Tampering with the txdata leaves the header hash unchanged
+        block.txdata[0].output[0].value = Amount::from_sat(1);
+
+        assert_eq!(block.header.block_hash(), hash);
+        assert!(block.is_mutated());
     }
 }
