@@ -474,6 +474,8 @@ where
             )?;
         }
 
+        self.maybe_open_connection_with_added_peers()?;
+
         Ok(())
     }
 
