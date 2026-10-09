@@ -307,11 +307,10 @@ where
     }
 
     /// Handles an error raised while processing a block, either by [`proof_util::process_proof`]
-    /// or [`UpdatableChainstate::connect_block`], banning the responsible peer if any.
+    /// or [`UpdatableChainstate::connect_block`].
     ///
-    /// Only chain errors caused by peer-supplied data lead to a ban; any other error is our own
-    /// fault (e.g. a database failure) and never punishes a peer: non-chain errors are propagated
-    /// unchanged, and chain errors that aren't validation failures are only logged.
+    /// Non-blockchain errors are propagated unchanged; blockchain ones are forwarded to
+    /// [`Self::handle_block_error`], which blames and punishes the responsible peer.
     ///
     /// [`UpdatableChainstate::connect_block`]: floresta_chain::pruned_utreexo::UpdatableChainstate::connect_block
     fn handle_process_block_error(
@@ -325,6 +324,25 @@ where
             Err(err)?
         };
 
+        self.handle_block_error(chain_err, block, block_peer, Some(utreexo_peer))
+    }
+
+    /// Handles chain errors caused by peer-supplied block or Utreexo data.
+    ///
+    /// Identifies the responsible peer, disconnects and bans it, and returns
+    /// [`WireError::PeerMisbehaving`]. Errors caused by local failures, such as
+    /// database errors, are not attributed to a peer and are not punished.
+    ///
+    /// `utreexo_peer` is `Some` when the error occurred while processing data
+    /// supplied by a Utreexo peer, and `None` when it occurred before any Utreexo
+    /// peer was involved.
+    fn handle_block_error(
+        &mut self,
+        chain_err: BlockchainError,
+        block: Block,
+        block_peer: PeerId,
+        utreexo_peer: Option<PeerId>,
+    ) -> Result<(), WireError> {
         // Return early if the error is not from block validation (e.g., a database error)
         let e = match chain_err {
             BlockchainError::TransactionError(tx_err) => tx_err.error,
@@ -338,8 +356,14 @@ where
 
         let block_hash = block.block_hash();
 
-        let Some(blamed_peer) = self.handle_validation_errors(&e, block, block_peer, utreexo_peer)
-        else {
+        let blamed_peer;
+        if let Some(utreexo_peer) = utreexo_peer {
+            blamed_peer = self.blame_peer_for_block_error(&e, block, block_peer, utreexo_peer);
+        } else {
+            blamed_peer = self.blame_block_peer_for_block_error(&e, block_peer, block_hash);
+        }
+
+        let Some(blamed_peer) = blamed_peer else {
             return Ok(());
         };
 
@@ -352,10 +376,16 @@ where
         Err(WireError::PeerMisbehaving)
     }
 
-    /// Handles the different block validation errors that can happen when connecting a block.
+    /// Finds the peer responsible for a block validation error.
     ///
-    /// Returns the peer id that caused this error, since it could be block or utreexo-related.
-    fn handle_validation_errors(
+    /// Most error kinds can only be caused by the peer that sent us the block; for
+    /// those, see [`Self::blame_block_peer_for_block_error`]. The remaining ones are
+    /// utreexo-related and can only be caused by the peer that sent us the proof and
+    /// leaf data: in this case, the block is re-inserted into the pending map, so we
+    /// can request a new proof from another peer (see [`Self::ask_for_missed_proofs`]).
+    ///
+    /// Returns the peer id that caused this error, if any.
+    fn blame_peer_for_block_error(
         &mut self,
         e: &BlockValidationErrors,
         block: Block,
@@ -363,6 +393,10 @@ where
         utreexo_peer: PeerId,
     ) -> Option<PeerId> {
         let hash = block.block_hash();
+        if let Some(peer) = self.blame_block_peer_for_block_error(e, block_peer, hash) {
+            return Some(peer);
+        }
+
         match e {
             // The utreexo peer sent us an invalid utreexo proof. Block is not yet processed.
             BlockValidationErrors::InvalidUtreexoProof => {
@@ -382,6 +416,31 @@ where
                 Some(utreexo_peer)
             }
 
+            _ => None,
+        }
+    }
+
+    /// Finds whether the peer that sent us the block is responsible for a block
+    /// validation error, enforcing the consensus for each error kind:
+    ///
+    /// - Consensus-invalid blocks (bad coinbase, invalid scripts, wrong amounts...):
+    ///   the block is invalidated in our chain and the peer is to blame.
+    /// - Mutated blocks (bad merkle root or witness commitment): the original block
+    ///   may still be valid, so we don't invalidate it, the peer is still to blame.
+    /// - The block doesn't extend our tip: this is our mistake, no peer is to blame.
+    ///
+    /// Any other error kind is not the block peer's fault: utreexo-related errors are
+    /// attributed by the caller ([`Self::blame_peer_for_block_error`]), and structural
+    /// errors are checked when the block first arrives.
+    ///
+    /// Returns the peer id to blame, if any.
+    fn blame_block_peer_for_block_error(
+        &mut self,
+        e: &BlockValidationErrors,
+        block_peer: PeerId,
+        hash: BlockHash,
+    ) -> Option<PeerId> {
+        match e {
             // The block is invalid, so we have to invalidate it in our chain.
             BlockValidationErrors::InvalidCoinbase(_)
             | BlockValidationErrors::ScriptValidationError(_)
@@ -422,6 +481,629 @@ where
                 // This is our mistake, don't punish any peer
                 None
             }
+
+            _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::discriminant;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use bitcoin::Network;
+    use bitcoin::OutPoint;
+    use bitcoin::Txid;
+    use bitcoin::hashes::Hash;
+    use floresta_chain::CompactLeafData;
+    use floresta_chain::ScriptPubKeyKind;
+    use floresta_chain::TransactionError;
+    use floresta_chain::proof_util::LeafErrorKind;
+    use floresta_chain::proof_util::UtreexoLeafError;
+    use floresta_common::Ema;
+    use floresta_mempool::Mempool;
+    use rustreexo::stump::StumpError;
+    use tokio::sync::Mutex;
+    use tokio::sync::RwLock;
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+    use crate::UtreexoNodeConfig;
+    use crate::address_man::AddressMan;
+    use crate::node::ConnectionKind;
+    use crate::node::LocalPeerView;
+    use crate::node::PeerStatus;
+    use crate::node::sync_ctx::SyncNode;
+    use crate::p2p_wire::tests::utils::mock_chain::MockChain;
+    use crate::p2p_wire::tests::utils::synthetic_block;
+    use crate::p2p_wire::transport::TransportProtocol;
+
+    /// The node under test: a [`UtreexoNode`] running on top of a [`MockChain`].
+    type MockNode = UtreexoNode<MockChain, SyncNode>;
+
+    /// The peer that sent us the block under test.
+    const BLOCK_PEER: PeerId = 0;
+
+    /// The peer that sent us the utreexo proof and leaf data for the block under test.
+    const UTREEXO_PEER: PeerId = 1;
+
+    /// Everything a test needs: the node under test, its mock chain and the peer
+    /// channel receivers. The receivers must be kept alive for the whole test,
+    /// otherwise `disconnect_and_ban` fails while sending `Shutdown` to a peer.
+    struct TestSetup {
+        node: MockNode,
+        chain: MockChain,
+        _peer_rxs: Vec<UnboundedReceiver<NodeRequest>>,
+    }
+
+    /// Creates a node backed by a [`MockChain`] and two ready peers, with no
+    /// requests in flight. The chain reports `validation_index` as its
+    /// validation index.
+    fn setup_test_with_validation_index(validation_index: u32) -> TestSetup {
+        let chain = MockChain::with_validation_index(validation_index);
+
+        let config = UtreexoNodeConfig {
+            network: Network::Regtest,
+            pow_fraud_proofs: false,
+            datadir: PathBuf::from("./tmp-db/unit-test"),
+            user_agent: "unit_test".to_string(),
+            ..Default::default()
+        };
+
+        let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
+        let kill_signal = Arc::new(RwLock::new(false));
+        let mut node: MockNode = UtreexoNode::new(
+            config,
+            chain.clone(),
+            mempool,
+            None,
+            kill_signal,
+            AddressMan::new(None, &[]),
+        )
+        .expect("building a node over a mock chain cannot fail");
+
+        let mut peer_rxs = Vec::new();
+        for peer_id in [BLOCK_PEER, UTREEXO_PEER] {
+            let (tx, rx) = unbounded_channel();
+            peer_rxs.push(rx);
+
+            node.peers.insert(
+                peer_id,
+                LocalPeerView {
+                    message_times: Ema::with_half_life_50(),
+                    address: "127.0.0.1:8333".parse().expect("valid address"),
+                    services: ServiceFlags::NETWORK,
+                    user_agent: "unit_test".to_string(),
+                    height: 0,
+                    time_offset: 0,
+                    state: PeerStatus::Ready,
+                    channel: tx,
+                    kind: ConnectionKind::Regular(ServiceFlags::NETWORK),
+                    banscore: 0,
+                    _last_message: Instant::now(),
+                    transport_protocol: TransportProtocol::V2,
+                },
+            );
+        }
+
+        TestSetup {
+            node,
+            chain,
+            _peer_rxs: peer_rxs,
+        }
+    }
+
+    /// A coinbase-only block: it passes the merkle-root and witness-commitment
+    /// checks, and counts as ready to process when wrapped in an [`InflightBlock`].
+    fn dummy_block() -> Block {
+        synthetic_block()
+    }
+
+    fn assert_peer_state(node: &MockNode, peer: PeerId, state: PeerStatus) {
+        assert_eq!(node.peers.get(&peer).expect("peer exists").state, state);
+    }
+
+    /// Errors that make the block consensus-invalid: the block peer is to blame,
+    /// and the block is invalidated in our chain.
+    fn invalid_block_errors() -> Vec<BlockValidationErrors> {
+        vec![
+            BlockValidationErrors::InvalidCoinbase("bad coinbase".into()),
+            BlockValidationErrors::ScriptValidationError("script error".into()),
+            BlockValidationErrors::NullPrevOut,
+            BlockValidationErrors::DuplicateInput,
+            BlockValidationErrors::EmptyInputs,
+            BlockValidationErrors::EmptyOutputs,
+            BlockValidationErrors::ScriptError,
+            BlockValidationErrors::BlockTooBig,
+            BlockValidationErrors::NotEnoughPow,
+            BlockValidationErrors::TooManyCoins,
+            BlockValidationErrors::NotEnoughMoney,
+            BlockValidationErrors::FirstTxIsNotCoinbase,
+            BlockValidationErrors::BadCoinbaseOutValue,
+            BlockValidationErrors::EmptyBlock,
+            BlockValidationErrors::BadBip34,
+            BlockValidationErrors::BIP94TimeWarp,
+            BlockValidationErrors::UnspendableUTXO,
+            BlockValidationErrors::NonFinalTransaction,
+            BlockValidationErrors::CoinbaseNotMatured,
+        ]
+    }
+
+    /// Errors that may come from a mutated block: the block peer is to blame, but
+    /// the block isn't invalidated, since the original (unmutated) one may be valid.
+    fn mutated_block_errors() -> Vec<BlockValidationErrors> {
+        vec![
+            BlockValidationErrors::BadMerkleRoot,
+            BlockValidationErrors::BadWitnessCommitment,
+        ]
+    }
+
+    /// Errors that mean *we* tried to connect a block in the wrong place: no peer
+    /// is to blame, and we go back to asking blocks from our validation index.
+    fn orphan_chain_errors() -> Vec<BlockValidationErrors> {
+        vec![
+            BlockValidationErrors::BlockExtendsAnOrphanChain,
+            BlockValidationErrors::BlockDoesntExtendTip,
+        ]
+    }
+
+    /// Utreexo-related errors that can't be caused by the block peer: they are
+    /// attributed to the utreexo peer by [`UtreexoNode::blame_peer_for_block_error`].
+    fn utreexo_errors() -> Vec<BlockValidationErrors> {
+        vec![
+            BlockValidationErrors::InvalidUtreexoProof,
+            BlockValidationErrors::UtxoNotFound(OutPoint::null()),
+        ]
+    }
+
+    /// What [`UtreexoNode::blame_block_peer_for_block_error`] is expected to do
+    /// for each error kind.
+    #[derive(PartialEq, Eq, Debug)]
+    enum ExpectedBlame {
+        /// The block is consensus-invalid: blame the block peer and invalidate the block.
+        BlockPeerInvalidates,
+
+        /// The block may be a mutated version of a valid one: blame the block peer,
+        /// but don't invalidate the block.
+        BlockPeerKeepsBlock,
+
+        /// The error is someone else's fault: don't blame the block peer.
+        NoOne,
+    }
+
+    /// The expected blame consensus for every `BlockValidationErrors` variant.
+    ///
+    /// This match is exhaustive on purpose: adding a new variant to the enum makes
+    /// the crate fail to compile until the new case is added here, forcing its
+    /// blame consensus to be defined and tested.
+    fn expected_blame(e: &BlockValidationErrors) -> ExpectedBlame {
+        let disc_e = discriminant(e);
+
+        if invalid_block_errors()
+            .iter()
+            .any(|error| discriminant(error) == disc_e)
+        {
+            return ExpectedBlame::BlockPeerInvalidates;
+        }
+
+        if mutated_block_errors()
+            .iter()
+            .any(|error| discriminant(error) == disc_e)
+        {
+            return ExpectedBlame::BlockPeerKeepsBlock;
+        }
+
+        ExpectedBlame::NoOne
+    }
+
+    #[test]
+    fn test_blame_block_peer_for_block_error_invalid_block_errors_blame_block_peer() {
+        let hash = dummy_block().block_hash();
+
+        for error in invalid_block_errors() {
+            let mut setup = setup_test_with_validation_index(0);
+            let blamed = setup
+                .node
+                .blame_block_peer_for_block_error(&error, BLOCK_PEER, hash);
+
+            assert_eq!(blamed, Some(BLOCK_PEER), "blame consensus for {error:?}");
+            assert_eq!(
+                setup.chain.invalidated_blocks(),
+                vec![hash],
+                "consensus-invalid blocks must be invalidated, case: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_block_peer_for_block_error_mutated_block_errors_blame_block_peer() {
+        let hash = dummy_block().block_hash();
+
+        for error in mutated_block_errors() {
+            let mut setup = setup_test_with_validation_index(0);
+            let blamed = setup
+                .node
+                .blame_block_peer_for_block_error(&error, BLOCK_PEER, hash);
+
+            assert_eq!(blamed, Some(BLOCK_PEER), "blame consensus for {error:?}");
+
+            // The unmutated block may still be valid, so we can't invalidate it
+            assert!(
+                setup.chain.invalidated_blocks().is_empty(),
+                "mutated blocks must not be invalidated, case: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_block_peer_for_block_error_orphan_chain_errors_blame_no_peer() {
+        let hash = dummy_block().block_hash();
+
+        for error in orphan_chain_errors() {
+            let mut setup = setup_test_with_validation_index(7);
+            setup.node.last_block_request = 100;
+
+            let blamed = setup
+                .node
+                .blame_block_peer_for_block_error(&error, BLOCK_PEER, hash);
+
+            // This is our own mistake, don't punish any peer
+            assert_eq!(blamed, None, "blame consensus for {error:?}");
+
+            // We go back to asking for blocks from our validation index
+            assert_eq!(setup.node.last_block_request, 7, "case: {error:?}");
+            assert!(
+                setup.chain.invalidated_blocks().is_empty(),
+                "case: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_block_peer_for_block_error_utreexo_errors_blame_no_peer() {
+        let hash = dummy_block().block_hash();
+
+        for error in utreexo_errors() {
+            let mut setup = setup_test_with_validation_index(0);
+            let blamed = setup
+                .node
+                .blame_block_peer_for_block_error(&error, BLOCK_PEER, hash);
+
+            // Utreexo errors are the utreexo peer's fault, not the block peer's
+            assert_eq!(blamed, None, "blame consensus for {error:?}");
+            assert!(
+                setup.chain.invalidated_blocks().is_empty(),
+                "case: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_block_peer_for_block_error_covers_all_variants() {
+        let hash = dummy_block().block_hash();
+
+        let mut all = invalid_block_errors();
+        all.extend(mutated_block_errors());
+        all.extend(orphan_chain_errors());
+        all.extend(utreexo_errors());
+
+        // One instance of every `BlockValidationErrors` variant, checked against
+        // the expected blame consensus. `expected_blame` is an exhaustive match, so a
+        // new enum variant breaks compilation of this test until it's classified.
+        for error in all {
+            let mut setup = setup_test_with_validation_index(0);
+            let blamed = setup
+                .node
+                .blame_block_peer_for_block_error(&error, BLOCK_PEER, hash);
+
+            let expected = expected_blame(&error);
+            let (expected_blamed, expected_invalidation) = match expected {
+                ExpectedBlame::BlockPeerInvalidates => (Some(BLOCK_PEER), true),
+                ExpectedBlame::BlockPeerKeepsBlock => (Some(BLOCK_PEER), false),
+                ExpectedBlame::NoOne => (None, false),
+            };
+
+            assert_eq!(blamed, expected_blamed, "consensus for {error:?}");
+            assert_eq!(
+                !setup.chain.invalidated_blocks().is_empty(),
+                expected_invalidation,
+                "consensus for {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_blame_peer_for_block_error_block_error_blames_block_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let blamed = setup.node.blame_peer_for_block_error(
+            &BlockValidationErrors::BadMerkleRoot,
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        // Block errors are delegated to the block peer's blame consensus
+        assert_eq!(blamed, Some(BLOCK_PEER));
+
+        // The block peer is to blame, so the block isn't kept around for a retry
+        assert!(!setup.node.blocks.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_blame_peer_for_block_error_invalid_utreexo_proof_blames_utreexo_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let blamed = setup.node.blame_peer_for_block_error(
+            &BlockValidationErrors::InvalidUtreexoProof,
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        assert_eq!(blamed, Some(UTREEXO_PEER));
+
+        // The block is put back in the pending map, so another peer can prove it
+        let inflight = setup.node.blocks.get(&hash).expect("block re-inserted");
+        assert_eq!(inflight.peer, BLOCK_PEER);
+    }
+
+    #[test]
+    fn test_blame_peer_for_block_error_utxo_not_found_blames_utreexo_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let blamed = setup.node.blame_peer_for_block_error(
+            &BlockValidationErrors::UtxoNotFound(OutPoint::null()),
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        assert_eq!(blamed, Some(UTREEXO_PEER));
+
+        // The block is put back in the pending map, so another peer can prove it
+        let inflight = setup.node.blocks.get(&hash).expect("block re-inserted");
+        assert_eq!(inflight.peer, BLOCK_PEER);
+    }
+
+    #[test]
+    fn test_handle_block_error_transaction_error_blames_block_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let chain_err = BlockchainError::TransactionError(TransactionError {
+            txid: Txid::all_zeros(),
+            error: BlockValidationErrors::InvalidCoinbase("bad coinbase".into()),
+        });
+
+        let result = setup
+            .node
+            .handle_block_error(chain_err, block, BLOCK_PEER, None);
+
+        // A tx error is unwrapped into the underlying block validation error
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Banned);
+        assert_eq!(setup.chain.invalidated_blocks(), vec![hash]);
+    }
+
+    #[test]
+    fn test_handle_block_error_block_validation_blames_block_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+
+        let chain_err = BlockchainError::BlockValidation(BlockValidationErrors::BadMerkleRoot);
+        let result = setup
+            .node
+            .handle_block_error(chain_err, block, BLOCK_PEER, None);
+
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Banned);
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Ready);
+    }
+
+    #[test]
+    fn test_handle_block_error_invalid_utreexo_proof_blames_utreexo_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let result = setup.node.handle_block_error(
+            BlockchainError::InvalidUtreexoProof,
+            block,
+            BLOCK_PEER,
+            Some(UTREEXO_PEER),
+        );
+
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Banned);
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+
+        // The block is put back in the pending map, so another peer can prove it
+        assert!(setup.node.blocks.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_handle_block_error_accumulator_error_blames_utreexo_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let chain_err =
+            BlockchainError::AccumulatorError(StumpError::Io(std::io::ErrorKind::Other));
+        let result =
+            setup
+                .node
+                .handle_block_error(chain_err, block, BLOCK_PEER, Some(UTREEXO_PEER));
+
+        // Accumulator errors are mapped to an invalid utreexo proof
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Banned);
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+        assert!(setup.node.blocks.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_handle_block_error_utreexo_leaf_error_blames_utreexo_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let leaf_error = UtreexoLeafError {
+            leaf: CompactLeafData {
+                header_code: 0,
+                amount: 0,
+                spk_ty: ScriptPubKeyKind::Other(vec![].into()),
+            },
+            txid: Txid::all_zeros(),
+            vin: 0,
+            kind: LeafErrorKind::EmptyStack,
+        };
+
+        let result = setup.node.handle_block_error(
+            BlockchainError::UtreexoLeaf(leaf_error),
+            block,
+            BLOCK_PEER,
+            Some(UTREEXO_PEER),
+        );
+
+        // Leaf reconstruction errors are mapped to an invalid utreexo proof
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Banned);
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+        assert!(setup.node.blocks.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_handle_block_error_non_validation_error_returns_ok() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+
+        // Local failures (e.g. database errors) are not blamed on any peer
+        let result = setup.node.handle_block_error(
+            BlockchainError::BlockNotPresent,
+            block,
+            BLOCK_PEER,
+            Some(UTREEXO_PEER),
+        );
+
+        assert!(result.is_ok());
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Ready);
+    }
+
+    #[test]
+    fn test_handle_block_error_no_blamed_peer_returns_ok() {
+        let block = dummy_block();
+
+        // With and without a utreexo peer involved, the outcome is the same:
+        // the error is our own fault (the block doesn't extend our tip), so
+        // no peer is punished and we go back to our validation index.
+        for utreexo_peer in [Some(UTREEXO_PEER), None] {
+            let mut setup = setup_test_with_validation_index(7);
+            setup.node.last_block_request = 100;
+
+            let result = setup.node.handle_block_error(
+                BlockchainError::BlockValidation(BlockValidationErrors::BlockDoesntExtendTip),
+                block.clone(),
+                BLOCK_PEER,
+                utreexo_peer,
+            );
+
+            assert!(result.is_ok(), "case utreexo_peer={utreexo_peer:?}");
+            assert_eq!(
+                setup.node.last_block_request, 7,
+                "case utreexo_peer={utreexo_peer:?}"
+            );
+            assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+            assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Ready);
+        }
+    }
+
+    #[test]
+    fn test_handle_process_block_error_non_blockchain_error_is_propagated() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+
+        let result = setup.node.handle_process_block_error(
+            WireError::BlockNotFound,
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        // Non-blockchain errors are returned unchanged, with no peer punished
+        assert!(matches!(result, Err(WireError::BlockNotFound)));
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Ready);
+    }
+
+    #[test]
+    fn test_handle_process_block_error_blockchain_utreexo_error_bans_utreexo_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+        let hash = block.block_hash();
+
+        let result = setup.node.handle_process_block_error(
+            WireError::Blockchain(BlockchainError::InvalidUtreexoProof),
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Banned);
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+
+        // The block is put back in the pending map, so another peer can prove it
+        assert!(setup.node.blocks.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_handle_process_block_error_blockchain_block_error_bans_block_peer() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+
+        let result = setup.node.handle_process_block_error(
+            WireError::Blockchain(BlockchainError::BlockValidation(
+                BlockValidationErrors::BadMerkleRoot,
+            )),
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        assert!(matches!(result, Err(WireError::PeerMisbehaving)));
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Banned);
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Ready);
+    }
+
+    #[test]
+    fn test_handle_process_block_error_blockchain_no_blame_returns_ok() {
+        let mut setup = setup_test_with_validation_index(0);
+        let block = dummy_block();
+
+        let result = setup.node.handle_process_block_error(
+            WireError::Blockchain(BlockchainError::BlockValidation(
+                BlockValidationErrors::BlockDoesntExtendTip,
+            )),
+            block,
+            BLOCK_PEER,
+            UTREEXO_PEER,
+        );
+
+        // Nobody's fault: no peer is punished
+        assert!(result.is_ok());
+        assert_peer_state(&setup.node, BLOCK_PEER, PeerStatus::Ready);
+        assert_peer_state(&setup.node, UTREEXO_PEER, PeerStatus::Ready);
     }
 }
