@@ -818,6 +818,10 @@ where
                                 return Ok(());
                             };
 
+                            if this_height <= current_height {
+                                return Ok(());
+                            }
+
                             if current_height + 1 != this_height {
                                 self.context.inflight_filters.insert(this_height, filter);
                                 return Ok(());
@@ -827,9 +831,9 @@ where
                             current_height += 1;
 
                             while let Some(filter) =
-                                self.context.inflight_filters.remove(&(current_height))
+                                self.context.inflight_filters.remove(&(current_height + 1))
                             {
-                                filters.push_filter(filter, current_height)?;
+                                filters.push_filter(filter, current_height + 1)?;
                                 current_height += 1;
                             }
 
@@ -851,5 +855,72 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use bitcoin::Network;
+    use bitcoin::bip158::BlockFilter;
+    use floresta_chain::pruned_utreexo::BlockchainInterface;
+    use floresta_compact_filters::IterableFilterStore;
+    use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
+    use floresta_compact_filters::network_filters::NetworkFilters;
+
+    use super::RunningNode;
+    use crate::node::NodeNotification;
+    use crate::p2p_wire::peer::PeerMessages;
+    use crate::p2p_wire::tests::utils::PeerData;
+    use crate::p2p_wire::tests::utils::SetupNodeArgs;
+    use crate::p2p_wire::tests::utils::setup_node;
+    use crate::p2p_wire::tests::utils::signet_blocks;
+
+    #[tokio::test]
+    async fn test_out_of_order_filters() {
+        let dir = format!("./tmp-db/{}.running_node", rand::random::<u32>());
+        let peer = PeerData::new(Vec::new(), signet_blocks(), HashMap::new());
+        let args = SetupNodeArgs::new(vec![peer], false, Network::Signet, dir.clone(), 9);
+        let mut node = setup_node::<RunningNode>(args);
+        node.inflight.clear();
+
+        let store_path = format!("{dir}/filters");
+        let filters = Arc::new(NetworkFilters::new(FlatFiltersStore::new(&store_path)));
+        filters.save_height(0).unwrap();
+        node.block_filters = Some(filters.clone());
+
+        let stored = || -> Vec<u32> {
+            FlatFiltersStore::new(&store_path)
+                .iter(Some(0))
+                .unwrap()
+                .map(|(height, _)| height)
+                .collect()
+        };
+
+        // Filters 2 and 3 arrive before filter 1
+        for height in [2u32, 3, 1] {
+            let hash = node.chain.get_block_hash(height).unwrap();
+            let msg = PeerMessages::BlockFilter((hash, BlockFilter::new(&[height as u8])));
+            node.handle_notification(NodeNotification::FromPeer(0, msg, Instant::now()))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(stored(), vec![1, 2, 3]);
+        assert_eq!(filters.get_height().unwrap(), 3);
+        assert!(node.context.inflight_filters.is_empty());
+
+        // A late copy of filter 2 is dropped, not buffered
+        let hash = node.chain.get_block_hash(2).unwrap();
+        let msg = PeerMessages::BlockFilter((hash, BlockFilter::new(&[2])));
+        node.handle_notification(NodeNotification::FromPeer(0, msg, Instant::now()))
+            .await
+            .unwrap();
+
+        assert_eq!(stored(), vec![1, 2, 3]);
+        assert!(node.context.inflight_filters.is_empty());
     }
 }
