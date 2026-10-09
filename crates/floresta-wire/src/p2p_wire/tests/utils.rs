@@ -54,6 +54,9 @@ use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::peer::Version;
 use crate::p2p_wire::transport::TransportProtocol;
 
+/// A far-future timestamp so test blocks are never considered too far in the future.
+pub const MOCK_TIME: u32 = u32::MAX;
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UtreexoRoots {
     roots: Option<Vec<String>>,
@@ -354,7 +357,7 @@ where
         _ => panic!("unavailable headers for net: {net}"),
     };
     for header in headers.into_iter().skip(1).take(args.num_blocks) {
-        chain.accept_header(header).unwrap();
+        chain.accept_header(header, MOCK_TIME).unwrap();
     }
 
     // Create `UtreexoNode` and spawn the simulated peers
