@@ -1215,6 +1215,7 @@ dependencies = [
  "rustreexo",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "ureq",
