@@ -410,48 +410,47 @@ pub mod proof_util {
     /// This will be used to process this block
     type ProcessedProof = (Vec<sha256::Hash>, UtxoMap);
 
-    /// This function processes a proof of inclusion for a given block.
-    /// It takes in the [`CompactLeafData`] for this block, this block's transactions, the height
-    /// and a function to get the block hash for a given height. Then returns a [`Result`] containing
-    /// a vector with hashes for deleted leaves, and a `UtxoMap`, which is defined
-    /// as [`HashMap<OutPoint, UtxoData>`].
+    /// Processes the proof of inclusion for a block.
+    ///
+    /// The returned UTXO map contains only outputs reconstructed from `leaves`. Outputs created
+    /// within this block are excluded; block validation makes them available in transaction order.
+    /// Inputs spending any same-block output are therefore not paired with a proof leaf, including
+    /// invalid inputs that spend an output before its creating transaction.
+    ///
+    /// Returns the deleted leaf hashes and the proof-provided UTXOs needed to validate `txdata`.
     pub fn process_proof<F, E>(
         leaves: &[CompactLeafData],
         txdata: &[Transaction],
-        height: u32,
+        _height: u32,
         get_block_hash: F,
     ) -> Result<ProcessedProof, E>
     where
         F: Fn(u32) -> Result<BlockHash, E>,
         E: From<UtreexoLeafError>,
     {
+        // Compute transaction IDs once, then use output counts to distinguish same-block spends
+        // from inputs that require proof data. This intentionally ignores transaction order:
+        // validation is responsible for rejecting spends that precede output creation.
+        let txids: Vec<_> = txdata.iter().map(Transaction::compute_txid).collect();
+        let same_block_transactions: HashMap<_, _> = txids
+            .iter()
+            .copied()
+            .zip(txdata.iter().map(|tx| tx.output.len()))
+            .collect();
+
         // Initialize return values
         let mut del_hashes = Vec::new();
         let mut utxos = HashMap::new();
-
         let mut leaves_iter = leaves.iter().cloned();
 
         // Skip coinbase transaction
-        for tx in txdata.iter().skip(1) {
-            let txid = tx.compute_txid();
-
-            // Collect new UTXOs, which may be spent by later transactions in the block
-            for (vout, out) in tx.output.iter().enumerate() {
-                utxos.insert(
-                    OutPoint::new(txid, vout as u32),
-                    UtxoData {
-                        txout: out.clone(),
-                        is_coinbase: tx.is_coinbase(),
-                        creation_height: height,
-                        creation_time: 0, // TODO add MTP(`height` - 1)
-                    },
-                );
-            }
-
+        for (tx, txid) in txdata.iter().zip(txids).skip(1) {
             for (vin, input) in tx.input.iter().enumerate() {
-                // Only reconstruct UTXOs missing from the map, from prior blocks. Transactions
-                // spending uncreated UTXOs yield an invalid deletion hash, failing utreexo verification.
-                if utxos.contains_key(&input.previous_output) {
+                let previous_output = input.previous_output;
+                let is_same_block_output = same_block_transactions
+                    .get(&previous_output.txid)
+                    .is_some_and(|output_count| (previous_output.vout as usize) < *output_count);
+                if is_same_block_output {
                     continue;
                 }
                 let Some(leaf) = leaves_iter.next() else {
