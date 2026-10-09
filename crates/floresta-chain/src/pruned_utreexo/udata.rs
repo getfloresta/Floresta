@@ -834,6 +834,75 @@ mod test {
     }
 
     #[test]
+    fn rejects_same_block_spend_before_output_creation() {
+        fn tx(previous_output: OutPoint, value: u64) -> Transaction {
+            Transaction {
+                version: Version::TWO,
+                lock_time: LockTime::ZERO,
+                input: vec![TxIn {
+                    previous_output,
+                    ..Default::default()
+                }],
+                output: vec![TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: ScriptBuf::new(),
+                }],
+            }
+        }
+
+        let proof_outpoint = OutPoint::new(bitcoin::Txid::all_zeros(), 0);
+        let coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::from_bytes(vec![0, 0]),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(50),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let funding = tx(proof_outpoint, 90);
+        let creator = tx(OutPoint::new(funding.compute_txid(), 0), 70);
+        let uncreated_outpoint = OutPoint::new(creator.compute_txid(), 0);
+        let spender = tx(uncreated_outpoint, 60);
+        let spending_txid = spender.compute_txid();
+        let transactions = [coinbase, funding, spender, creator];
+        let leaf = CompactLeafData {
+            header_code: 1 << 1,
+            amount: 100,
+            spk_ty: ScriptPubKeyKind::Other(Box::new([])),
+        };
+
+        let (_, utxos) = process_proof(&[leaf], &transactions, 2, |_| {
+            Ok::<_, crate::BlockchainError>(BlockHash::all_zeros())
+        })
+        .expect("proof reconstruction must succeed");
+
+        match crate::pruned_utreexo::consensus::Consensus::verify_block_transactions(
+            2,
+            0,
+            utxos,
+            &transactions,
+            Amount::from_sat(50),
+            false,
+            0,
+        ) {
+            Err(crate::BlockchainError::TransactionError(error)) => {
+                assert_eq!(error.txid, spending_txid);
+                assert_eq!(
+                    error.error,
+                    crate::BlockValidationErrors::UtxoNotFound(uncreated_outpoint)
+                );
+            }
+            other => panic!("expected UtxoNotFound, got {other:?}"),
+        }
+    }
+
+
+    #[test]
     fn test_leaf_hash_known_vector() {
         // Precomputed reference hash generated from the original sha2::Sha512_256 implementation
         // using deterministic test inputs to ensure backwards compatibility.
