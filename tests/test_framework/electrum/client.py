@@ -160,9 +160,10 @@ class ElectrumClient(BaseClient):
         """
         return self.request("server.ping", [])
 
-    def get_version(self) -> str:
+    def get_version(self, protocol: str | list[str] = "1.2") -> str:
         """
-        Identify the client to the server and negotiate the protocol version.
+        Identify the client to the server and negotiate the protocol version,
+        or a range of versions as `[min, max]`.
         Only the first server.version() message is accepted.
         """
-        return self.request("server.version", ["test-client", "1.2"])
+        return self.request("server.version", ["test-client", protocol])
