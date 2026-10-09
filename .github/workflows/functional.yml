@@ -43,7 +43,7 @@ jobs:
 
       - name: Prepare functional tests tasks
         run: |
-          tests/prepare.sh --release
+          tests/prepare.sh --release --electrum-compat
 
       - name: Run functional tests tasks
         run: |
