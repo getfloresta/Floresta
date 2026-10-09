@@ -976,16 +976,34 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         next_header: &BlockHeader,
     ) -> Result<Target, BlockchainError> {
         let params: ChainParams = self.chain_params();
-        // Special testnet rule, if a block takes more than 20 minutes to mine, we can
-        // mine a block with diff 1
-        if params.params.allow_min_difficulty_blocks
-            && last_block.time + params.params.pow_target_spacing as u32 * 2 < next_header.time
-        {
-            return Ok(params.params.max_attainable_target);
+
+        // Outside a retarget height, testnets may allow min-difficulty blocks
+        if next_height % 2016 != 0 {
+            if !params.params.allow_min_difficulty_blocks {
+                return Ok(last_block.target());
+            }
+
+            // Special testnet rule, if a block takes more than 20 minutes to mine, we can
+            // mine a block with diff 1
+            if last_block.time + params.params.pow_target_spacing as u32 * 2 < next_header.time {
+                return Ok(params.params.max_attainable_target);
+            }
+
+            // Otherwise, require the target of the last block that wasn't mined under that rule,
+            // stopping at the last retarget block
+            let min_difficulty_bits = params.params.max_attainable_target.to_compact_lossy();
+            let mut header = *last_block;
+            let mut height = next_height - 1;
+            while height % 2016 != 0 && header.bits == min_difficulty_bits {
+                header = *self.get_disk_block_header(&header.prev_blockhash)?;
+                height -= 1;
+            }
+
+            return Ok(header.target());
         }
 
         // Regtest don't have retarget
-        if !params.params.no_pow_retargeting && (next_height) % 2016 == 0 {
+        if !params.params.no_pow_retargeting {
             // First block in this epoch
             let first_block = self.get_header_by_height(next_height - 2016)?;
             let last_block = self.get_header_by_height(next_height - 1)?;
@@ -1583,6 +1601,7 @@ mod test {
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::constants::DIFFCHANGE_INTERVAL;
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use bitcoin::opcodes::OP_TRUE;
@@ -1964,6 +1983,120 @@ mod test {
         assert_eq!(
             chain.previous_median_time_past(&candidate).unwrap(),
             median_time(times.to_vec())
+        );
+    }
+
+    const TESTNET_POW_LIMIT_BITS: u32 = 0x1d00_ffff;
+    const TESTNET_HARD_BITS: u32 = 0x1c00_ffff;
+
+    /// Stores headers at heights `1..=bits.len()` on `network`, spaced 10 minutes from genesis.
+    /// Returns them indexed by height, genesis included.
+    fn store_headers_with_bits(
+        chain: &ChainState<FlatChainStore>,
+        network: Network,
+        bits: &[u32],
+    ) -> Vec<BlockHeader> {
+        let genesis = genesis_block(network).header;
+        let mut headers = vec![genesis];
+
+        for (height, &bits) in (1u32..).zip(bits) {
+            let header = BlockHeader {
+                version: HeaderVersion::TWO,
+                prev_blockhash: headers[height as usize - 1].block_hash(),
+                merkle_root: genesis.merkle_root,
+                time: genesis.time + 600 * height,
+                bits: CompactTarget::from_consensus(bits),
+                nonce: height,
+            };
+            write_lock!(chain)
+                .chainstore
+                .save_header(&DiskBlockHeader::FullyValid(header, height))
+                .unwrap();
+            write_lock!(chain)
+                .chainstore
+                .update_block_index(height, header.block_hash())
+                .unwrap();
+            headers.push(header);
+        }
+
+        headers
+    }
+
+    fn required_bits(
+        chain: &ChainState<FlatChainStore>,
+        last: &BlockHeader,
+        next_height: u32,
+        next_time: u32,
+    ) -> u32 {
+        let next = BlockHeader {
+            time: next_time,
+            ..*last
+        };
+        chain
+            .get_next_required_work(last, next_height, &next)
+            .unwrap()
+            .to_compact_lossy()
+            .to_consensus()
+    }
+
+    #[test]
+    fn min_difficulty_exception_does_not_apply_at_retarget_height() {
+        let chain = setup_test_chain(Network::Testnet, AssumeValidArg::Disabled, None);
+        let headers = store_headers_with_bits(
+            &chain,
+            Network::Testnet,
+            &[TESTNET_HARD_BITS; DIFFCHANGE_INTERVAL as usize - 1],
+        );
+        let last = headers[DIFFCHANGE_INTERVAL as usize - 1];
+
+        // The retarget Core computes for a period of 2015 * 600 seconds
+        // (checked against btclib's `next_bits_required`)
+        let retargeted = 0x1c00_ffde;
+        assert_eq!(
+            required_bits(&chain, &last, DIFFCHANGE_INTERVAL, last.time + 20 * 60 + 1),
+            retargeted
+        );
+        assert_eq!(
+            required_bits(&chain, &last, DIFFCHANGE_INTERVAL, last.time + 10 * 60),
+            retargeted
+        );
+    }
+
+    #[test]
+    fn min_difficulty_walks_back_to_last_regular_block() {
+        let chain = setup_test_chain(Network::Testnet, AssumeValidArg::Disabled, None);
+        let mut bits = [TESTNET_HARD_BITS; 12];
+        bits[9..].fill(TESTNET_POW_LIMIT_BITS); // heights 10, 11 and 12
+        let headers = store_headers_with_bits(&chain, Network::Testnet, &bits);
+
+        // Within 20 minutes: the target of height 9, not of the min-difficulty tip
+        let last = headers[12];
+        assert_eq!(
+            required_bits(&chain, &last, 13, last.time + 10 * 60),
+            TESTNET_HARD_BITS
+        );
+        // Later than 20 minutes: the exception applies
+        assert_eq!(
+            required_bits(&chain, &last, 13, last.time + 20 * 60 + 1),
+            TESTNET_POW_LIMIT_BITS
+        );
+        // A regular tip is its own answer
+        assert_eq!(
+            required_bits(&chain, &headers[9], 10, headers[9].time + 10 * 60),
+            TESTNET_HARD_BITS
+        );
+    }
+
+    #[test]
+    fn min_difficulty_walk_stops_at_retarget_block() {
+        let chain = setup_test_chain(Network::Testnet, AssumeValidArg::Disabled, None);
+        let bits = [TESTNET_POW_LIMIT_BITS; 3];
+        let headers = store_headers_with_bits(&chain, Network::Testnet, &bits);
+
+        let last = headers[3];
+        assert_eq!(
+            required_bits(&chain, &last, 4, last.time + 10 * 60),
+            TESTNET_POW_LIMIT_BITS
         );
     }
 
