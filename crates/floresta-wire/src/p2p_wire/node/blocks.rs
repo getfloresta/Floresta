@@ -391,6 +391,7 @@ where
             | BlockValidationErrors::EmptyOutputs
             | BlockValidationErrors::ScriptError
             | BlockValidationErrors::BlockTooBig
+            | BlockValidationErrors::TooManySigops
             | BlockValidationErrors::NotEnoughPow
             | BlockValidationErrors::TooManyCoins
             | BlockValidationErrors::NotEnoughMoney
