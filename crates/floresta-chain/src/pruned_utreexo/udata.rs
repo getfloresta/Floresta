@@ -797,7 +797,7 @@ mod test {
             lock_time: LockTime::ZERO,
             input: vec![TxIn {
                 previous_output: OutPoint {
-                    txid: coinbase.compute_txid(),
+                    txid: bitcoin::Txid::all_zeros(),
                     vout: 0,
                 },
                 script_sig: ScriptBuf::new(),
@@ -900,7 +900,61 @@ mod test {
         }
     }
 
+    #[test]
+    fn process_proof_returns_only_proof_provided_utxos() {
+        let proof_outpoint = OutPoint::new(bitcoin::Txid::all_zeros(), 0);
+        let coinbase = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(50),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let parent = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: proof_outpoint,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(40),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let parent_outpoint = OutPoint::new(parent.compute_txid(), 0);
+        let child = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: parent_outpoint,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(30),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let child_outpoint = OutPoint::new(child.compute_txid(), 0);
+        let leaf = CompactLeafData {
+            header_code: 42 << 1,
+            amount: 50,
+            spk_ty: ScriptPubKeyKind::Other(Box::new([])),
+        };
+        let get_block_hash = |_| Ok::<_, UtreexoLeafError>(BlockHash::all_zeros());
 
+        let (del_hashes, utxos) =
+            process_proof(&[leaf], &[coinbase, parent, child], 100, get_block_hash)
+                .expect("proof data should be reconstructed");
+
+        assert_eq!(del_hashes.len(), 1);
+        assert_eq!(utxos.len(), 1);
+        assert!(utxos.contains_key(&proof_outpoint));
+        assert!(!utxos.contains_key(&parent_outpoint));
+        assert!(!utxos.contains_key(&child_outpoint));
+    }
     #[test]
     fn test_leaf_hash_known_vector() {
         // Precomputed reference hash generated from the original sha2::Sha512_256 implementation

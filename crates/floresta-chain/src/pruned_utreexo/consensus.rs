@@ -1125,6 +1125,52 @@ mod tests {
         }
     }
 
+    fn same_block_spend_fixture() -> (Vec<Transaction>, HashMap<OutPoint, UtxoData>) {
+        let proof_outpoint = dummy_outpoint();
+        let coinbase = build_tx(
+            vec![txin!(
+                OutPoint::null(),
+                ScriptBuf::from_bytes(vec![0x00, 0x00])
+            )],
+            vec![txout!(50, ScriptBuf::new())],
+        );
+        let parent = build_tx(
+            vec![txin!(proof_outpoint)],
+            vec![txout!(100, ScriptBuf::new())],
+        );
+        let child = build_tx(
+            vec![txin!(OutPoint::new(parent.compute_txid(), 0))],
+            vec![txout!(100, ScriptBuf::new())],
+        );
+        let utxos = HashMap::from([(
+            proof_outpoint,
+            UtxoData {
+                txout: txout!(100, ScriptBuf::new()),
+                is_coinbase: false,
+                creation_height: 1,
+                creation_time: 0,
+            },
+        )]);
+
+        (vec![coinbase, parent, child], utxos)
+    }
+
+    #[test]
+    fn block_transactions_accept_same_block_spends_in_order() {
+        let (transactions, utxos) = same_block_spend_fixture();
+
+        Consensus::verify_block_transactions(
+            2,
+            0,
+            utxos,
+            &transactions,
+            Amount::from_sat(50),
+            false,
+            0,
+        )
+        .expect("an output may be spent by a later transaction in the block");
+    }
+
     fn tx_with_lock_time(lock_time: LockTime, sequence: Sequence) -> Transaction {
         Transaction {
             version: Version::TWO,
