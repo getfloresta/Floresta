@@ -9,6 +9,10 @@
 #![allow(clippy::manual_is_multiple_of)]
 #![cfg_attr(not(test), deny(clippy::as_conversions))]
 
+/// Storage backend for the compact block filters served by [electrum_protocol].
+pub use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
+/// Compact block filters served by [electrum_protocol].
+pub use floresta_compact_filters::network_filters::NetworkFilters;
 use serde::Deserialize;
 use serde::Serialize;
 
