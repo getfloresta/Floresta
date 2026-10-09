@@ -337,10 +337,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             }
             "blockchain.scripthash.get_history" => {
                 let script_hash = get_arg!(request, sha256::Hash, 0);
-                self.address_cache
-                    .get_address_history(&script_hash)
-                    .map(|transactions| {
-                        let res = Self::process_history(&transactions);
+                self.history(&script_hash)
+                    .map(|entries| {
+                        let res = Self::process_history(&entries);
                         json_rpc_res!(request, res)
                     })
                     .unwrap_or_else(|| {
@@ -376,16 +375,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = get_arg!(request, sha256::Hash, 0);
                 self.client_addresses.insert(hash, client);
 
-                let history = self.address_cache.get_address_history(&hash);
-                match history {
-                    Some(transactions) if !transactions.is_empty() => {
-                        let res = get_status(transactions);
-                        json_rpc_res!(request, res)
-                    }
-                    _ => {
-                        json_rpc_res!(request, null)
-                    }
-                }
+                let status = self.history(&hash).and_then(|entries| get_status(&entries));
+                json_rpc_res!(request, status)
             }
             "blockchain.scripthash.unsubscribe" => {
                 let address = get_arg!(request, sha256::Hash, 0);
@@ -425,10 +416,9 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     return json_rpc_res!(request, null);
                 }
 
-                self.address_cache
-                    .get_address_history(&hash)
-                    .map(|transactions| {
-                        let res = Self::process_history(&transactions);
+                self.history(&hash)
+                    .map(|entries| {
+                        let res = Self::process_history(&entries);
                         json_rpc_res!(request, res)
                     })
                     .unwrap_or_else(|| {
@@ -444,14 +434,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 let hash = get_spk_hash(&script);
                 self.client_addresses.insert(hash, client);
 
-                let history = self.address_cache.get_address_history(&hash);
-                match history {
-                    Some(transactions) if !transactions.is_empty() => {
-                        let res = get_status(transactions);
-                        json_rpc_res!(request, res)
-                    }
-                    Some(_) => {
-                        json_rpc_res!(request, null)
+                match self.history(&hash) {
+                    Some(entries) => {
+                        let status = get_status(&entries);
+                        json_rpc_res!(request, status)
                     }
                     None => {
                         self.addresses_to_scan.push(script);
@@ -687,10 +673,23 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         Ok(())
     }
 
-    fn process_history(transactions: &[CachedTransaction]) -> Vec<Value> {
+    /// The history of a script hash in the order the protocol defines, see [`history_entries`].
+    fn history(&self, script_hash: &sha256::Hash) -> Option<Vec<HistoryEntry>> {
+        let transactions = self.address_cache.get_address_history(script_hash)?;
+
+        // The wallet only caches its own transactions, so a parent that is not ours is
+        // never seen as unconfirmed.
+        Some(history_entries(transactions, |txid| {
+            self.address_cache
+                .get_height(txid)
+                .is_some_and(|height| height == 0)
+        }))
+    }
+
+    fn process_history(entries: &[HistoryEntry]) -> Vec<Value> {
         let mut res = Vec::new();
-        for transaction in transactions {
-            let entry = if transaction.height == 0 {
+        for transaction in entries {
+            let entry = if transaction.height <= 0 {
                 json!({
                     "tx_hash": transaction.hash,
                     "height": transaction.height,
@@ -826,9 +825,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         for (_, out) in transactions {
             let hash = get_spk_hash(&out.script_pubkey);
             if let Some(client) = self.client_addresses.get(&hash) {
-                let history = self.address_cache.get_address_history(&hash);
-
-                let status_hash = get_status(history.unwrap());
+                let status_hash = self.history(&hash).and_then(|entries| get_status(&entries));
                 let notify = json!({
                     "jsonrpc": "2.0",
                     "method": "blockchain.scripthash.subscribe",
@@ -880,30 +877,90 @@ pub async fn client_accept_loop(
     }
 }
 
+/// A transaction as the Electrum protocol lists it in a history.
+#[derive(Debug, PartialEq, Eq)]
+struct HistoryEntry {
+    hash: Txid,
+
+    /// The block height, or for a mempool transaction `-1` if it has an unconfirmed input
+    /// and `0` otherwise.
+    height: i64,
+}
+
+/// Puts the history of a script hash in the order the protocol defines for both the status
+/// and `blockchain.scripthash.get_history`:
+///
+/// 1. confirmed transactions by height, then by position in the block;
+/// 2. mempool transactions with height `0` (all inputs confirmed), then those with height
+///    `-1` (at least one unconfirmed input), each group by txid as displayed in hex.
+///
+/// `is_unconfirmed` tells whether a txid is an unconfirmed transaction.
+fn history_entries(
+    transactions: Vec<CachedTransaction>,
+    is_unconfirmed: impl Fn(&Txid) -> bool,
+) -> Vec<HistoryEntry> {
+    let (mempool, mut confirmed): (Vec<_>, Vec<_>) =
+        transactions.into_iter().partition(|tx| tx.height == 0);
+
+    confirmed.sort_by_key(|tx| (tx.height, tx.position));
+
+    let mut mempool: Vec<_> = mempool
+        .into_iter()
+        .map(|tx| {
+            let unconfirmed_input = tx
+                .tx
+                .input
+                .iter()
+                .any(|input| is_unconfirmed(&input.previous_output.txid));
+
+            (unconfirmed_input, tx.hash)
+        })
+        .collect();
+
+    mempool.sort_by_cached_key(|(unconfirmed_input, hash)| (*unconfirmed_input, hash.to_string()));
+
+    let confirmed = confirmed.into_iter().map(|tx| HistoryEntry {
+        hash: tx.hash,
+        height: i64::from(tx.height),
+    });
+    let mempool = mempool
+        .into_iter()
+        .map(|(unconfirmed_input, hash)| HistoryEntry {
+            hash,
+            height: if unconfirmed_input { -1 } else { 0 },
+        });
+
+    confirmed.chain(mempool).collect()
+}
+
 /// As per electrum documentation:
 /// ### To calculate the status of a script hash (or address):
 ///
-/// 1. order confirmed transactions to the script hash by increasing height (and position in the block if there are more than one in a block)
+/// 1. Order the confirmed transactions by increasing height (and position in the block if
+///    there are more than one in a block).
 ///
-/// 2. form a string that is the concatenation of strings "tx_hash:height:" for each
-///    transaction in order, where:
+/// 2. Form a string that is the concatenation of strings "tx_hash:height:" for each
+///    transaction in order, where tx_hash is the transaction hash in hexadecimal and
+///    height is the height of the block it is in.
 ///
-///  tx_hash is the transaction hash in hexadecimal
-///  height is the height of the block it is in.
-///
-/// 3. Next, with mempool transactions in any order, append a similar string for those
-///    transactions, but where height is -1 if the transaction has at least one unconfirmed
-///    input, and 0 if all inputs are confirmed.
+/// 3. For mempool transactions, height is -1 if the transaction has at least one
+///    unconfirmed input, and 0 if all inputs are confirmed. Order them by `(-height, tx_hash)`
+///    and append the same kind of string, see [`history_entries`].
 ///
 /// 4. The status of the script hash is the sha256() hash of the full string expressed
 ///    as a hexadecimal string, or null if the string is empty because there are no
 ///    transactions.
-fn get_status(transactions: Vec<CachedTransaction>) -> sha256::Hash {
-    let mut status_preimage = String::new();
-    for transaction in transactions {
-        status_preimage.extend(format!("{}:{}:", transaction.hash, transaction.height).chars());
+fn get_status(entries: &[HistoryEntry]) -> Option<sha256::Hash> {
+    if entries.is_empty() {
+        return None;
     }
-    get_hash_from_u8(status_preimage.as_bytes())
+
+    let mut status_preimage = String::new();
+    for entry in entries {
+        status_preimage.extend(format!("{}:{}:", entry.hash, entry.height).chars());
+    }
+
+    Some(get_hash_from_u8(status_preimage.as_bytes()))
 }
 
 #[macro_export]
@@ -954,22 +1011,30 @@ mod test {
 
     use bitcoin::Address;
     use bitcoin::Network;
+    use bitcoin::OutPoint;
     use bitcoin::Transaction;
+    use bitcoin::TxIn;
+    use bitcoin::Txid;
+    use bitcoin::absolute::LockTime;
     use bitcoin::address::NetworkChecked;
     use bitcoin::block::Header as BlockHeader;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
+    use bitcoin::hashes::Hash;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
+    use bitcoin::transaction::Version;
     use floresta_chain::AssumeValidArg;
     use floresta_chain::ChainState;
     use floresta_chain::FlatChainStore;
     use floresta_chain::FlatChainStoreConfig;
     use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
     use floresta_common::assert_ok;
+    use floresta_common::get_hash_from_u8;
     use floresta_common::get_spk_hash;
     use floresta_mempool::Mempool;
     use floresta_watch_only::AddressCache;
+    use floresta_watch_only::CachedTransaction;
     use floresta_watch_only::kv_database::KvDatabase;
     use floresta_watch_only::merkle::MerkleProof;
     use floresta_wire::UtreexoNodeConfig;
@@ -997,7 +1062,10 @@ mod test {
     use tokio_rustls::rustls::pki_types::pem::PemObject;
 
     use super::ElectrumServer;
+    use super::HistoryEntry;
     use super::client_accept_loop;
+    use super::get_status;
+    use super::history_entries;
 
     /// A size used for mempool tests, no specific meaning just a randomly
     /// chosen size.
@@ -1501,5 +1569,119 @@ mod test {
             batch_response[6]["result"][0],
             format!("Floresta {}", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    /// A transaction spending output 0 of `parent`, made unique by `lock_time`.
+    fn spend(parent: Txid, lock_time: u32) -> Transaction {
+        Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_consensus(lock_time),
+            input: vec![TxIn {
+                previous_output: OutPoint::new(parent, 0),
+                ..Default::default()
+            }],
+            output: Vec::new(),
+        }
+    }
+
+    fn cached(tx: &Transaction, height: u32, position: u32) -> CachedTransaction {
+        CachedTransaction {
+            tx: tx.clone(),
+            height,
+            merkle_block: None,
+            hash: tx.compute_txid(),
+            position,
+        }
+    }
+
+    /// A `lock_time` for which `spend(parent, lock_time)` has a displayed txid below `other`.
+    fn lock_time_below(parent: Txid, other: Txid) -> u32 {
+        (0..)
+            .find(|n| spend(parent, *n).compute_txid().to_string() < other.to_string())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_status_of_empty_history_is_null() {
+        assert_eq!(get_status(&history_entries(Vec::new(), |_| false)), None);
+    }
+
+    #[test]
+    fn test_status_orders_mempool_by_txid() {
+        let confirmed_parent = Txid::from_byte_array([1; 32]);
+        let a = spend(confirmed_parent, 1);
+        let b = spend(confirmed_parent, 2);
+        let (low, high) = if a.compute_txid().to_string() < b.compute_txid().to_string() {
+            (&a, &b)
+        } else {
+            (&b, &a)
+        };
+
+        let forward = vec![cached(low, 0, 0), cached(high, 0, 0)];
+        let backward = vec![cached(high, 0, 0), cached(low, 0, 0)];
+        let forward = history_entries(forward, |_| false);
+        let backward = history_entries(backward, |_| false);
+
+        let preimage = format!("{}:0:{}:0:", low.compute_txid(), high.compute_txid());
+        let expected = get_hash_from_u8(preimage.as_bytes());
+
+        assert_eq!(get_status(&forward), Some(expected));
+        assert_eq!(get_status(&backward), Some(expected));
+    }
+
+    #[test]
+    fn test_unconfirmed_input_sorts_last_with_height_minus_one() {
+        let unconfirmed_parent = spend(Txid::from_byte_array([1; 32]), 0);
+        let parent_txid = unconfirmed_parent.compute_txid();
+        let sibling = spend(Txid::from_byte_array([2; 32]), 0);
+
+        // The child's txid sorts before the sibling's, so only the height orders them.
+        let child = spend(
+            parent_txid,
+            lock_time_below(parent_txid, sibling.compute_txid()),
+        );
+        assert!(child.compute_txid().to_string() < sibling.compute_txid().to_string());
+
+        let transactions = vec![
+            cached(&child, 0, 0),
+            cached(&sibling, 0, 0),
+            cached(&unconfirmed_parent, 0, 0),
+        ];
+        let entries = history_entries(transactions, |txid| *txid == parent_txid);
+
+        let child_entry = HistoryEntry {
+            hash: child.compute_txid(),
+            height: -1,
+        };
+        assert_eq!(entries.last(), Some(&child_entry));
+        assert!(entries[..2].iter().all(|entry| entry.height == 0));
+    }
+
+    #[test]
+    fn test_confirmed_come_first_by_height_then_position() {
+        let parent = Txid::from_byte_array([1; 32]);
+        let first = spend(parent, 1);
+        let second = spend(parent, 2);
+        let third = spend(parent, 3);
+        let mempool = spend(parent, 4);
+
+        let transactions = vec![
+            cached(&mempool, 0, 0),
+            cached(&third, 11, 0),
+            cached(&second, 10, 5),
+            cached(&first, 10, 2),
+        ];
+        let entries = history_entries(transactions, |_| false);
+
+        let expected = [(&first, 10), (&second, 10), (&third, 11), (&mempool, 0)];
+        let expected: Vec<_> = expected
+            .iter()
+            .map(|(tx, height)| HistoryEntry {
+                hash: tx.compute_txid(),
+                height: *height,
+            })
+            .collect();
+
+        assert_eq!(entries, expected);
     }
 }
