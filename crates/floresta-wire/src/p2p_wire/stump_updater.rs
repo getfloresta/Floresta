@@ -68,8 +68,8 @@ impl SparseUtreexoAdds {
 /// Handle for interacting with a running [`StumpUpdater`] task.
 ///
 /// The caller must send exactly one update for each height in `initial_height + 1..=stop_height`.
-/// Sending stale, duplicate, or out-of-range heights, or dropping `tx` before `stop_height` is
-/// reached, is invalid usage and will close `done` without a result.
+/// Sending stale, duplicate, or out-of-range heights is invalid usage and panics in the task.
+/// Dropping `tx` before `stop_height` cancels the task and closes `done` without a result.
 pub struct StumpUpdaterHandle {
     /// Sender side for feeding `(height, update_data)` into the updater task.
     pub tx: mpsc::UnboundedSender<(u32, SparseUtreexoAdds)>,
@@ -129,8 +129,9 @@ impl StumpUpdater {
         };
 
         tokio::task::spawn_blocking(move || {
-            let result = updater.run(rx, stop_height);
-            let _ = done_tx.send(result);
+            if let Some(result) = updater.run(rx, stop_height) {
+                let _ = done_tx.send(result);
+            }
         });
 
         StumpUpdaterHandle { tx, done: done_rx }
@@ -160,15 +161,10 @@ impl StumpUpdater {
         mut self,
         mut rx: mpsc::UnboundedReceiver<(u32, SparseUtreexoAdds)>,
         stop_height: u32,
-    ) -> Stump {
+    ) -> Option<Stump> {
         while self.last_height < stop_height {
-            // Wait until a new state update arrives
-            let Some((height, update)) = rx.blocking_recv() else {
-                panic!(
-                    "updater channel closed at height {} before {stop_height}",
-                    self.last_height,
-                )
-            };
+            // Channel closure cancels the task without returning a partial stump.
+            let (height, update) = rx.blocking_recv()?;
 
             self.queue_update(height, update, stop_height);
             self.try_next();
@@ -181,7 +177,7 @@ impl StumpUpdater {
             self.max_cached_utxos,
         );
 
-        self.last_acc
+        Some(self.last_acc)
     }
 
     /// Loops over all pending updates that we can sequentially apply, consuming the data and
@@ -205,7 +201,7 @@ impl StumpUpdater {
             let adds = adds.into_dense();
 
             let start = Instant::now();
-            let (new_acc, _) = self
+            let new_acc = self
                 .last_acc
                 .modify(&adds, &[], &Proof::default())
                 .expect("addition-only stump modification cannot fail");
@@ -284,6 +280,26 @@ mod tests {
         drop(tx);
 
         assert_worker_closed(done).await;
+    }
+
+    #[test]
+    fn run_cancels_without_returning_partial_stump() {
+        let updater = StumpUpdater {
+            last_acc: Stump::new(),
+            last_height: 0,
+            pending_updates: BTreeMap::new(),
+            total_time: Duration::ZERO,
+            cached_utxos: 0,
+            max_cached_utxos: 0,
+        };
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Provide block 1's additions, then close the channel to simulate cancellation
+        tx.send((1, SparseUtreexoAdds::new(vec![hash(1)]))).unwrap();
+        drop(tx);
+
+        let stop_height = 2;
+        assert!(updater.run(rx, stop_height).is_none());
     }
 
     #[tokio::test]

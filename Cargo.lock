@@ -287,6 +287,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "207311705279250ba465076a1bac4b1ac982855fff73fc5f67e22158ac58cdc9"
 dependencies = [
  "bitcoin-internals 0.6.0",
+ "hex-conservative 1.1.0",
+ "serde",
 ]
 
 [[package]]
@@ -309,9 +311,6 @@ name = "bitcoin-internals"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a30a22d1f112dde8e16be7b45c63645dc165cef254f835b3e1e9553e485cfa64"
-dependencies = [
- "hex-conservative 0.3.2",
-]
 
 [[package]]
 name = "bitcoin-internals"
@@ -336,13 +335,13 @@ dependencies = [
 
 [[package]]
 name = "bitcoin-io"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6fb823712b12e5cfccdb9a2b6a62de2dc42ddb5ec489511025eebeba1c21829"
+checksum = "3949f56a93c642b41dc6eb2969abda0955c80ac750a3cc65a24ba040f34dfb0c"
 dependencies = [
- "bitcoin-consensus-encoding 0.1.0",
- "bitcoin-internals 0.5.0",
- "bitcoin_hashes 0.20.0",
+ "bitcoin-consensus-encoding 1.1.0",
+ "bitcoin-internals 0.6.0",
+ "bitcoin_hashes 1.1.0",
 ]
 
 [[package]]
@@ -396,6 +395,7 @@ dependencies = [
  "bitcoin-consensus-encoding 1.1.0",
  "bitcoin-internals 0.6.0",
  "cpufeatures 0.2.17",
+ "hex-conservative 1.1.0",
 ]
 
 [[package]]
@@ -1210,6 +1210,7 @@ dependencies = [
  "floresta-domain",
  "floresta-mempool",
  "floresta-metrics",
+ "hintsfile",
  "rand 0.10.2",
  "rustls",
  "rustreexo",
@@ -1483,6 +1484,12 @@ name = "hex_lit"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3011d1213f159867b13cfd6ac92d2cd5f1345762c63be3554e84092d85a50bbd"
+
+[[package]]
+name = "hintsfile"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "554a58f64ca02ec89bb21ae10f675092647b94c7f8c846efef11c28633b5092b"
 
 [[package]]
 name = "http"
@@ -2570,11 +2577,10 @@ dependencies = [
 [[package]]
 name = "rustreexo"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfd192515a261e313333836d17857e2ae6cdf97d3c57f43f45804b6f657b07f0"
+source = "git+https://github.com/mit-dci/rustreexo.git?branch=main#24db501cf28fe4ddd4c10795745d7a1b49aef264"
 dependencies = [
- "bitcoin-io 0.5.0",
- "bitcoin_hashes 0.20.0",
+ "bitcoin-io 0.6.0",
+ "bitcoin_hashes 1.1.0",
  "foldhash 0.2.0",
  "hashbrown 0.16.1",
  "hex-conservative 1.1.0",
