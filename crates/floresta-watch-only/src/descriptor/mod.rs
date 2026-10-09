@@ -91,6 +91,7 @@ fn parse_and_split_descriptor(
     Ok(descriptors)
 }
 
+#[cfg(test)]
 /// Derives addresses from a list of descriptors.
 /// Parses each descriptor, validates it, and derives the specified number of addresses
 /// starting from the given index.
