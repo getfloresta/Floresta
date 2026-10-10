@@ -33,7 +33,16 @@ use crate::p2p_wire::peer::PeerMessages;
 ///
 /// see [node_context](crates/floresta-wire/src/p2p_wire/node_context.rs) and [node.rs](crates/floresta-wire/src/p2p_wire/node.rs) for more information.
 #[derive(Clone, Debug, Default)]
-pub struct SyncNode {}
+pub struct SyncNode {
+    /// The time of the last progress report.
+    last_progress_report: Option<Instant>,
+
+    /// `true` if backfilling assumed valid blocks, `false` otherwise.
+    pub(crate) is_backfill: bool,
+}
+
+/// How often we report block download progress.
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 impl NodeContext for SyncNode {
     const REQUEST_TIMEOUT: u64 = 60 * 2; // 2 minutes
@@ -122,6 +131,28 @@ where
         }
 
         self.request_blocks(range_blocks)
+    }
+
+    fn log_progress(&mut self, height: u32, target: u32) {
+        let now = Instant::now();
+
+        if self
+            .context
+            .last_progress_report
+            .is_some_and(|last| now.duration_since(last) < PROGRESS_LOG_INTERVAL)
+        {
+            return;
+        }
+
+        self.context.last_progress_report = Some(now);
+
+        let verb = if self.context.is_backfill {
+            "Backfilled"
+        } else {
+            "Downloaded"
+        };
+
+        info!(height, target, "{verb} blocks");
     }
 
     /// This function will periodically check our connections, to ensure that:
@@ -236,6 +267,8 @@ where
             self.chain.update_ibd(IBDState::Done);
             return LoopControl::Break;
         }
+
+        self.log_progress(validation_index, best_block);
 
         periodic_job!(
             self.last_connection => self.check_connections(),
