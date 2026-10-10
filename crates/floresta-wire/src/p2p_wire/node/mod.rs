@@ -125,6 +125,10 @@ pub(crate) enum InflightRequests {
     /// Requests the peer to send us the next block headers in their main chain
     Headers,
 
+    /// Requests the next batch of headers from a peer whose chain is going through
+    /// presync. Keyed by peer because each presync is independent.
+    PresyncHeaders(PeerId),
+
     /// Requests the peer to send us the utreexo state for a given peer
     UtreexoState(PeerId),
 

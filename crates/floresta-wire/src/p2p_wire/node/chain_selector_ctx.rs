@@ -56,6 +56,7 @@ use bitcoin::network::Network;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
+use floresta_chain::minimum_chain_work;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::IBDState;
 use floresta_chain::pruned_utreexo::consensus::Consensus;
@@ -69,6 +70,7 @@ use rustreexo::stump::Stump;
 use tokio::time;
 use tokio::time::MissedTickBehavior;
 use tokio::time::timeout;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -85,6 +87,11 @@ use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
 use crate::p2p_wire::error::WireError;
+use crate::p2p_wire::headers_sync::HeadersSyncState;
+use crate::p2p_wire::headers_sync::MAX_HEADERS_RESULTS;
+use crate::p2p_wire::headers_sync::PresyncPhase;
+use crate::p2p_wire::headers_sync::ProcessingResult;
+use crate::p2p_wire::headers_sync::claimed_work;
 use crate::p2p_wire::peer::PeerMessages;
 
 #[derive(Debug, Default, Clone)]
@@ -101,6 +108,9 @@ pub struct ChainSelector {
 
     /// Keep track each peer's tip
     tip_cache: HashMap<PeerId, BlockHash>,
+
+    /// Per-peer headers pre-synchronization state machines.
+    presync_states: HashMap<PeerId, HeadersSyncState>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -138,6 +148,11 @@ pub enum PeerCheck {
     BothUnresponsivePeers,
 }
 
+/// Maximum age in seconds a chain tip may have before the node refuses to leave IBD.
+///
+/// Mirrors Bitcoin Core's [`DEFAULT_MAX_TIP_AGE`](https://github.com/bitcoin/bitcoin/blob/8d5515465542336d3d0fb83935d79783e91048a0/src/kernel/chainstatemanager_opts.h#L24).
+pub(crate) const DEFAULT_MAX_TIP_AGE: u32 = 24 * 60 * 60;
+
 impl NodeContext for ChainSelector {
     const REQUEST_TIMEOUT: u64 = 60; // Ban peers stalling our IBD
 
@@ -167,23 +182,40 @@ where
             return Ok(());
         }
 
-        info!(
-            "Downloading headers from peer={peer} at height={} hash={}",
-            self.chain.get_best_block()?.0 + 1,
-            headers[0].block_hash()
-        );
+        // A peer with an active presync keeps feeding its own state machine, whatever the
+        // global ChainSelector phase is (Core: IsContinuationOfLowWorkHeadersSync).
+        if self.context.presync_states.contains_key(&peer) {
+            return self.continue_presync(peer, &headers);
+        }
 
-        for header in headers.iter() {
+        // Anti-DoS gate (Core: TryLowWorkHeadersSync). A chain that connects to a block we
+        // have but claims less than the minimum work only goes through presync if this
+        // batch is full, meaning the peer may have more. A short low-work batch is the
+        // peer's whole chain: ignore it, no punishment.
+        let anchor = headers[0].prev_blockhash;
+        // `None` is an unknown parent, which accept_header rejects below; a DB error is
+        // ours, not the peer's, and must not end in a ban.
+        if let Some(anchor_height) = self.chain.get_block_height(&anchor)? {
+            let total_work = self.chain.get_work(anchor)? + claimed_work(&headers);
+            if total_work < minimum_chain_work(self.network) {
+                if headers.len() < MAX_HEADERS_RESULTS {
+                    debug!(
+                        "Ignoring low-work chain of {} headers from peer={peer}",
+                        headers.len()
+                    );
+                    return Ok(());
+                }
+                self.start_presync(peer, anchor, anchor_height)?;
+                return self.continue_presync(peer, &headers);
+            }
+        }
+
+        // Enough claimed work, or a parent we don't know (which accept_header rejects).
+        for header in &headers {
             if let Err(e) = self.chain.accept_header(*header) {
-                error!("Error while downloading headers from peer={peer} err={e}");
-
+                error!("Error while accepting header from peer={peer} err={e}");
                 self.disconnect_and_ban(peer)?;
-
-                let peer = self.peers.get(&peer).unwrap();
-                self.common.address_man.update_set_state(
-                    peer.address.id,
-                    AddressState::Banned(ChainSelector::BAN_TIME),
-                );
+                return Ok(());
             }
         }
 
@@ -193,9 +225,125 @@ where
             .entry(peer)
             .and_modify(|e| *e = last)
             .or_insert(last);
-
         self.last_tip_update = Instant::now();
         self.request_headers(last)
+    }
+
+    /// Creates a presync state for `peer`, anchored at the block on our chain that the
+    /// peer's headers build on. Everything the state needs from disk is captured now.
+    fn start_presync(
+        &mut self,
+        peer: PeerId,
+        anchor: BlockHash,
+        anchor_height: u32,
+    ) -> Result<(), WireError> {
+        let anchor_bits = self.chain.get_block_header(&anchor)?.bits;
+        let anchor_locator = self.chain.get_block_locator_for_tip(anchor)?;
+
+        info!(
+            "Peer={peer} offered a low-work chain from height={anchor_height}, starting headers presync"
+        );
+        self.context.presync_states.insert(
+            peer,
+            HeadersSyncState::new(
+                anchor_height,
+                anchor,
+                anchor_bits,
+                anchor_locator,
+                self.network,
+            ),
+        );
+        Ok(())
+    }
+
+    /// Feeds a batch to `peer`'s presync state machine and acts on the outcome.
+    fn continue_presync(&mut self, peer: PeerId, headers: &[Header]) -> Result<(), WireError> {
+        let Some(state) = self.context.presync_states.get_mut(&peer) else {
+            return Ok(());
+        };
+
+        let result = match state.phase() {
+            PresyncPhase::Presync => state.process_presync(headers),
+            PresyncPhase::Redownload => state.process_redownload(headers),
+            PresyncPhase::Final | PresyncPhase::Aborted => ProcessingResult {
+                success: true,
+                ..Default::default()
+            },
+        };
+        let phase = state.phase().clone();
+        let start_height = state.start_height;
+
+        if !result.success {
+            // The chain no longer matches what the peer served before. That can be a
+            // benign reorg, so drop the sync and the connection without banning, as
+            // Core does.
+            warn!(
+                "Peer={peer} failed headers presync started at height={start_height}, disconnecting"
+            );
+            self.context.presync_states.remove(&peer);
+            self.disconnect(peer)?;
+            return Ok(());
+        }
+
+        // Headers released by REDOWNLOAD passed commitment verification and carry
+        // sufficient work; a consensus failure here is real misbehavior.
+        for header in &result.headers_to_accept {
+            if let Err(e) = self.chain.accept_header(*header) {
+                error!("Error while accepting presynced header from peer={peer} err={e}");
+                self.context.presync_states.remove(&peer);
+                self.disconnect_and_ban(peer)?;
+                return Ok(());
+            }
+        }
+
+        let last = headers.last().unwrap().block_hash();
+        self.context
+            .tip_cache
+            .entry(peer)
+            .and_modify(|e| *e = last)
+            .or_insert(last);
+        self.last_tip_update = Instant::now();
+
+        match phase {
+            PresyncPhase::Final => {
+                debug!("Peer={peer} finished headers presync at tip={last}");
+                self.context.presync_states.remove(&peer);
+                try_and_log!(self.request_headers(last));
+                Ok(())
+            }
+            PresyncPhase::Aborted => {
+                // Commitment cap hit: the chain is longer than our memory budget. Not
+                // misbehavior; just stop syncing from this peer.
+                self.context.presync_states.remove(&peer);
+                Ok(())
+            }
+            // Still in PRESYNC, just switched to REDOWNLOAD (the locator then points back
+            // at the anchor), or mid-REDOWNLOAD: ask for the next batch.
+            PresyncPhase::Presync | PresyncPhase::Redownload if result.request_more => {
+                self.request_presync_headers(peer)
+            }
+            PresyncPhase::Presync | PresyncPhase::Redownload => Ok(()),
+        }
+    }
+
+    /// Sends the next presync `getheaders` to `peer` and tracks it so a stalled peer
+    /// times out like any other request.
+    fn request_presync_headers(&mut self, peer: PeerId) -> Result<(), WireError> {
+        let Some(locator) = self
+            .context
+            .presync_states
+            .get(&peer)
+            .and_then(|s| s.next_locator())
+        else {
+            return Ok(());
+        };
+
+        self.send_to_peer(peer, NodeRequest::GetHeaders(locator))?;
+        self.inflight.insert(
+            InflightRequests::PresyncHeaders(peer),
+            (peer, Instant::now()),
+        );
+        Ok(())
     }
 
     /// Parses a serialized Utreexo accumulator into a [`Stump`].
@@ -615,6 +763,23 @@ where
     ///     has send all blocks they have. Once all peers have finished, we just pick the
     ///     most PoW chain among all chains that we got
     async fn empty_headers_message(&mut self, peer: PeerId) -> Result<(), WireError> {
+        // A presync peer with nothing more to give never reached the work threshold: its
+        // chain is too little work. Drop the sync without punishment and leave the global
+        // phase alone (Core: ProcessHeadersMessage with an empty message).
+        if self.context.presync_states.remove(&peer).is_some() {
+            debug!("Peer={peer} ran out of headers during presync, dropping its low-work chain");
+            self.inflight
+                .remove(&InflightRequests::PresyncHeaders(peer));
+
+            // Keep the initial download moving from whatever we actually have on disk. If
+            // no other peer can serve us right now the stall check will retry later.
+            if self.context.state == ChainSelectorState::DownloadingHeaders {
+                let (_, best) = self.chain.get_best_block()?;
+                try_and_log!(self.request_headers(best));
+            }
+            return Ok(());
+        }
+
         match self.context.state {
             ChainSelectorState::DownloadingHeaders => {
                 info!("Finished downloading headers from peer={peer}, checking if our peers agree");
@@ -1012,7 +1177,17 @@ where
 
         match unhandled {
             PeerMessages::Headers(headers) => {
-                self.inflight.remove(&InflightRequests::Headers);
+                self.inflight
+                    .remove(&InflightRequests::PresyncHeaders(peer));
+                // Only the peer we asked can answer the main headers request; a reply from
+                // anyone else must not hide a stall on that peer.
+                if self
+                    .inflight
+                    .get(&InflightRequests::Headers)
+                    .is_some_and(|(owner, _)| *owner == peer)
+                {
+                    self.inflight.remove(&InflightRequests::Headers);
+                }
                 return self.handle_headers(peer, headers).await;
             }
 
@@ -1025,6 +1200,7 @@ where
             }
 
             PeerMessages::Disconnected(idx) => {
+                self.context.presync_states.remove(&peer);
                 if self.peers.is_empty() {
                     self.context.state = ChainSelectorState::CreatingConnections;
                 }
@@ -1052,12 +1228,35 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Instant;
 
+    use bitcoin::CompactTarget;
+    use bitcoin::Network;
+    use bitcoin::TxMerkleNode;
+    use bitcoin::Work;
+    use bitcoin::block::Version;
+    use bitcoin::hashes::Hash;
+    use floresta_chain::AssumeValidArg;
+    use floresta_chain::BlockchainInterface;
     use floresta_chain::ChainState;
     use floresta_chain::FlatChainStore;
+    use floresta_chain::FlatChainStoreConfig;
+    use floresta_common::Ema;
+    use floresta_mempool::Mempool;
     use rustreexo::node_hash::BitcoinNodeHash;
+    use tokio::sync::Mutex;
+    use tokio::sync::RwLock;
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
+    use crate::UtreexoNodeConfig;
+    use crate::address_man::AddressMan;
+    use crate::node::ConnectionKind;
+    use crate::node::LocalPeerView;
+    use crate::node::NodeRequest;
+    use crate::node::PeerStatus;
+    use crate::p2p_wire::transport::TransportProtocol;
 
     type TestNode = UtreexoNode<Arc<ChainState<FlatChainStore>>, ChainSelector>;
 
@@ -1158,6 +1357,261 @@ mod tests {
                     BitcoinNodeHash::from([0u8; 32]),
                 ],
             },
+        );
+    }
+
+    /// Easy compact target: about half of all nonces satisfy it, so headers mine instantly.
+    const EASY_BITS: u32 = 0x207f_ffff;
+
+    fn easy_bits() -> CompactTarget {
+        CompactTarget::from_consensus(EASY_BITS)
+    }
+
+    /// A ChainSelector node on `network` with a fresh chainstore at genesis.
+    fn presync_test_node(network: Network, tag: &str) -> TestNode {
+        let datadir = format!("./tmp-db/{}.{tag}", rand::random::<u32>());
+        let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(&datadir)).unwrap();
+        let chain =
+            Arc::new(ChainState::open(chainstore, network, AssumeValidArg::Disabled).unwrap());
+        let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
+        let kill_signal = Arc::new(RwLock::new(false));
+
+        TestNode::new(
+            UtreexoNodeConfig {
+                network,
+                max_tip_age_secs: u32::MAX,
+                ..Default::default()
+            },
+            chain,
+            mempool,
+            None,
+            kill_signal,
+            AddressMan::new(None, &[]),
+        )
+        .unwrap()
+    }
+
+    /// Registers a connected peer with a live channel so `send_to_peer` doesn't error.
+    /// Returns the receiving end so a test can inspect what the node sent.
+    fn add_ready_peer(node: &mut TestNode, id: PeerId) -> UnboundedReceiver<NodeRequest> {
+        let (tx, rx) = unbounded_channel::<NodeRequest>();
+        node.peers.insert(
+            id,
+            LocalPeerView {
+                message_times: Ema::with_half_life_50(),
+                address: "127.0.0.1:8334".parse().unwrap(),
+                services: ServiceFlags::NONE,
+                user_agent: "test_peer".to_string(),
+                height: 0,
+                time_offset: 0,
+                state: PeerStatus::Ready,
+                channel: tx,
+                kind: ConnectionKind::Regular(ServiceFlags::NONE),
+                banscore: 0,
+                _last_message: Instant::now(),
+                transport_protocol: TransportProtocol::V2,
+            },
+        );
+        rx
+    }
+
+    /// `count` chained easy-PoW headers building on `prev`.
+    fn easy_chain(mut prev: BlockHash, count: usize) -> Vec<Header> {
+        (0..count as u32)
+            .map(|i| {
+                let h = (0u32..)
+                    .map(|nonce| Header {
+                        version: Version::from_consensus(1),
+                        prev_blockhash: prev,
+                        merkle_root: TxMerkleNode::all_zeros(),
+                        time: 1_000_000 + i,
+                        bits: easy_bits(),
+                        nonce,
+                    })
+                    .find(|h| h.validate_pow(h.target()).is_ok())
+                    .unwrap();
+                prev = h.block_hash();
+                h
+            })
+            .collect()
+    }
+
+    /// A full batch that connects to our chain but claims too little work must start a
+    /// presync for that peer instead of being written to disk.
+    #[tokio::test]
+    async fn low_work_full_batch_starts_presync() {
+        let mut node = presync_test_node(Network::Testnet4, "cs_presync_start");
+        const PEER: PeerId = 1;
+        let mut rx = add_ready_peer(&mut node, PEER);
+        node.context.state = ChainSelectorState::DownloadingHeaders;
+
+        let genesis = node.chain.get_block_hash(0).unwrap();
+        let headers = easy_chain(genesis, MAX_HEADERS_RESULTS);
+        node.handle_headers(PEER, headers).await.unwrap();
+
+        assert!(
+            node.context.presync_states.contains_key(&PEER),
+            "a full low-work batch must create a presync state for the peer"
+        );
+        assert_eq!(
+            node.chain.get_height().unwrap(),
+            0,
+            "presync headers must never reach disk"
+        );
+        assert_eq!(
+            node.peers.get(&PEER).map(|p| p.state),
+            Some(PeerStatus::Ready)
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(NodeRequest::GetHeaders(_))),
+            "the next batch must be requested from the same peer"
+        );
+        assert!(
+            node.inflight
+                .contains_key(&InflightRequests::PresyncHeaders(PEER)),
+            "presync requests must be tracked so a stalled peer times out"
+        );
+    }
+
+    /// A short low-work batch is the peer's whole chain: not worth a presync, not
+    /// misbehavior, and never written to disk.
+    #[tokio::test]
+    async fn short_low_work_batch_is_ignored() {
+        let mut node = presync_test_node(Network::Testnet4, "cs_presync_short");
+        const PEER: PeerId = 1;
+        let _rx = add_ready_peer(&mut node, PEER);
+        node.context.state = ChainSelectorState::DownloadingHeaders;
+
+        let genesis = node.chain.get_block_hash(0).unwrap();
+        node.handle_headers(PEER, easy_chain(genesis, 5))
+            .await
+            .unwrap();
+
+        assert!(!node.context.presync_states.contains_key(&PEER));
+        assert_eq!(node.chain.get_height().unwrap(), 0);
+        assert_eq!(
+            node.peers.get(&PEER).map(|p| p.state),
+            Some(PeerStatus::Ready),
+            "a low-work chain is not misbehavior"
+        );
+    }
+
+    /// Once any peer pushes the global ChainSelector state to `LookingForForks`, headers
+    /// from a peer that is still mid-presync must keep routing through that peer's own
+    /// state machine rather than bypassing it.
+    ///
+    /// The headers are rooted at `BlockHash::all_zeros()`, which Signet does not know, so
+    /// `accept_header` would reject them and ban the peer if presync were bypassed.
+    #[tokio::test]
+    async fn presync_gate_is_per_peer_not_global() {
+        let mut node = presync_test_node(Network::Signet, "cs_presync_race");
+        const PEER_B: PeerId = 1;
+        let _rx = add_ready_peer(&mut node, PEER_B);
+
+        // Peer A has already finished: the global state moved on.
+        node.context.state = ChainSelectorState::LookingForForks(Instant::now());
+
+        // Peer B was mid-presync when that happened.
+        let anchor = BlockHash::all_zeros();
+        node.context.presync_states.insert(
+            PEER_B,
+            HeadersSyncState::new(0, anchor, easy_bits(), Vec::new(), Network::Signet),
+        );
+
+        node.handle_headers(PEER_B, easy_chain(anchor, 5))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            node.peers.get(&PEER_B).map(|p| p.state),
+            Some(PeerStatus::Ready),
+            "peer B must stay connected while presync accumulates work on its own state"
+        );
+        assert!(
+            node.context.presync_states.contains_key(&PEER_B),
+            "peer B's presync must still be in progress"
+        );
+    }
+
+    /// Drives a full PRESYNC -> REDOWNLOAD -> Final journey through `handle_headers`.
+    /// Regtest is used because easy headers are consensus-valid there, so the redownloaded
+    /// chain really lands on disk; its minimum work is zero, so the state is seeded with
+    /// a small threshold by hand.
+    #[tokio::test]
+    async fn presync_journey_writes_only_after_redownload() {
+        let mut node = presync_test_node(Network::Regtest, "cs_presync_journey");
+        const PEER: PeerId = 1;
+        let mut rx = add_ready_peer(&mut node, PEER);
+        node.context.state = ChainSelectorState::DownloadingHeaders;
+
+        let genesis = node.chain.get_block_hash(0).unwrap();
+        let genesis_bits = node.chain.get_block_header(&genesis).unwrap().bits;
+        let mut threshold = [0u8; 32];
+        threshold[31] = 100;
+        node.context.presync_states.insert(
+            PEER,
+            HeadersSyncState::new(0, genesis, genesis_bits, vec![genesis], Network::Regtest)
+                .with_minimum_chain_work(Work::from_be_bytes(threshold)),
+        );
+
+        // PRESYNC: the chain clears the work gate. Nothing is written; the node asks for
+        // the chain again from the anchor.
+        let chain = easy_chain(genesis, 600);
+        node.handle_headers(PEER, chain.clone()).await.unwrap();
+        assert_eq!(
+            node.chain.get_height().unwrap(),
+            0,
+            "PRESYNC must not write"
+        );
+        assert_eq!(
+            node.context.presync_states[&PEER].phase(),
+            &PresyncPhase::Redownload
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(NodeRequest::GetHeaders(l)) if l.first() == Some(&genesis)),
+            "REDOWNLOAD must restart from the anchor"
+        );
+
+        // REDOWNLOAD: the replayed chain verifies against the commitments and lands on disk.
+        node.handle_headers(PEER, chain).await.unwrap();
+        assert_eq!(node.chain.get_height().unwrap(), 600);
+        assert!(
+            !node.context.presync_states.contains_key(&PEER),
+            "state is dropped once the sync is Final"
+        );
+        assert_eq!(
+            node.peers.get(&PEER).map(|p| p.state),
+            Some(PeerStatus::Ready)
+        );
+    }
+
+    /// A presync peer that runs out of headers had a chain below the work threshold. Its
+    /// sync is dropped, but that says nothing about the node as a whole, so the global
+    /// phase must not move.
+    #[tokio::test]
+    async fn empty_batch_drops_presync_without_moving_global_state() {
+        let mut node = presync_test_node(Network::Signet, "cs_presync_empty");
+        const PEER: PeerId = 1;
+        let _rx = add_ready_peer(&mut node, PEER);
+        node.context.state = ChainSelectorState::DownloadingHeaders;
+
+        let anchor = BlockHash::all_zeros();
+        node.context.presync_states.insert(
+            PEER,
+            HeadersSyncState::new(0, anchor, easy_bits(), Vec::new(), Network::Signet),
+        );
+
+        node.handle_headers(PEER, Vec::new()).await.unwrap();
+
+        assert!(!node.context.presync_states.contains_key(&PEER));
+        assert_eq!(
+            node.context.state,
+            ChainSelectorState::DownloadingHeaders,
+            "a low-work chain ending must not advance the node past header download"
+        );
+        assert_eq!(
+            node.peers.get(&PEER).map(|p| p.state),
+            Some(PeerStatus::Ready)
         );
     }
 }

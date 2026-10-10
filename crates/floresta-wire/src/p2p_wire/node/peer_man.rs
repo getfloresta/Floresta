@@ -593,6 +593,11 @@ where
         Ok(())
     }
 
+    /// Closes the connection to `peer` without marking it as banned.
+    pub(crate) fn disconnect(&mut self, peer: PeerId) -> Result<(), WireError> {
+        self.send_to_peer(peer, NodeRequest::Shutdown)
+    }
+
     /// Tries to randomly disconnect up to `n` non-protected-feature peers.
     pub(crate) fn disconnect_random_peers(&self, n: usize, protected_services: &[ServiceFlags]) {
         let mut rng = rand::rng();
@@ -789,6 +794,12 @@ where
 
                 self.inflight
                     .insert(InflightRequests::GetFilters, (peer, Instant::now()));
+            }
+
+            InflightRequests::PresyncHeaders(peer) => {
+                // The peer stalled mid-presync. Drop the connection; the context clears
+                // its presync state once the disconnection is processed.
+                let _ = self.disconnect(*peer);
             }
 
             InflightRequests::Connect(_) | InflightRequests::GetAddresses => {
