@@ -3,4 +3,5 @@
 mod chain_selector;
 mod peer_latency;
 mod sync_node;
+mod user_request;
 mod utils;

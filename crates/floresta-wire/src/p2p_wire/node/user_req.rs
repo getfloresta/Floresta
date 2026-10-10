@@ -5,9 +5,11 @@ use std::time::Instant;
 use bitcoin::Block;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
+use floresta_chain::extensions::BlockExt;
 use floresta_common::try_and_log;
 use tokio::sync::oneshot;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -214,27 +216,36 @@ where
     /// Check if this block request is made by a user through the user interface and answer it
     /// back to the user if so.
     ///
+    /// The block is matched by its header hash, which says nothing about the txdata it came
+    /// with. Before replying we check that the txdata and witnesses belong to that header, and
+    /// ban the peer if they don't, since user blocks skip the validation chain blocks go through.
+    ///
     /// This function will return the given block if it isn't a user request. This is to avoid cloning
     /// the block.
     pub(crate) fn check_is_user_block_and_reply(
         &mut self,
         block: Block,
     ) -> Result<Option<Block>, WireError> {
-        // If this block is a request made through the user interface, send it back to the
-        // user.
-        if let Some(request) = self
-            .inflight_user_requests
-            .remove(&UserRequest::Block(block.block_hash()))
-        {
-            debug!("answering user request for block {}", block.block_hash());
-            request
-                .2
-                .send(NodeResponse::Block(Some(block)))
-                .map_err(|_| WireError::ResponseSendError)?;
+        let block_hash = block.block_hash();
 
-            return Ok(None);
+        let Some((peer, _, responder)) = self
+            .inflight_user_requests
+            .remove(&UserRequest::Block(block_hash))
+        else {
+            return Ok(Some(block));
+        };
+
+        if block.is_mutated() {
+            error!("peer {peer} sent us a mutated block {block_hash}");
+            self.disconnect_and_ban(peer)?;
+            return Err(WireError::PeerMisbehaving);
         }
 
-        Ok(Some(block))
+        debug!("answering user request for block {block_hash}");
+        responder
+            .send(NodeResponse::Block(Some(block)))
+            .map_err(|_| WireError::ResponseSendError)?;
+
+        Ok(None)
     }
 }

@@ -17,6 +17,7 @@ use floresta_common::prelude::String;
 use floresta_common::prelude::Vec;
 
 use crate::BlockchainInterface;
+use crate::pruned_utreexo::consensus::Consensus;
 
 const MEDIAN_TIME_PAST_BLOCK_COUNT: usize = 11;
 
@@ -37,6 +38,19 @@ impl Bip30UnspendableExt for Block {
             91812 => self.block_hash() == bhash_91812,
             _ => false,
         }
+    }
+}
+
+/// Provides additional methods for working with [`Block`] objects.
+pub trait BlockExt {
+    /// Returns whether the txdata or witnesses don't match the header's commitments,
+    /// i.e., a genuine header paired with an altered transaction set.
+    fn is_mutated(&self) -> bool;
+}
+
+impl BlockExt for Block {
+    fn is_mutated(&self) -> bool {
+        Consensus::check_merkle_root(self).is_none() || !self.check_witness_commitment()
     }
 }
 
@@ -310,13 +324,16 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
+    use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::Transaction;
     use bitcoin::Txid;
     use bitcoin::block::Header;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::constants::genesis_block;
     use bitcoin::hashes::sha256::Hash as Sha256Hash;
     use bitcoin::params::Params;
     use rustreexo::proof::Proof;
@@ -1006,5 +1023,19 @@ mod tests {
             work.to_string_hex(),
             "0000000300000001000000000000000200000000000000030000000000000004"
         );
+    }
+
+    #[test]
+    fn is_mutated_detects_tampered_txdata() {
+        let mut block = genesis_block(Network::Regtest);
+        let hash = block.header.block_hash();
+
+        assert!(!block.is_mutated());
+
+        // Tampering with the txdata leaves the header hash unchanged
+        block.txdata[0].output[0].value = Amount::from_sat(1);
+
+        assert_eq!(block.header.block_hash(), hash);
+        assert!(block.is_mutated());
     }
 }

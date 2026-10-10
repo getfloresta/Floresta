@@ -56,9 +56,9 @@ use bitcoin::network::Network;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
+use floresta_chain::extensions::BlockExt;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::IBDState;
-use floresta_chain::pruned_utreexo::consensus::Consensus;
 use floresta_common::service_flags;
 use floresta_common::try_and_log;
 use rand::rng;
@@ -476,14 +476,8 @@ where
                     }
 
                     // Check if the block was maliciously mutated by our peer
-                    let is_mutated = Consensus::check_merkle_root(&recv_block).is_none()
-                        || !recv_block.check_witness_commitment();
-
-                    if is_mutated {
-                        error!(
-                            "Peer {peer} sent us a mutated block {}",
-                            recv_block.block_hash()
-                        );
+                    if recv_block.is_mutated() {
+                        error!("Peer {peer} sent us a mutated block {block_hash}");
                         self.disconnect_and_ban(peer)?;
                         return Err(WireError::PeerMisbehaving);
                     }
