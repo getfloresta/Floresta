@@ -202,6 +202,22 @@ where
 
                 return;
             }
+
+            UserRequest::BanPeer(addr) => {
+                let node_response = match self.handle_ban_peer(addr.clone()) {
+                    Ok(()) => {
+                        info!("Banned peer {addr}");
+                        NodeResponse::BanPeer(true)
+                    }
+                    Err(err) => {
+                        warn!("Failed to ban peer {addr}: {err:?}");
+                        NodeResponse::BanPeer(false)
+                    }
+                };
+
+                let _ = responder.send(node_response);
+                return;
+            }
         };
 
         let peer = self.send_to_fast_peer(req, ServiceFlags::NONE);

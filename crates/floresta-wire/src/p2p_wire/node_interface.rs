@@ -159,6 +159,11 @@ pub trait NetworkMethods {
 
     /// Returns address manager statistics broken down by network.
     fn get_addrman_info(&self) -> impl Future<Output = Result<ConnectionStats, Self::Error>>;
+
+    /// Bans a peer by its address, disconnecting it immediately.
+    ///
+    /// Returns a bool indicating whether the ban was successful.
+    fn ban_peer(&self, addr: BitcoinSocketAddr) -> impl Future<Output = Result<bool, Self::Error>>;
 }
 
 /// Methods used to interact with the node's configuration.
