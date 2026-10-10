@@ -11,6 +11,7 @@ use crate::rpc::JsonRPCClient;
 pub struct Client(jsonrpc::Client);
 
 // Configuration struct for JSON-RPC client
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct JsonRPCConfig {
     pub url: String,
     pub user: Option<String>,
@@ -75,4 +76,27 @@ pub struct JsonRpcResponse<Res> {
     pub id: u64,
     pub result: Option<Res>,
     pub error: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_new_with_config() {
+        let config = JsonRPCConfig {
+            url: "http://127.0.0.1:8332".to_string(),
+            user: Some("testuser".to_string()),
+            pass: Some("testpass".to_string()),
+        };
+
+        let client = Client::new_with_config(config);
+        assert!(format!("{client:?}").contains("Client"));
+    }
+
+    #[test]
+    fn test_client_new() {
+        let client = Client::new("http://127.0.0.1:8332".to_string());
+        assert!(format!("{client:?}").contains("Client"));
+    }
 }
