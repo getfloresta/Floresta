@@ -3,11 +3,13 @@
 use core::error;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use bitcoin::Amount;
 use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::TxOut;
@@ -16,6 +18,7 @@ use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::sha256;
+use floresta_chain::FeeEstimator;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_common::get_hash_from_u8;
 use floresta_common::get_spk_hash;
@@ -187,6 +190,9 @@ pub struct ElectrumServer<Blockchain: BlockchainInterface> {
     /// blockchain information and broadcast transactions.
     chain: Arc<Blockchain>,
 
+    /// Read-only handle to the fee estimator, used to answer `blockchain.estimatefee`.
+    fee_estimator: Arc<dyn FeeEstimator>,
+
     /// The address cache is used to store addresses and transactions, like a
     /// watch-only wallet, but it is adapted to the electrum protocol.
     address_cache: Arc<AddressCache<KvDatabase>>,
@@ -233,6 +239,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
     pub fn new(
         address_cache: Arc<AddressCache<KvDatabase>>,
         chain: Arc<Blockchain>,
+        fee_estimator: Arc<dyn FeeEstimator>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         node_interface: NodeHandle,
     ) -> Result<Self, Box<dyn error::Error>> {
@@ -241,6 +248,7 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         Ok(Self {
             last_rebroadcast: None,
             chain,
+            fee_estimator,
             address_cache,
             block_filters,
             node_interface,
@@ -308,7 +316,22 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     "max": MAX_COUNT,
                 })
             }
-            "blockchain.estimatefee" => json_rpc_res!(request, 0.0001),
+            "blockchain.estimatefee" => {
+                let target = request
+                    .params
+                    .first()
+                    .and_then(|v| v.as_u64())
+                    .and_then(|t| usize::try_from(t).ok())
+                    .unwrap_or(1);
+
+                // estimate_fee returns FeeRate(sat/kwu)
+                let fee_rate = self.fee_estimator.estimate_fee(target);
+
+                let sat_per_kvb = fee_rate.to_sat_per_kwu().saturating_mul(4);
+                let fee_btc_per_kb = Amount::from_sat(sat_per_kvb).to_btc();
+
+                json_rpc_res!(request, fee_btc_per_kb)
+            }
             "blockchain.headers.subscribe" => {
                 let (height, hash) = self
                     .chain
@@ -962,7 +985,10 @@ mod test {
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
     use floresta_chain::AssumeValidArg;
+    use floresta_chain::BlockFeeEstimator;
     use floresta_chain::ChainState;
+    use floresta_chain::FeeEstimationPolicy;
+    use floresta_chain::FeeRateFile;
     use floresta_chain::FlatChainStore;
     use floresta_chain::FlatChainStoreConfig;
     use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
@@ -1130,8 +1156,21 @@ mod test {
         let tls_config = Some(create_tls_config().expect("Failed to create TLS config"));
         let tls_acceptor = tls_config.map(TlsAcceptor::from);
 
+        let fee_estimator = Arc::new(
+            BlockFeeEstimator::load(
+                FeeRateFile::open(
+                    format!("./tmp-db/{test_id}.fee_rates.bin"),
+                    FeeEstimationPolicy::default().window as u32,
+                )
+                .unwrap(),
+                FeeEstimationPolicy::default(),
+                0,
+            )
+            .unwrap(),
+        );
+
         let electrum_server: ElectrumServer<ChainState<FlatChainStore>> =
-            ElectrumServer::new(wallet, chain, None, node_interface).unwrap();
+            ElectrumServer::new(wallet, chain, fee_estimator, None, node_interface).unwrap();
         let non_tls_listener = Arc::new(TcpListener::bind(e_addr).await.unwrap());
         let assigned_port = non_tls_listener.local_addr().unwrap().port();
 
@@ -1315,7 +1354,9 @@ mod test {
 
         let batch_response = send_request(batch_req, port).await.unwrap();
 
-        assert_eq!(batch_response[0]["result"], 0.0001);
+        // no params -> target defaults to 1 -> fee_estimation.0, which starts at
+        // FeeRate::BROADCAST_MIN (250 sat/kwu = 1000 sat/kvB = 0.00001 BTC/kvB)
+        assert_eq!(batch_response[0]["result"], 0.00001);
         assert_eq!(batch_response[1]["result"], 0.00001);
     }
 

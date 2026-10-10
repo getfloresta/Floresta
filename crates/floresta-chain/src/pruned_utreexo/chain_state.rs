@@ -58,6 +58,7 @@ use super::chain_state_builder::ChainStateBuilder;
 use super::chainparams::ChainParams;
 use super::chainstore::ChainStoreWarning;
 use super::chainstore::DiskBlockHeader;
+use super::consensus::BlockTxStats;
 use super::consensus::Consensus;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
@@ -73,18 +74,40 @@ use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::read_lock;
 use crate::write_lock;
 
+pub struct BlockConnected<'a> {
+    pub block: &'a Block,
+    pub height: u32,
+    pub spent_utxos: Option<&'a HashMap<OutPoint, UtxoData>>,
+    pub stats: Option<BlockTxStats>,
+}
+
 /// Trait for components that need to receive notifications about new blocks.
 pub trait BlockConsumer: Sync + Send + 'static {
     /// Return true if this consumer wants the set of spent UTXOs.
     fn wants_spent_utxos(&self) -> bool;
 
+    /// Return true if this consumer wants the per-block fee/weight statistics.
+    fn wants_block_stats(&self) -> bool {
+        false
+    }
+
     /// Called whenever a valid block is connected. `spent_utxos` is None unless consumer `wants_spent_utxos()`.
     fn on_block(
         &self,
-        block: &Block,
-        height: u32,
-        spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
-    );
+        _block: &Block,
+        _height: u32,
+        _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
+    ) {
+    }
+
+    /// Called whenever a valid block is connected, with the full event.
+    /// Defaults to dispatching to [`BlockConsumer::on_block`].
+    fn on_connected(&self, evt: BlockConnected<'_>) {
+        self.on_block(evt.block, evt.height, evt.spent_utxos);
+    }
+
+    /// Called when the node enters or leaves initial block download.
+    fn on_ibd_changed(&self, _in_ibd: bool) {}
 }
 
 impl BlockConsumer for Channel<(Block, u32)> {
@@ -133,8 +156,6 @@ pub struct ChainStateInner<PersistedState: ChainStore> {
     /// If a module just wants pass in a channel, `Sender` implements [BlockConsumer], and can
     /// be used during subscription (just keep the `Receiver` side.
     subscribers: Vec<Arc<dyn BlockConsumer>>,
-    /// Fee estimation for 1, 10 and 20 blocks
-    fee_estimation: (f64, f64, f64),
     /// What is our current IBD state?
     ibd: IBDState,
     /// Parameters for the chain and functions that verify the chain.
@@ -591,14 +612,31 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         self.median_time_past(previous_header)
     }
 
-    fn notify(&self, block: &Block, height: u32, inputs: Option<&HashMap<OutPoint, UtxoData>>) {
+    fn notify(
+        &self,
+        block: &Block,
+        height: u32,
+        inputs: Option<&HashMap<OutPoint, UtxoData>>,
+        stats: Option<BlockTxStats>,
+    ) {
         let inner = self.inner.read();
         for client in &inner.subscribers {
-            if client.wants_spent_utxos() {
-                client.on_block(block, height, inputs);
+            let utxos = if client.wants_spent_utxos() {
+                inputs
             } else {
-                client.on_block(block, height, None);
-            }
+                None
+            };
+            let s = if client.wants_block_stats() {
+                stats
+            } else {
+                None
+            };
+            client.on_connected(BlockConnected {
+                block,
+                height,
+                spent_utxos: utxos,
+                stats: s,
+            });
         }
     }
 
@@ -627,7 +665,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
                     alternative_tips: Vec::new(),
                 },
                 subscribers: Vec::new(),
-                fee_estimation: (1_f64, 1_f64, 1_f64),
                 ibd: IBDState::HeadersSync,
                 consensus: Consensus { parameters },
                 assume_valid,
@@ -788,7 +825,6 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             acc,
             best_block,
             chainstore,
-            fee_estimation: (1_f64, 1_f64, 1_f64),
             subscribers: Vec::new(),
             ibd: IBDState::HeadersSync,
             consensus: Consensus {
@@ -1021,7 +1057,8 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     /// Validates the block without checking whether the inputs are present in the UTXO set. This
     /// function contains the core validation logic.
     ///
-    /// The methods `BlockchainInterface::validate_block` and `UpdatableChainstate::connect_block`
+    /// The methods `BlockchainInterface::validate_block` and `UpdatableChainstate::
+    /// connect_block`
     /// call this and additionally verify the inclusion proof (i.e., they perform full validation).
     pub fn validate_block_no_acc(
         &self,
@@ -1029,6 +1066,17 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         height: u32,
         inputs: HashMap<OutPoint, UtxoData>,
     ) -> Result<(), BlockchainError> {
+        self.validate_block_no_acc_inner(block, height, inputs)
+            .map(|_| ())
+    }
+
+    /// Like [`ChainState::validate_block_no_acc`], but also returns the block's fee/weight stats.
+    pub(crate) fn validate_block_no_acc_inner(
+        &self,
+        block: &Block,
+        height: u32,
+        inputs: HashMap<OutPoint, UtxoData>,
+    ) -> Result<BlockTxStats, BlockchainError> {
         let consensus = read_lock!(self).consensus.clone();
         consensus.check_block(block, height)?;
 
@@ -1045,7 +1093,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         let flags = 0;
         let verify_script = self.verify_script(height)?;
 
-        Consensus::verify_block_transactions(
+        Consensus::verify_block_transactions_inner(
             height,
             lock_time_cutoff,
             inputs,
@@ -1053,8 +1101,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             subsidy,
             verify_script,
             flags,
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -1127,6 +1174,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
             .try_height()?;
 
         self.validate_block_no_acc(block, height, inputs)
+            .map(|_| ())
     }
 
     fn get_block_locator_for_tip(&self, tip: BlockHash) -> Result<Vec<BlockHash>, BlockchainError> {
@@ -1185,17 +1233,6 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
     fn get_height(&self) -> Result<u32, Self::Error> {
         let inner = read_lock!(self);
         Ok(inner.best_block.depth)
-    }
-
-    fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error> {
-        let inner = read_lock!(self);
-        if target == 1 {
-            Ok(inner.fee_estimation.0)
-        } else if target == 10 {
-            Ok(inner.fee_estimation.1)
-        } else {
-            Ok(inner.fee_estimation.2)
-        }
     }
 
     fn get_block(&self, _hash: &BlockHash) -> Result<Block, Self::Error> {
@@ -1338,8 +1375,21 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
     }
 
     fn update_ibd(&self, ibd_state: IBDState) {
-        let mut inner = write_lock!(self);
-        inner.ibd = ibd_state;
+        // Clone the subscriber list and drop the lock before notifying, so a
+        // subscriber may do blocking work (e.g. flushing the fee window).
+        let subscribers = {
+            let mut inner = write_lock!(self);
+            if inner.ibd == ibd_state {
+                return;
+            }
+            inner.ibd = ibd_state;
+            inner.subscribers.clone()
+        };
+
+        let in_ibd = ibd_state != IBDState::Done;
+        for client in subscribers {
+            client.on_ibd_changed(in_ibd);
+        }
     }
 
     fn connect_block(
@@ -1403,7 +1453,15 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .any(|subscriber| subscriber.wants_spent_utxos())
             .then(|| inputs.clone());
 
-        self.validate_block_no_acc(block, height, inputs)?;
+        let want_stats = self
+            .inner
+            .read()
+            .subscribers
+            .iter()
+            .any(|s| s.wants_block_stats());
+
+        let stats = self.validate_block_no_acc_inner(block, height, inputs)?;
+
         let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
 
         self.update_view(height, &block.header, acc)?;
@@ -1422,7 +1480,13 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         }
 
         // Notify others we have a new block
-        self.notify(block, height, inputs_for_notifications.as_ref());
+        self.notify(
+            block,
+            height,
+            inputs_for_notifications.as_ref(),
+            want_stats.then_some(stats),
+        );
+
         Ok(height)
     }
 
@@ -1530,7 +1594,6 @@ impl<T: ChainStore> TryFrom<ChainStateBuilder<T>> for ChainState<T> {
             assume_valid: builder.assume_valid(),
             ibd: builder.ibd_state(),
             subscribers: Vec::new(),
-            fee_estimation: (1_f64, 1_f64, 1_f64),
             consensus: Consensus {
                 parameters: builder.chain_params()?,
             },
@@ -1559,6 +1622,7 @@ macro_rules! write_lock {
 
 #[cfg(all(test, feature = "flat-chainstore"))]
 mod test {
+    use core::assert_eq;
     use std::format;
     use std::fs::File;
     use std::io::Cursor;

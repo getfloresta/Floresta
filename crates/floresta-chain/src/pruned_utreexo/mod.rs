@@ -17,6 +17,9 @@ pub mod chainstore;
 #[macro_use]
 pub mod error;
 pub mod consensus;
+pub mod fee_estimation;
+#[cfg(feature = "flat-chainstore")]
+pub mod fee_rate_file;
 #[cfg(feature = "flat-chainstore")]
 pub mod flat_chain_store;
 pub mod merkle;
@@ -37,6 +40,8 @@ use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
 
 use self::chainstore::ChainStoreWarning;
+#[cfg(feature = "flat-chainstore")]
+pub use self::fee_rate_file::FeeRateFile;
 use self::partial_chain::PartialChainState;
 use crate::BlockConsumer;
 use crate::BlockchainError;
@@ -80,9 +85,6 @@ pub trait BlockchainInterface {
 
     /// Get the height of our best know chain.
     fn get_height(&self) -> Result<u32, Self::Error>;
-
-    /// Returns fee estimation for inclusion in `target` blocks.
-    fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error>;
 
     /// Returns a block with a given `hash` if any.
     fn get_block(&self, hash: &BlockHash) -> Result<Block, Self::Error>;
@@ -334,10 +336,6 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_height(&self) -> Result<u32, Self::Error> {
         T::get_height(self)
-    }
-
-    fn estimate_fee(&self, target: usize) -> Result<f64, Self::Error> {
-        T::estimate_fee(self, target)
     }
 
     fn get_block_hash(&self, height: u32) -> Result<BlockHash, Self::Error> {

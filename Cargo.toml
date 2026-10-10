@@ -70,6 +70,7 @@ tokio = { version = "=1.52.3", features = ["net", "time", "rt-multi-thread", "si
 tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12"] }
 toml = { version = "=1.1.2", default-features = false, features = ["std", "parse", "serde"] }
 tracing = { version = "=0.1.44", default-features = false }
+zerocopy = { version = "=0.8.48", default-features = false, features = ["derive"] }
 zstd = { version = "=0.13.3" }
 # Pins for MSRV compatibility:
 time = { version = "=0.3.45" } # note: >0.3.45 requires Rust 1.88.0
