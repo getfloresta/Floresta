@@ -42,6 +42,10 @@ floresta-metrics = { workspace = true, optional = true }
 [dev-dependencies]
 zstd = { workspace = true }
 derive_more = { version = "=2.1.1", features = ["constructor"] }
+# `test-util` enables the pausable virtual clock (`tokio::time::pause`/`advance`
+# and `#[tokio::test(start_paused = true)]`). Being a dev-dependency, it only
+# affects test builds, so production binaries keep the real clock.
+tokio = { workspace = true, features = ["test-util"] }
 
 # Local dev-dependencies
 floresta-mempool = { workspace = true }
