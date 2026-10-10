@@ -166,6 +166,11 @@ pub struct Config {
     /// If non-empty, we'll connect **only** to these nodes.
     pub connect: Vec<String>,
 
+    /// Nodes to connect to
+    ///
+    /// Unlike `connect`, we'll connect to these nodes in addition to regular peer discovery.
+    pub add_node: Vec<String>,
+
     #[cfg(feature = "json-rpc")]
     /// The address our json-rpc should listen to
     pub json_rpc_address: Option<String>,
@@ -243,6 +248,7 @@ impl Config {
             #[cfg(feature = "zmq-server")]
             zmq_address: None,
             connect: Vec::new(),
+            add_node: Vec::new(),
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
             log_to_stdout: false,
@@ -424,6 +430,7 @@ impl Florestad {
             proxy,
             datadir: datadir.into(),
             fixed_peers: self.config.connect.clone(),
+            add_node: self.config.add_node.clone(),
             compact_filters: self.config.cfilters,
             assume_utreexo: self.config.assumeutreexo_value.clone().or(assume_utreexo),
             backfill: self.config.backfill,

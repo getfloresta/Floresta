@@ -105,6 +105,13 @@ pub struct Cli {
     pub connect: Vec<String>,
 
     #[arg(long, value_name = "address[:<port>]")]
+    /// A node to connect to. May be specified multiple times.
+    ///
+    /// Unlike `--connect`, this option connects to the specified peer upon startup in addition to
+    /// regular peer discovery. Each value should be an ipv4/ipv6/hostname address in the format `<address>[:<port>]`.
+    pub addnode: Vec<String>,
+
+    #[arg(long, value_name = "address[:<port>]")]
     /// The address where our json-rpc server should listen to, in the format `<address>[:<port>]`
     pub rpc_address: Option<String>,
 

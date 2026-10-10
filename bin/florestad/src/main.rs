@@ -67,6 +67,7 @@ fn main() {
         proxy: params.proxy,
         assume_utreexo: !params.no_assume_utreexo,
         connect: params.connect,
+        add_node: params.addnode,
         wallet_xpub: params.wallet_xpub,
         config_file: params.config_file,
         #[cfg(unix)]

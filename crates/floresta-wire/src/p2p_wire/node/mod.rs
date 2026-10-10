@@ -35,6 +35,7 @@ use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
 use floresta_compact_filters::network_filters::NetworkFilters;
 use floresta_domain::mempool::MempoolBase;
 pub use peer_man::AddedPeerInfo;
+use peer_man::register_added_peer;
 use running_ctx::RunningNode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -353,7 +354,7 @@ where
         mempool: Arc<Mutex<dyn MempoolBase>>,
         block_filters: Option<Arc<NetworkFilters<FlatFiltersStore>>>,
         kill_signal: Arc<tokio::sync::RwLock<bool>>,
-        address_man: AddressMan,
+        mut address_man: AddressMan,
     ) -> Result<Self, WireError> {
         let (node_tx, node_rx) = unbounded_channel();
         let socks5 = config.proxy.map(Socks5StreamBuilder::new);
@@ -367,6 +368,19 @@ where
             if seen.insert(resolved.clone()) {
                 fixed_peers.push(LocalAddress::from(resolved));
             }
+        }
+
+        let mut added_peers = Vec::with_capacity(config.add_node.len());
+        for address in &config.add_node {
+            let resolved =
+                BitcoinSocketAddr::parse_address(address, Some(config.network), SystemResolver)?;
+
+            let _ = register_added_peer(
+                &mut address_man,
+                &mut added_peers,
+                resolved,
+                config.allow_v1_fallback,
+            );
         }
 
         Ok(Self {
@@ -404,7 +418,7 @@ where
                 fixed_peers,
                 config,
                 kill_signal,
-                added_peers: Vec::new(),
+                added_peers,
             },
             context: T::default(),
         })

@@ -27,6 +27,7 @@ use super::LocalPeerView;
 use super::NodeRequest;
 use super::PeerStatus;
 use super::UtreexoNode;
+use crate::address_man::AddressMan;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
@@ -925,30 +926,12 @@ where
         v2_transport: bool,
     ) -> Result<(), WireError> {
         // See https://github.com/bitcoin/bitcoin/blob/8309a9747a8df96517970841b3648937d05939a3/src/net.cpp#L3558
-
-        // Add this address to our address manager for later
-        // assume it has the bare-minimum services, otherwise `push_addresses` will ignore it
-        let mut local_address = LocalAddress::from(peer_address.clone());
-        debug!("Adding node {}", local_address);
-
-        local_address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
-
-        // Check if the peer already exists
-        if self
-            .added_peers
-            .iter()
-            .any(|peer_info| peer_address == peer_info.address)
-        {
-            return Err(WireError::PeerAlreadyExists(local_address));
-        }
-
-        self.address_man.push_addresses(&[local_address]);
-
-        // Add a simple reference to the peer
-        self.added_peers.push(AddedPeerInfo {
-            address: peer_address,
-            v1_fallback: !v2_transport,
-        });
+        register_added_peer(
+            &mut self.common.address_man,
+            &mut self.common.added_peers,
+            peer_address,
+            !v2_transport,
+        )?;
 
         // Implementation detail for `addnode`: on bitcoin-core, the node doesn't connect immediately
         // after adding a peer, it just adds it to the `added_peers` list. Here we do almost the same,
@@ -1021,4 +1004,31 @@ where
         // We allow V1 fallback iff the `v2` flag is not set
         self.open_connection(kind, local_address, !v2_transport)
     }
+}
+
+pub(crate) fn register_added_peer(
+    address_man: &mut AddressMan,
+    added_peers: &mut Vec<AddedPeerInfo>,
+    peer_address: BitcoinSocketAddr,
+    v1_fallback: bool,
+) -> Result<(), WireError> {
+    let mut local_address = LocalAddress::from(peer_address.clone());
+    debug!("Adding node {}", local_address);
+
+    local_address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
+
+    if added_peers
+        .iter()
+        .any(|peer_info| peer_address == peer_info.address)
+    {
+        return Err(WireError::PeerAlreadyExists(local_address));
+    }
+
+    address_man.push_addresses(&[local_address]);
+    added_peers.push(AddedPeerInfo {
+        address: peer_address,
+        v1_fallback,
+    });
+
+    Ok(())
 }

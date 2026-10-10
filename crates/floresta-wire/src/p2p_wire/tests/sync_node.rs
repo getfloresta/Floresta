@@ -3,10 +3,22 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use bitcoin::Network;
+    use floresta_chain::AssumeValidArg;
+    use floresta_chain::ChainState;
+    use floresta_chain::FlatChainStore;
+    use floresta_chain::FlatChainStoreConfig;
     use floresta_chain::pruned_utreexo::BlockchainInterface;
+    use floresta_mempool::Mempool;
+    use tokio::sync::Mutex;
+    use tokio::sync::RwLock;
 
+    use crate::p2p_wire::UtreexoNodeConfig;
+    use crate::p2p_wire::address_man::AddressMan;
+    use crate::p2p_wire::node::UtreexoNode;
+    use crate::p2p_wire::node::running_ctx::RunningNode;
     use crate::p2p_wire::tests::utils::PeerData;
     use crate::p2p_wire::tests::utils::SetupNodeArgs;
     use crate::p2p_wire::tests::utils::mutate_block;
@@ -52,5 +64,36 @@ mod tests {
         assert_eq!(chain.get_validation_index().unwrap(), 9);
         assert_eq!(chain.get_best_block().unwrap().1, headers[9].block_hash());
         assert!(!chain.is_in_ibd());
+    }
+
+    #[tokio::test]
+    async fn test_addnode_config() {
+        let datadir = format!("./tmp-db/{}.addnode_config", rand::random::<u32>());
+        let config = UtreexoNodeConfig {
+            network: Network::Signet,
+            datadir: datadir.clone().into(),
+            add_node: vec!["127.0.0.1:38333".to_string()],
+            ..Default::default()
+        };
+
+        let chainstore = FlatChainStore::new(FlatChainStoreConfig {
+            block_index_size: Some(10),
+            headers_file_size: Some(10),
+            cache_size: Some(10),
+            ..FlatChainStoreConfig::new(&datadir)
+        })
+        .unwrap();
+        let chain = Arc::new(
+            ChainState::open(chainstore, Network::Signet, AssumeValidArg::Disabled).unwrap(),
+        );
+        let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
+        let kill_signal = Arc::new(RwLock::new(false));
+        let addr_man = AddressMan::new(None, &[]);
+        let node: UtreexoNode<_, RunningNode> =
+            UtreexoNode::new(config, chain, mempool, None, kill_signal, addr_man).unwrap();
+
+        assert_eq!(node.added_peers.len(), 1);
+        assert_eq!(node.added_peers[0].address.to_string(), "127.0.0.1:38333");
+        let _ = std::fs::remove_dir_all(&datadir);
     }
 }
