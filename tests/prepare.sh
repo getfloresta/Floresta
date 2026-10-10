@@ -5,19 +5,24 @@
 set -e
 
 # Parse CLI flags:
-# --build    : force rebuilding utreexod/bitcoind even if present
+# --build    : force rebuilding utreexod/bitcoind/electrs even if present
 # --release  : build florestad in release mode (default: debug)
+# --electrum-compat : also fetch electrs, for tests/electrum/compare_servers.py
 FORCE_BUILD=0
 BUILD_RELEASE=0
+ELECTRUM_COMPAT=0
 for ARG in "$@"; do
     case "$ARG" in
         --build) FORCE_BUILD=1 ;;
         --release) BUILD_RELEASE=1 ;;
+        --electrum-compat) ELECTRUM_COMPAT=1 ;;
         *) ;;
     esac
 done
 
 BITCOIN_REVISION="${BITCOIN_REVISION:-30.2}"
+# electrs 0.12 needs Bitcoin Core 31
+ELECTRS_VERSION="0.11.1"
 # We need for the current dir to be the root dir of the project.
 FLORESTA_PROJ_DIR=$(git rev-parse --show-toplevel)
 TEMP_DIR="${FLORESTA_TEMP_DIR:-/tmp/floresta-func-tests}"
@@ -247,6 +252,57 @@ ensure_bitcoind() {
     return 1
 }
 
+# romanz publishes no electrs binaries: use the ones halfin
+# (https://github.com/luisschwab/halfin) serves, checked against its hashes.
+download_prebuilt_electrs() {
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64) FILE_NAME="electrs-linux-amd64.tar.gz" ;;
+        Linux-aarch64|Linux-arm64) FILE_NAME="electrs-linux-arm64.tar.gz" ;;
+        Darwin-x86_64) FILE_NAME="electrs-darwin-amd64.tar.gz" ;;
+        Darwin-arm64) FILE_NAME="electrs-darwin-arm64.tar.gz" ;;
+        *) echo "No prebuilt electrs for $(uname -s)-$(uname -m)"; return 1 ;;
+    esac
+
+    EXPECTED_SHA256=$(awk -v f="$FILE_NAME" '$2==f {print $1; exit}' \
+        "$FLORESTA_PROJ_DIR/tests/electrs_hashes/$ELECTRS_VERSION")
+    ARCHIVE="$TEMP_DIR/$FILE_NAME"
+
+    for MIRROR in https://bin.luisschwab.net https://bin.lab.vinteum.org; do
+        DL_URL="$MIRROR/indexer/romanz_electrs/electrs-$ELECTRS_VERSION/$FILE_NAME"
+        echo "Downloading $DL_URL"
+        curl -fL -o "$ARCHIVE" "$DL_URL" || continue
+
+        DOWNLOADED_SHA256=$({ sha256sum "$ARCHIVE" 2>/dev/null || shasum -a 256 "$ARCHIVE"; } | awk '{print $1}')
+        if [ "$DOWNLOADED_SHA256" != "$EXPECTED_SHA256" ]; then
+            printf 'SHA256 mismatch for %s\nExpected: %s\nActual:   %s\n' "$DL_URL" "$EXPECTED_SHA256" "$DOWNLOADED_SHA256"
+            exit 1
+        fi
+
+        tar xzf "$ARCHIVE" -C "$BINARIES_DIR" electrs || return 1
+        rm "$ARCHIVE"
+        echo "electrs downloaded to $BINARIES_DIR/electrs"
+        return 0
+    done
+
+    return 1
+}
+
+build_electrs_from_source() {
+    echo "Building electrs $ELECTRS_VERSION from crates.io..."
+    cargo install --locked electrs --version "$ELECTRS_VERSION" --root "$TEMP_DIR/electrs-build" || return 1
+    cp "$TEMP_DIR/electrs-build/bin/electrs" "$BINARIES_DIR/electrs"
+}
+
+ensure_electrs() {
+    if [ -n "${ELECTRS_EXE:-}" ]; then
+        cp "$ELECTRS_EXE" "$BINARIES_DIR/electrs" || exit 1
+        echo "Using user-provided electrs: $BINARIES_DIR/electrs"
+        return 0
+    fi
+
+    download_prebuilt_electrs || build_electrs_from_source
+}
+
 build_utreexod() {
     # Change to a disposable directory for download and build
     DISPOSABLE_DIR=$(create_disposable_dir)
@@ -304,6 +360,14 @@ if [ ! -f "$BINARIES_DIR/bitcoind" ] || [ "$FORCE_BUILD" -eq 1 ]; then
     ensure_bitcoind
 else
     echo "Bitcoind already built/downloaded, skipping..."
+fi
+
+if [ "$ELECTRUM_COMPAT" -eq 1 ]; then
+    if [ ! -f "$BINARIES_DIR/electrs" ] || [ "$FORCE_BUILD" -eq 1 ]; then
+        ensure_electrs
+    else
+        echo "Electrs already downloaded, skipping..."
+    fi
 fi
 
 echo "All done!"

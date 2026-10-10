@@ -146,6 +146,8 @@ The `--build` argument will force the script to fetch the `bitcoind` binary agai
 
 The `--release` argument will build the `florestad` binary in release mode, which is optimized for production use. If this flag is not provided, the binary will be built in debug mode by default.
 
+The `--electrum-compat` argument also fetches romanz `electrs` (or uses `ELECTRS_EXE`), for `tests/electrum/compare_servers.py`. That test compares Floresta's Electrum server with `electrs` and ElectrumX, which `uv sync --extra electrum-compat` installs. Without them, it is skipped.
+
 The `--preserve-data-dir` argument will keep the data and logs directories after running the tests
 (this is useful if you want to keep the data for debugging purposes).
 
