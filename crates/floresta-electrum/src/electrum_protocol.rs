@@ -56,6 +56,14 @@ use crate::request::Request;
 /// One day, in seconds
 const REBROADCAST_INTERVAL: u64 = 24 * 3600;
 
+/// The Electrum protocol version this server implements.
+///
+/// `server.version` answers it and `server.features` reports it as both
+/// `protocol_min` and `protocol_max`, so the two always agree. Version 1.5
+/// was skipped by the protocol, and 1.6 needs changes this server does not
+/// have yet.
+const PROTOCOL_VERSION: &str = "1.4";
+
 /// Type alias for u32 representing a ClientId
 type ClientId = u32;
 
@@ -535,8 +543,8 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                     {
                         "genesis_hash": genesis_hash,
                         "hosts": {"127.0.0.1": {"tcp_port": 50001}},
-                        "protocol_max": "1.5",
-                        "protocol_min": "1.4",
+                        "protocol_max": PROTOCOL_VERSION,
+                        "protocol_min": PROTOCOL_VERSION,
                         "pruning": null,
                         "server_version": format!("Floresta {}", env!("CARGO_PKG_VERSION")),
                         "hash_function": "sha256"
@@ -548,7 +556,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "server.ping" => json_rpc_res!(request, null),
             "server.version" => json_rpc_res!(
                 request,
-                [format!("Floresta {}", env!("CARGO_PKG_VERSION")), "1.4"]
+                [
+                    format!("Floresta {}", env!("CARGO_PKG_VERSION")),
+                    PROTOCOL_VERSION
+                ]
             ),
 
             _ => Err(super::error::Error::InvalidParams),
@@ -1501,5 +1512,12 @@ mod test {
             batch_response[6]["result"][0],
             format!("Floresta {}", env!("CARGO_PKG_VERSION"))
         );
+
+        // `server.version` negotiates the only version `server.features`
+        // reports.
+        let version = &batch_response[6]["result"][1];
+        assert_eq!(version, "1.4");
+        assert_eq!(&batch_response[3]["result"]["protocol_min"], version);
+        assert_eq!(&batch_response[3]["result"]["protocol_max"], version);
     }
 }
