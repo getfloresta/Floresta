@@ -48,11 +48,14 @@ use tracing::error;
 
 use crate::descriptor::DescriptorError;
 use crate::descriptor::derive_addresses_from_descriptor;
-use crate::descriptor::derive_addresses_from_list_descriptors;
 use crate::descriptor::parse_xpub;
 
 /// How much descriptors to derive each time.
 const DERIVATION_COUNT: u32 = 100;
+
+/// When an address within this many indexes of the derivation horizon receives a payment,
+/// derive another batch.
+const GAP_LIMIT: u32 = 20;
 
 /// Initial index for address derivation.
 const INDEX_INITIAL: u32 = 0;
@@ -154,11 +157,13 @@ pub struct CachedAddress {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub address_count: usize,
+    /// Not maintained: always zero.
     pub transaction_count: usize,
     pub utxo_count: usize,
     pub cache_height: u32,
     pub txo_count: usize,
     pub balance: u64,
+    /// The next index to derive, on every descriptor.
     pub derivation_index: u32,
 }
 
@@ -204,6 +209,9 @@ struct AddressCacheInner<D: AddressCacheDatabase> {
     script_set: HashSet<sha256::Hash>,
     /// Keeps track of all utxos we own, and the script hash they belong to
     utxo_index: HashMap<OutPoint, Hash>,
+    /// Maps the script hash of a derived address to its derivation index. Not persisted,
+    /// rebuilt in [`AddressCacheInner::new`].
+    derived_index: HashMap<Hash, u32>,
 }
 
 impl<D: AddressCacheDatabase> AddressCacheInner<D> {
@@ -291,12 +299,55 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
             address_map.insert(address.script_hash, address);
         }
 
-        Self {
+        let mut inner = Self {
             database,
             address_map,
             script_set,
             utxo_index,
+            derived_index: HashMap::new(),
+        };
+
+        // Wallets created before this field was maintained have 100 addresses derived and
+        // a `derivation_index` of 0.
+        let descriptors = inner.database.get_descriptors().unwrap_or_default();
+        let mut stats = inner.database.get_stats().expect("Could not load stats");
+        if !descriptors.is_empty() {
+            if stats.derivation_index < DERIVATION_COUNT {
+                stats.derivation_index = DERIVATION_COUNT;
+                inner
+                    .database
+                    .save_stats(&stats)
+                    .expect("Could not save stats");
+            }
+            inner
+                .derive_range(&descriptors, INDEX_INITIAL, stats.derivation_index)
+                .expect("Stored descriptors are valid");
         }
+
+        inner
+    }
+
+    /// Derives `count` addresses from `start` on each descriptor and caches them, recording
+    /// their derivation index. Returns the derived scripts.
+    fn derive_range(
+        &mut self,
+        descriptors: &[String],
+        start: u32,
+        count: u32,
+    ) -> Result<Vec<ScriptBuf>, DescriptorError> {
+        let mut derived = Vec::new();
+        for descriptor in descriptors {
+            // Each path of a multipath descriptor yields `count` scripts, in index order
+            let scripts = derive_addresses_from_descriptor(descriptor, start, count)?;
+            for (position, script) in scripts.into_iter().enumerate() {
+                let index = start + (position as u32 % count);
+                self.derived_index.insert(get_spk_hash(&script), index);
+                self.cache_address(script.clone());
+                derived.push(script);
+            }
+        }
+
+        Ok(derived)
     }
 
     fn get_address_utxos(&self, script_hash: &Hash) -> Option<Vec<(TxOut, OutPoint)>> {
@@ -377,24 +428,20 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
         let mut stats = self.database.get_stats()?;
         let descriptors = self.database.get_descriptors()?;
 
-        let addresses = derive_addresses_from_list_descriptors(
-            &descriptors,
-            stats.derivation_index,
-            DERIVATION_COUNT,
-        )
-        .map_err(WatchOnlyError::InvalidDescriptor)?;
-
-        addresses.iter().for_each(|address| {
-            self.cache_address(address.clone());
-        });
+        self.derive_range(&descriptors, stats.derivation_index, DERIVATION_COUNT)
+            .map_err(WatchOnlyError::InvalidDescriptor)?;
 
         stats.derivation_index += DERIVATION_COUNT;
         Ok(self.database.save_stats(&stats)?)
     }
 
-    fn maybe_derive_addresses(&mut self) {
+    /// Derives another batch if `hash` is a derived address within [`GAP_LIMIT`] of the horizon.
+    fn maybe_derive_addresses(&mut self, hash: &Hash) {
+        let Some(index) = self.derived_index.get(hash).copied() else {
+            return;
+        };
         let stats = self.database.get_stats().unwrap();
-        if stats.transaction_count > (stats.derivation_index as usize * DERIVATION_COUNT as usize) {
+        if index + GAP_LIMIT >= stats.derivation_index {
             let res = self.derive_addresses();
             if res.is_err() {
                 error!("Error deriving addresses: {res:?}");
@@ -568,7 +615,7 @@ impl<D: AddressCacheDatabase> AddressCacheInner<D> {
             e.insert(new_address);
             self.script_set.insert(hash);
         }
-        self.maybe_derive_addresses();
+        self.maybe_derive_addresses(&hash);
         // Confirmed transaction
         if height > 0 {
             return self.save_non_mempool_tx(
@@ -680,16 +727,18 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
             return Err(WatchOnlyError::DuplicateDescriptor(descriptor.to_string()));
         }
 
-        let address_descriptors =
-            derive_addresses_from_descriptor(descriptor, INDEX_INITIAL, DERIVATION_COUNT)
-                .map_err(WatchOnlyError::InvalidDescriptor)?;
+        let mut inner = self.inner.write().expect("poisoned lock");
 
-        for address in address_descriptors.clone() {
-            self.cache_address(address);
-        }
+        // Reach the same horizon as the descriptors already in the wallet
+        let mut stats = inner.database.get_stats()?;
+        let horizon = stats.derivation_index.max(DERIVATION_COUNT);
+        let address_descriptors = inner
+            .derive_range(&[descriptor.to_string()], INDEX_INITIAL, horizon)
+            .map_err(WatchOnlyError::InvalidDescriptor)?;
 
-        let inner = self.inner.write().expect("poisoned lock");
         inner.database.save_descriptor(descriptor)?;
+        stats.derivation_index = horizon;
+        inner.database.save_stats(&stats)?;
 
         Ok(address_descriptors)
     }
@@ -768,9 +817,9 @@ impl<D: AddressCacheDatabase> AddressCache<D> {
             .map_err(WatchOnlyError::DatabaseError)
     }
 
-    pub fn maybe_derive_addresses(&self) {
+    pub fn maybe_derive_addresses(&self, hash: &Hash) {
         let mut inner = self.inner.write().expect("poisoned lock");
-        inner.maybe_derive_addresses()
+        inner.maybe_derive_addresses(hash)
     }
 
     pub fn find_unconfirmed(&self) -> Result<Vec<Transaction>, WatchOnlyError<D::Error>> {
@@ -852,21 +901,30 @@ mod test {
     use core::str::FromStr;
 
     use bitcoin::Address;
+    use bitcoin::Amount;
     use bitcoin::OutPoint;
     use bitcoin::ScriptBuf;
+    use bitcoin::Transaction;
+    use bitcoin::TxOut;
     use bitcoin::Txid;
+    use bitcoin::absolute::LockTime;
     use bitcoin::address::NetworkChecked;
     use bitcoin::consensus::Decodable;
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::hashes::sha256;
+    use bitcoin::transaction::Version;
     use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
     use floresta_common::get_spk_hash;
     use floresta_common::prelude::*;
 
     use super::AddressCache;
     use super::memory_database::MemoryDatabase;
+    use crate::AddressCacheDatabase;
     use crate::DERIVATION_COUNT;
+    use crate::Stats;
+    use crate::descriptor::derive_addresses_from_descriptor;
+    use crate::kv_database::KvDatabase;
     use crate::merkle::MerkleProof;
 
     const BLOCK_FIRST_UTXO: &str = "00000020b4f594a390823c53557c5a449fa12413cbbae02be529c11c4eb320ff8e000000dd1211eb35ca09dc0ee519b0f79319fae6ed32c66f8bbf353c38513e2132c435474d81633c4b011e195a220002010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff0403edce01feffffff028df2052a0100000016001481113cad52683679a83e76f76f84a4cfe36f75010000000000000000776a24aa21a9ed67863b4f356b7b9f3aab7a2037615989ef844a0917fb0a1dcd6c23a383ee346b4c4fecc7daa2490047304402203768ff10a948a2dd1825cc5a3b0d336d819ea68b5711add1390b290bf3b1cba202201d15e73791b2df4c0904fc3f7c7b2f22ab77762958e9bc76c625138ad3a04d290100012000000000000000000000000000000000000000000000000000000000000000000000000002000000000101be07b18750559a418d144f1530be380aa5f28a68a0269d6b2d0e6ff3ff25f3200000000000feffffff0240420f00000000001600142b6a2924aa9b1b115d1ac3098b0ba0e6ed510f2a326f55d94c060000160014c2ed86a626ee74d854a12c9bb6a9b72a80c0ddc50247304402204c47f6783800831bd2c75f44d8430bf4d962175349dc04d690a617de6c1eaed502200ffe70188a6e5ad89871b2acb4d0f732c2256c7ed641d2934c6e84069c792abc012103ba174d9c66078cf813d0ac54f5b19b5fe75104596bdd6c1731d9436ad8776f41ecce0100";
@@ -1050,8 +1108,128 @@ mod test {
         cache.derive_addresses().unwrap();
         assert_eq!(
             cache.get_stats().unwrap().derivation_index,
-            DERIVATION_COUNT
+            2 * DERIVATION_COUNT
         );
+    }
+
+    const DESC_A: &str = "wpkh([54ff5a12/48h/1h/0h/2h]tpubDDw6pwZA3hYxcSN32q7a5ynsKmWr4BbkBNHydHPKkM4BZwUfiK7tQ26h7USm8kA1E2FvCy7f7Er7QXKF8RNptATywydARtzgrxuPDwyYv4x/0/*)";
+    const DESC_B: &str = "wpkh([bcf969c0/48h/1h/0h/2h]tpubDEFdgZdCPgQBTNtGj4h6AehK79Jm4LH54JrYBJjAtHMLEAth7LuY87awx9ZMiCURFzFWhxToRJK6xp39aqeJWrG5nuW3eBnXeMJcvDeDxfp/0/*)";
+
+    fn script_at(descriptor: &str, index: u32) -> ScriptBuf {
+        derive_addresses_from_descriptor(descriptor, index, 1).unwrap()[0].clone()
+    }
+
+    fn pay<D: AddressCacheDatabase>(cache: &AddressCache<D>, script: &ScriptBuf) {
+        let tx = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![TxOut {
+                value: Amount::from_sat(1000),
+                script_pubkey: script.clone(),
+            }],
+        };
+
+        cache.cache_transaction(
+            &tx,
+            1,
+            1000,
+            MerkleProof::default(),
+            0,
+            0,
+            false,
+            get_spk_hash(script),
+        );
+    }
+
+    fn derivation_index<D: AddressCacheDatabase>(cache: &AddressCache<D>) -> u32 {
+        cache.get_stats().unwrap().derivation_index
+    }
+
+    #[test]
+    fn test_push_descriptor_sets_derivation_index() {
+        let cache = get_test_cache();
+        cache.push_descriptor(DESC_A).unwrap();
+
+        assert_eq!(derivation_index(&cache), DERIVATION_COUNT);
+        assert!(cache.is_address_cached(&get_spk_hash(&script_at(DESC_A, 99))));
+        assert!(!cache.is_address_cached(&get_spk_hash(&script_at(DESC_A, 100))));
+    }
+
+    #[test]
+    fn test_payment_near_horizon_derives_more() {
+        let cache = get_test_cache();
+        cache.push_descriptor(DESC_A).unwrap();
+
+        pay(&cache, &script_at(DESC_A, 85));
+
+        assert_eq!(derivation_index(&cache), 2 * DERIVATION_COUNT);
+        assert!(cache.is_address_cached(&get_spk_hash(&script_at(DESC_A, 150))));
+    }
+
+    #[test]
+    fn test_payment_far_from_horizon_does_not_derive() {
+        let cache = get_test_cache();
+        cache.push_descriptor(DESC_A).unwrap();
+
+        pay(&cache, &script_at(DESC_A, 10));
+
+        assert_eq!(derivation_index(&cache), DERIVATION_COUNT);
+    }
+
+    #[test]
+    fn test_payment_to_unknown_address_does_not_derive() {
+        let cache = get_test_cache();
+        cache.push_descriptor(DESC_A).unwrap();
+
+        let (address, _) = get_test_address();
+        pay(&cache, &address.script_pubkey());
+
+        assert_eq!(derivation_index(&cache), DERIVATION_COUNT);
+    }
+
+    #[test]
+    fn test_late_descriptor_reaches_the_horizon() {
+        let cache = get_test_cache();
+        cache.push_descriptor(DESC_A).unwrap();
+        pay(&cache, &script_at(DESC_A, 85));
+        assert_eq!(derivation_index(&cache), 2 * DERIVATION_COUNT);
+
+        cache.push_descriptor(DESC_B).unwrap();
+
+        assert_eq!(derivation_index(&cache), 2 * DERIVATION_COUNT);
+        assert!(cache.is_address_cached(&get_spk_hash(&script_at(DESC_B, 199))));
+        assert!(!cache.is_address_cached(&get_spk_hash(&script_at(DESC_B, 200))));
+    }
+
+    #[test]
+    fn test_derivation_survives_reload() {
+        let datadir = std::env::temp_dir().join(format!("{}.floresta", rand::random::<u32>()));
+        let cache = AddressCache::new(KvDatabase::new(&datadir).unwrap(), ConsensusMerkle);
+        cache.push_descriptor(DESC_A).unwrap();
+        pay(&cache, &script_at(DESC_A, 85));
+        assert_eq!(derivation_index(&cache), 2 * DERIVATION_COUNT);
+        drop(cache);
+
+        let cache = AddressCache::new(KvDatabase::new(&datadir).unwrap(), ConsensusMerkle);
+        pay(&cache, &script_at(DESC_A, 190));
+        let index = derivation_index(&cache);
+        drop(cache);
+        std::fs::remove_dir_all(&datadir).unwrap();
+
+        assert_eq!(index, 3 * DERIVATION_COUNT);
+    }
+
+    #[test]
+    fn test_wallet_from_before_the_fix_is_migrated() {
+        // Such a wallet has 100 addresses derived and a `derivation_index` of 0
+        let database = MemoryDatabase::new();
+        database.save_descriptor(DESC_A).unwrap();
+        database.save_stats(&Stats::default()).unwrap();
+
+        let cache = AddressCache::new(database, ConsensusMerkle);
+
+        assert_eq!(derivation_index(&cache), DERIVATION_COUNT);
     }
 
     #[test]
