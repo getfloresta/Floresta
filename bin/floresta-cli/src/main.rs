@@ -11,6 +11,7 @@ use clap::Parser;
 use clap::Subcommand;
 use floresta_common::NetworkExt;
 use floresta_rpc::jsonrpc_client::Client;
+use floresta_rpc::jsonrpc_client::JsonRPCConfig;
 use floresta_rpc::rpc::FlorestaRPC;
 use floresta_rpc::rpc_types::AddNodeCommand;
 use floresta_rpc::rpc_types::RescanConfidence;
@@ -20,8 +21,12 @@ fn main() -> anyhow::Result<()> {
     // Parse command line arguments into a Cli struct
     let cli = Cli::parse();
 
-    // Create a new JSON-RPC client using the host from the CLI arguments
-    let client = Client::new(get_host(&cli));
+    // Create a new JSON-RPC client with the configured host and credentials
+    let client = Client::new_with_config(JsonRPCConfig {
+        url: get_host(&cli),
+        user: cli.rpc_user.clone(),
+        pass: cli.rpc_password.clone(),
+    });
 
     // Perform the requested RPC call and get the result
     let res = do_request(&cli, client)?;
