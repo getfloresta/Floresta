@@ -410,7 +410,12 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
     }
 
     pub async fn handle_node_request(&mut self, request: NodeRequest) -> Result<()> {
-        assert_eq!(self.state, State::Connected);
+        // Local shutdown is valid even while the remote handshake is pending.
+        // Other early node requests are a channel error: read_loop must disconnect
+        // and cancel its reader instead of panicking or sending premature data.
+        if self.state != State::Connected && !matches!(request, NodeRequest::Shutdown) {
+            return Err(PeerError::Channel);
+        }
         debug!("Handling node request: {request:?}");
         match request {
             NodeRequest::GetBlock(block_hashes, witness) => {
@@ -973,6 +978,7 @@ mod tests {
     use bitcoin::p2p::address::AddrV2;
     use bitcoin::p2p::message::NetworkMessage;
     use floresta_mempool::Mempool;
+    use tokio::io::AsyncWrite;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::UnboundedSender;
@@ -988,17 +994,19 @@ mod tests {
     use crate::node::NodeRequest;
     use crate::p2p_wire::peer::Peer;
     use crate::p2p_wire::peer::PeerError;
+    use crate::p2p_wire::peer::PeerMessages;
     use crate::p2p_wire::peer::PeerTimeouts;
     use crate::p2p_wire::peer::ReaderMessage;
     use crate::p2p_wire::peer::State;
     use crate::p2p_wire::peer::peer_utils;
+    use crate::p2p_wire::transport::ReadTransport;
     use crate::p2p_wire::transport::WriteTransport;
     use crate::p2p_wire::transport::test_transport::Writer;
 
     /// All the data needed to run a test.
-    struct SetupData {
+    struct SetupData<W: AsyncWrite + Unpin + Send + Sync = Writer> {
         /// The actual peer, it should be spawned and the future must not be dropped.
-        peer: Peer<Writer>,
+        peer: Peer<W>,
 
         /// This is used to send a message to a peer, mimicking a real network message.
         actor_sender: UnboundedSender<ReaderMessage>,
@@ -1022,6 +1030,13 @@ mod tests {
     /// Tests use millisecond-scale deadlines so the real code paths run against the real
     /// clock in well under a second.
     fn create_peer_with(timeouts: PeerTimeouts) -> SetupData {
+        create_peer_with_writer(timeouts, Writer)
+    }
+
+    fn create_peer_with_writer<W: AsyncWrite + Unpin + Send + Sync>(
+        timeouts: PeerTimeouts,
+        writer: W,
+    ) -> SetupData<W> {
         let (node_tx, node_receiver) = unbounded_channel();
         let (node_sender, node_requests) = unbounded_channel();
         let (actor_sender, actor_receiver) = unbounded_channel();
@@ -1038,7 +1053,7 @@ mod tests {
         let peer = Peer {
             address,
             our_best_block: 0,
-            writer: WriteTransport::V1(Writer, Network::Regtest),
+            writer: WriteTransport::V1(writer, Network::Regtest),
             state: State::Connected,
             kind: ConnectionKind::Manual,
             id: 0,
@@ -1212,6 +1227,141 @@ mod tests {
         drop(actor_sender);
         drop(node_receiver);
         drop(node_sender);
+    }
+
+    async fn check_node_request(state: State, shutdown: bool) {
+        let connected = state == State::Connected;
+        let (writer, remote) = tokio::io::duplex(4096);
+        let SetupData { mut peer, .. } =
+            create_peer_with_writer(PeerTimeouts::default(), writer);
+        peer.state = state;
+        let request = if shutdown {
+            NodeRequest::Shutdown
+        } else {
+            NodeRequest::GetAddresses
+        };
+        let result = peer.handle_node_request(request).await;
+        let mut remote = ReadTransport::V1(remote, Network::Regtest);
+        if shutdown {
+            result.expect("shutdown must work in every handshake state");
+            assert!(peer.shutdown);
+            assert!(remote.read_message().await.is_err(), "writer must be closed");
+        } else if connected {
+            result.expect("connected requests must still work");
+            assert_eq!(
+                remote.read_message().await.unwrap(),
+                NetworkMessage::GetAddr
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "pre-handshake data request must return a controlled error"
+            );
+            assert_ne!(peer.state, State::Connected);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), remote.read_message())
+                    .await
+                    .is_err(),
+                "data must not be written before handshake completion"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pre_handshake_sent_version_shutdown() {
+        check_node_request(State::SentVersion(Instant::now()), true).await;
+    }
+
+    #[tokio::test]
+    async fn test_pre_handshake_sent_verack_shutdown() {
+        check_node_request(State::SentVerack, true).await;
+    }
+
+    #[tokio::test]
+    async fn test_pre_handshake_sent_version_request() {
+        check_node_request(State::SentVersion(Instant::now()), false).await;
+    }
+
+    #[tokio::test]
+    async fn test_pre_handshake_sent_verack_request() {
+        check_node_request(State::SentVerack, false).await;
+    }
+
+    #[tokio::test]
+    async fn test_connected_node_request() {
+        check_node_request(State::Connected, false).await;
+    }
+
+    #[tokio::test]
+    async fn test_connected_shutdown() {
+        check_node_request(State::Connected, true).await;
+    }
+
+    #[tokio::test]
+    async fn test_pre_handshake_loop_cleanup() {
+        for sent_verack in [false, true] {
+            for shutdown in [false, true] {
+                let (writer, remote) = tokio::io::duplex(4096);
+                let SetupData {
+                    mut peer,
+                    actor_sender,
+                    node_sender,
+                    mut node_receiver,
+                } = create_peer_with_writer(PeerTimeouts::default(), writer);
+                let address = peer.address.clone();
+                let (cancel_sender, cancel_receiver) = oneshot::channel();
+                peer.cancellation_sender = Some(cancel_sender);
+                let task = tokio::spawn(peer.read_loop());
+                let mut remote = ReadTransport::V1(remote, Network::Regtest);
+                assert!(matches!(
+                    remote.read_message().await.unwrap(),
+                    NetworkMessage::Version(_)
+                ));
+                if sent_verack {
+                    actor_sender
+                        .send(ReaderMessage::Message(
+                            peer_utils::build_version_message(
+                                "/Mock-Peer:0.0.0/".into(),
+                                0,
+                                &address,
+                            ),
+                            Instant::now(),
+                        ))
+                        .unwrap();
+                    // Reading verack proves the real loop reached SentVerack; never send our verack.
+                    loop {
+                        if remote.read_message().await.unwrap() == NetworkMessage::Verack {
+                            break;
+                        }
+                    }
+                }
+                node_sender
+                    .send(if shutdown {
+                        NodeRequest::Shutdown
+                    } else {
+                        NodeRequest::GetAddresses
+                    })
+                    .unwrap();
+                let result = tokio::time::timeout(Duration::from_secs(5), task)
+                    .await
+                    .expect("peer task must terminate promptly")
+                    .expect("peer task must not panic");
+                assert_eq!(result.is_ok(), shutdown);
+                // The spawning caller drops the returned peer after a successful shutdown.
+                drop(result);
+                assert!(matches!(
+                    node_receiver.recv().await,
+                    Some(NodeNotification::FromPeer(0, PeerMessages::Disconnected(0), _))
+                ));
+                cancel_receiver.await.expect("reader cancellation must be signalled");
+                assert!(node_sender.is_closed(), "request channel must be dropped");
+                assert!(actor_sender.is_closed(), "reader channel must be dropped");
+                assert!(
+                    remote.read_message().await.is_err(),
+                    "writer must close on both exit paths"
+                );
+            }
+        }
     }
 
     #[test]
