@@ -263,13 +263,6 @@ class FlorestaTestFramework:
 
         raise RuntimeError(f"Error starting node '{node.variant}': {error}")
 
-    def stop_node(self, index: int):
-        """
-        Stop a node given an index on self._tests.
-        """
-        node = self.get_node(index)
-        return node.stop()
-
     def stop(self):
         """
         Stop all nodes.
