@@ -53,6 +53,8 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
+use super::auth::Auth;
+use super::auth::auth_middleware;
 use super::res::GetRawTransactionRes;
 use super::res::jsonrpc_interface::JsonRpcError;
 use crate::json_rpc::request::RpcRequest;
@@ -671,6 +673,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         user_agent: String,
         proxy: Option<SocketAddr>,
         default_connection_is_v2: bool,
+        credentials: Arc<Auth>,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", network.default_rpc_port())
@@ -701,6 +704,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     .allow_private_network(true)
                     .allow_methods([Method::POST, Method::HEAD]),
             )
+            .layer(axum::middleware::from_fn_with_state(
+                credentials,
+                auth_middleware,
+            ))
             .with_state(Arc::new(Self {
                 chain,
                 wallet,
@@ -716,9 +723,12 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 default_connection_is_v2,
             }));
 
-        axum::serve(listener, router)
-            .await
-            .expect("failed to start rpc server");
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("failed to start rpc server");
     }
 }
 
