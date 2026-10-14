@@ -9,6 +9,7 @@ use floresta_chain::BlockValidationErrors;
 use floresta_chain::BlockchainError;
 use floresta_chain::ChainBackend;
 use floresta_chain::CompactLeafData;
+use floresta_chain::extensions::BlockExt;
 use floresta_chain::proof_util;
 use floresta_chain::proof_util::UtreexoLeafError;
 use floresta_common::service_flags;
@@ -25,6 +26,8 @@ use crate::block_proof::Bitmap;
 use crate::block_proof::UtreexoProof;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
+use crate::node_handle::NodeResponse;
+use crate::node_handle::UserRequest;
 use crate::p2p_wire::error::WireError;
 
 /// The leaf data, utreexo proof and the peer that sent them.
@@ -109,6 +112,86 @@ where
         Ok(())
     }
 
+    /// Validates the structure of the block using
+    /// [`Block::check_block_structure`].
+    ///
+    /// If validation fails, [`Self::handle_block_error`] is called to handle the
+    /// error and apply the appropriate network consensus.
+    ///
+    /// [`Block::check_block_structure`]: floresta_chain::extensions::BlockExt::check_block_structure
+    pub(crate) fn enforce_block_structure_check(
+        &mut self,
+        block: &Block,
+        peer: PeerId,
+    ) -> Result<(), WireError> {
+        let Err(e) = block.check_block_structure() else {
+            return Ok(());
+        };
+
+        self.handle_block_error(e.into(), block.clone(), peer, None)
+    }
+
+    /// Enforces the block structure consensus with [`Self::enforce_block_structure_check`],
+    /// banning the peer if the block is bad. Returns `true` if the block was bad and
+    /// shouldn't be processed any further: if it was a user request, we retry it with
+    /// another peer, keeping the request open, otherwise we return a WireError.
+    ///
+    /// When no other peer is available to retry with, the user request is failed with
+    /// a `None` block instead of being left open forever, since user requests have no
+    /// timeout.
+    pub(crate) fn enforce_block_structure_check_and_retry_user_request(
+        &mut self,
+        block: &Block,
+        peer: PeerId,
+    ) -> Result<bool, WireError> {
+        let Err(e) = self.enforce_block_structure_check(block, peer) else {
+            return Ok(false);
+        };
+
+        let block_hash = block.block_hash();
+
+        let is_user_request = self
+            .inflight_user_requests
+            .contains_key(&UserRequest::Block(block_hash));
+
+        if is_user_request {
+            // Retry the block elsewhere; the user request stays open
+            // and the inflight entry re-arms the timeout machinery.
+            match self.send_to_fast_peer(
+                NodeRequest::GetBlock(vec![block_hash]),
+                ServiceFlags::NETWORK,
+            ) {
+                Ok(new_peer) => {
+                    // We may end up sending the request to the same peer that
+                    // sent the mutated block, so we only check this to avoid an
+                    // infinite loop.
+                    if new_peer != peer {
+                        self.inflight.insert(
+                            InflightRequests::Blocks(block_hash),
+                            (new_peer, Instant::now()),
+                        );
+                        return Ok(true);
+                    }
+                }
+                Err(err) => warn!("couldn't retry block {block_hash} with another peer: {err}"),
+            }
+
+            // We couldn't retry the request with the other peers, so we respond
+            // to the user with `None`.
+            if let Some(request) = self
+                .inflight_user_requests
+                .remove(&UserRequest::Block(block_hash))
+            {
+                request
+                    .2
+                    .send(NodeResponse::Block(None))
+                    .map_err(|_| WireError::ResponseSendError)?;
+            }
+        }
+
+        Err(e)
+    }
+
     pub(crate) fn request_block_proof(
         &mut self,
         block: Block,
@@ -116,6 +199,12 @@ where
     ) -> Result<(), WireError> {
         let block_hash = block.block_hash();
         self.inflight.remove(&InflightRequests::Blocks(block_hash));
+
+        // Enforce the block structure consensus (which may ban the peer) and check
+        // whether there is an outstanding user request before proceeding.
+        if self.enforce_block_structure_check_and_retry_user_request(&block, peer)? {
+            return Ok(());
+        }
 
         // Reply and return early if it's a user-requested block. Else continue handling it.
         let Some(block) = self.check_is_user_block_and_reply(block)? else {
