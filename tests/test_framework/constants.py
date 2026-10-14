@@ -50,6 +50,7 @@ NO_PARAM_METHODS = [
     "getbestblockhash",
     "getblockchaininfo",
     "getblockcount",
+    "getchaintips",
     "getroots",
     "getrpcinfo",
     "uptime",
