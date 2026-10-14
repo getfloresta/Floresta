@@ -27,7 +27,7 @@ async fn main() {
     // the block data after we validated it. This saves a lot of space, but it means that
     // we can't serve blocks to other nodes or rescan the blockchain without downloading
     // it again.
-    let chain_store_config = FlatChainStoreConfig::new(DATA_DIR);
+    let chain_store_config = FlatChainStoreConfig::new_with_path(DATA_DIR);
     let chain_store =
         FlatChainStore::new(chain_store_config).expect("failed to open the blockchain database");
 

@@ -354,7 +354,7 @@ mod utreexo_proof_tests {
             assume_valid: AssumeValidArg,
         ) -> ChainState<FlatChainStore> {
             let datadir = format!("./tmp-db/{}.sync_node", rand::random::<u32>());
-            let config = FlatChainStoreConfig::new(datadir);
+            let config = FlatChainStoreConfig::new_with_path(datadir);
             let store = FlatChainStore::new(config).expect("Failed to create chain store");
             ChainState::open(store, network, assume_valid).expect("Failed to open chain state")
         }

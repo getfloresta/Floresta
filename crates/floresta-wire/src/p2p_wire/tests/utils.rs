@@ -345,7 +345,8 @@ where
     let datadir = args.datadir;
 
     // Create `ChainState` and add headers to it
-    let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(datadir.clone())).unwrap();
+    let chainstore =
+        FlatChainStore::new(FlatChainStoreConfig::new_with_path(datadir.clone())).unwrap();
     let chain = Arc::new(ChainState::open(chainstore, net, AssumeValidArg::Disabled).unwrap());
 
     let headers = match net {
