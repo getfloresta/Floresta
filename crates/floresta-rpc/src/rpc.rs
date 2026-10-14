@@ -5,6 +5,7 @@ use core::fmt::Debug;
 use bitcoin::BlockHash;
 use bitcoin::Txid;
 use corepc_types::v29::GetTxOut;
+use corepc_types::v30::GetAddedNodeInfo;
 use corepc_types::v30::GetAddrManInfo;
 use corepc_types::v30::GetBlockchainInfo;
 use corepc_types::v30::GetDeploymentInfo;
@@ -161,6 +162,9 @@ pub trait FlorestaRPC {
     fn ping(&self) -> Result<()>;
     /// Returns address manager statistics broken down by network.
     fn get_addrman_info(&self) -> Result<GetAddrManInfo>;
+
+    #[doc = include_str!("../../../doc/rpc/getaddednodeinfo.md")]
+    fn get_added_node_info(&self, node: Option<String>) -> Result<GetAddedNodeInfo>;
 }
 
 /// Since the workflow for jsonrpc is the same for all methods, we can implement a trait
@@ -354,6 +358,13 @@ impl<T: JsonRPCClient> FlorestaRPC for T {
 
     fn get_addrman_info(&self) -> Result<GetAddrManInfo> {
         self.call("getaddrmaninfo", &[])
+    }
+
+    fn get_added_node_info(&self, node: Option<String>) -> Result<GetAddedNodeInfo> {
+        match node {
+            Some(n) => self.call("getaddednodeinfo", &[Value::String(n)]),
+            None => self.call("getaddednodeinfo", &[]),
+        }
     }
 }
 
