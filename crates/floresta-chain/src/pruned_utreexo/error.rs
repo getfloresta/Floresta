@@ -148,6 +148,7 @@ pub enum BlockValidationErrors {
     UnspendableUTXO,
     BIP94TimeWarp,
     DuplicateInput,
+    BadRelativeLockTime,
 }
 
 // Helpful macro for generating a TransactionError
@@ -247,6 +248,9 @@ impl Display for BlockValidationErrors {
             }
             Self::DuplicateInput => {
                 write!(f, "This transaction has duplicate inputs")
+            }
+            Self::BadRelativeLockTime => {
+                write!(f, "Input's relative lock-time (BIP68) has not matured yet")
             }
         }
     }
