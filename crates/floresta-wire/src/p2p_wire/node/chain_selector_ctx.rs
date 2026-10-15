@@ -645,8 +645,17 @@ where
                         leaves: assume_utreexo.leaves,
                         roots: assume_utreexo.roots.clone(),
                     };
-                    self.chain
+                    let assumed = self
+                        .chain
                         .mark_chain_as_assumed(acc, assume_utreexo.block_hash)?;
+
+                    if !assumed {
+                        warn!(
+                            "Block {} is not in our best chain, validating without assumeutreexo",
+                            assume_utreexo.block_hash
+                        );
+                    }
+
                     return Ok(());
                 }
 
