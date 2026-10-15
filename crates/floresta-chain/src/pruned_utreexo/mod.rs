@@ -227,6 +227,8 @@ pub trait UpdatableChainstate {
     ///
     /// This mimics the behaviour of checking every block before this block, and continues
     /// from this point
+    ///
+    /// Returns `false`, and changes nothing, if `tip` is not in our best chain.
     fn mark_chain_as_assumed(&self, acc: Stump, tip: BlockHash) -> Result<bool, BlockchainError>;
     /// Returns the current accumulator
     fn get_acc(&self) -> Stump;
