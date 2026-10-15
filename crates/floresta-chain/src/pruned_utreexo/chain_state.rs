@@ -1673,6 +1673,7 @@ mod test {
     use crate::FlatChainStoreConfig;
     use crate::extensions::WorkExt;
     use crate::prelude::HashMap;
+    use crate::pruned_utreexo::IBDState;
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::error::BlockValidationErrors;
     use crate::pruned_utreexo::utxo_data::UtxoData;
@@ -2657,6 +2658,49 @@ mod test {
     }
 
     #[test]
+    fn assuming_a_chain_marks_the_blocks_we_did_not_validate() {
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+        let chain_blocks: Vec<Block> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex(s).unwrap())
+            .collect();
+
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded, None);
+
+        for block in &chain_blocks {
+            chain.accept_header(block.header).unwrap();
+        }
+
+        let acc = Stump {
+            leaves: 42,
+            roots: vec![BitcoinNodeHash::Some([1; 32])],
+        };
+        chain
+            .mark_chain_as_assumed(acc, chain_blocks[9].block_hash())
+            .unwrap();
+
+        // The assumed block is the only one we hold an accumulator for, so it is the one block
+        // of the range that is `FullyValid`.
+        let assumed = chain.get_block_hash(10).unwrap();
+        assert!(matches!(
+            chain.get_disk_block_header(&assumed).unwrap(),
+            DiskBlockHeader::FullyValid(_, 10)
+        ));
+
+        // We never validated the blocks below it, so none of them may claim we did.
+        for height in 1..10 {
+            let hash = chain.get_block_hash(height).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+
+            assert!(
+                matches!(header, DiskBlockHeader::AssumedValid(_, _)),
+                "block {height} is assumed, not validated, but is stored as {header:?}",
+            );
+        }
+    }
+
+    #[test]
     fn an_assumed_chain_finds_its_accumulator_again_after_a_restart() {
         let json_blocks = include_str!("../../testdata/test_reorg.json");
         let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
@@ -2721,5 +2765,133 @@ mod test {
             acc,
             "a restart must not throw the assumed accumulator away",
         );
+    }
+
+    #[test]
+    fn a_reorg_into_the_assumed_range_drops_the_assumption() {
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        let parse_blocks = |blocks: &[&str]| {
+            blocks
+                .iter()
+                .map(|s| deserialize_hex(s).unwrap())
+                .collect::<Vec<Block>>()
+        };
+
+        let short_chain = parse_blocks(&blocks[0]);
+        let long_chain = parse_blocks(&blocks[1]);
+
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded, None);
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+        }
+
+        // Assume the chain up to block 10, the way a node with `assumeutreexo` starts.
+        let acc = Stump {
+            leaves: 42,
+            roots: vec![BitcoinNodeHash::Some([1; 32])],
+        };
+        chain
+            .mark_chain_as_assumed(acc.clone(), short_chain[9].block_hash())
+            .unwrap();
+
+        assert_eq!(chain.get_validation_index().unwrap(), 10);
+        assert_eq!(chain.acc(), acc);
+
+        // The long chain forks at block 5, inside the assumed range. That accumulator describes
+        // a chain that is not the best one anymore, and we validated nothing below block 10, so
+        // the assumption is void.
+        for block in &long_chain {
+            chain.accept_header(block.header).unwrap();
+        }
+
+        // We follow the new chain, but we validate it from genesis with the empty accumulator.
+        assert_eq!(
+            chain.get_best_block().unwrap().1,
+            long_chain.last().unwrap().block_hash(),
+            "the new chain has more work, so it has to win",
+        );
+        assert_eq!(chain.get_validation_index().unwrap(), 0);
+        assert_eq!(
+            chain.acc(),
+            Stump::new(),
+            "the assumed accumulator belongs to a chain we abandoned",
+        );
+        assert_eq!(chain.ibd_state(), IBDState::DownloadingBlocks);
+
+        // No block of the new chain may claim to be valid or assumed, so the node downloads and
+        // validates every one of them again.
+        for height in 1..=chain.get_best_block().unwrap().0 {
+            let hash = chain.get_block_hash(height).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+
+            assert!(
+                matches!(header, DiskBlockHeader::HeadersOnly(_, _)),
+                "block {height} has to go back to `HeadersOnly`, but is stored as {header:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn an_abandoned_assumption_is_not_assumed_again() {
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+
+        let parse_blocks = |blocks: &[&str]| {
+            blocks
+                .iter()
+                .map(|s| deserialize_hex(s).unwrap())
+                .collect::<Vec<Block>>()
+        };
+
+        let short_chain = parse_blocks(&blocks[0]);
+        let long_chain = parse_blocks(&blocks[1]);
+
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Hardcoded, None);
+
+        for block in &short_chain {
+            chain.accept_header(block.header).unwrap();
+        }
+
+        let acc = Stump {
+            leaves: 42,
+            roots: vec![BitcoinNodeHash::Some([1; 32])],
+        };
+        let assumed_hash = short_chain[9].block_hash();
+        chain
+            .mark_chain_as_assumed(acc.clone(), assumed_hash)
+            .unwrap();
+
+        // The long chain forks at block 5, so the reorg drops the assumption.
+        for block in &long_chain {
+            chain.accept_header(block.header).unwrap();
+        }
+
+        assert_eq!(chain.get_validation_index().unwrap(), 0);
+
+        // `ChainSelector` assumes the hardcoded block whenever the validation index is below it,
+        // and it now is. But that block is on the branch we left, so the assumption must not
+        // come back.
+        let assumed = chain.mark_chain_as_assumed(acc, assumed_hash).unwrap();
+
+        assert!(!assumed, "a block outside the best chain can't be assumed");
+        assert_eq!(
+            chain.get_best_block().unwrap().1,
+            long_chain.last().unwrap().block_hash(),
+        );
+        assert_eq!(chain.get_validation_index().unwrap(), 0);
+        assert_eq!(chain.acc(), Stump::new());
+
+        for height in 1..=chain.get_best_block().unwrap().0 {
+            let hash = chain.get_block_hash(height).unwrap();
+            let header = chain.get_disk_block_header(&hash).unwrap();
+
+            assert!(
+                matches!(header, DiskBlockHeader::HeadersOnly(_, _)),
+                "block {height} must stay `HeadersOnly`, but is stored as {header:?}",
+            );
+        }
     }
 }
