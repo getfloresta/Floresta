@@ -17,8 +17,8 @@ use std::sync::RwLockWriteGuard;
 use bitcoin::Network;
 use bitcoin::ScriptBuf;
 use bitcoin::hashes::sha256;
+use floresta_chain::BlockConnected;
 use floresta_chain::BlockConsumer;
-use floresta_chain::UtxoData;
 pub use floresta_common::MerkleBackend;
 use floresta_common::get_spk_hash;
 
@@ -578,17 +578,8 @@ impl<D: AddressCacheDatabase + Sync + Send + 'static> BlockConsumer for AddressC
 where
     WatchOnlyError: From<<D as AddressCacheDatabase>::Error>,
 {
-    fn wants_spent_utxos(&self) -> bool {
-        false
-    }
-
-    fn on_block(
-        &self,
-        block: &Block,
-        height: u32,
-        _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
-    ) {
-        if let Err(err) = self.block_process(block, height) {
+    fn on_connected(&self, evt: BlockConnected<'_>) {
+        if let Err(err) = self.block_process(evt.block, evt.height) {
             error!("Error processing block: {err:?}");
         }
     }

@@ -6,21 +6,18 @@
 //! is useful for indexing metaprotocols, tracking recent fee rates, and detecting new spends from
 //! wallets with unknown balances.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use bitcoin::Block;
 use bitcoin::Network;
-use bitcoin::OutPoint;
 use floresta::chain::AssumeValidArg;
+use floresta::chain::BlockConnected;
 use floresta::chain::BlockConsumer;
 use floresta::chain::BlockchainInterface;
 use floresta::chain::ChainState;
 use floresta::chain::FlatChainStore;
 use floresta::chain::FlatChainStoreConfig;
-use floresta::chain::UtxoData;
 
 const DATA_DIR: &str = "./tmp-db";
 
@@ -40,19 +37,13 @@ impl FeeRateIndexer {
 
 // Implement BlockConsumer so we can subscribe on `ChainState`
 impl BlockConsumer for FeeRateIndexer {
-    fn wants_spent_utxos(&self) -> bool {
-        true
-    }
-
-    fn on_block(
-        &self,
-        block: &Block,
-        _height: u32,
-        spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
-    ) {
+    fn on_connected(&self, evt: BlockConnected<'_>) {
         // Calculate minimum fee rate, ignoring coinbase transaction
-        let spent_utxos = spent_utxos.expect("Safe to unwrap because wants_spent_utxos()");
-        let min_fee_rate = block
+        let spent_utxos = evt
+            .spent_utxos
+            .expect("ChainState always provides spent UTXOs to subscribers");
+        let min_fee_rate = evt
+            .block
             .txdata
             .iter()
             .skip(1)

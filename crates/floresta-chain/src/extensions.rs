@@ -7,6 +7,7 @@ use core::fmt::Formatter;
 
 use bitcoin::Block;
 use bitcoin::BlockHash;
+use bitcoin::FeeRate;
 use bitcoin::Work;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::serialize_hex;
@@ -17,8 +18,12 @@ use floresta_common::prelude::String;
 use floresta_common::prelude::Vec;
 
 use crate::BlockchainInterface;
+use crate::pruned_utreexo::consensus::BlockTxStats;
 
 const MEDIAN_TIME_PAST_BLOCK_COUNT: usize = 11;
+
+// Scale factor: sat/kwu = sat * 1000 / total_weight
+const WEIGHT_UNITS_PER_KILO: u64 = 1000;
 
 pub trait Bip30UnspendableExt {
     /// Returns true if the coinbase output in this block is BIP-30 unspendable.
@@ -37,6 +42,22 @@ impl Bip30UnspendableExt for Block {
             91812 => self.block_hash() == bhash_91812,
             _ => false,
         }
+    }
+}
+
+impl BlockTxStats {
+    /// Average fee rate of this block in FeeRate (sat/kwu)
+    pub fn avg_fee_rate(&self) -> Option<FeeRate> {
+        if self.total_weight == 0 {
+            return None;
+        }
+
+        let kwu = self
+            .total_fees
+            .to_sat() // total sat
+            .saturating_mul(WEIGHT_UNITS_PER_KILO) // sat/kwu = sat * 1000 / weight
+            / self.total_weight;
+        Some(FeeRate::from_sat_per_kwu(kwu))
     }
 }
 
@@ -310,6 +331,7 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use bitcoin::Amount;
     use bitcoin::Block;
     use bitcoin::BlockHash;
     use bitcoin::OutPoint;
@@ -1006,5 +1028,21 @@ mod tests {
             work.to_string_hex(),
             "0000000300000001000000000000000200000000000000030000000000000004"
         );
+    }
+
+    #[test]
+    fn test_block_tx_stats_avg_fee_rate() {
+        let stats = BlockTxStats {
+            total_fees: Amount::from_sat(20),
+            total_weight: 1000,
+        };
+        assert_eq!(stats.avg_fee_rate(), Some(FeeRate::from_sat_per_kwu(20)));
+
+        // Coinbase-only block has no fee signal; it is skipped from estimation.
+        let empty = BlockTxStats {
+            total_fees: Amount::from_sat(20),
+            total_weight: 0,
+        };
+        assert_eq!(empty.avg_fee_rate(), None);
     }
 }
