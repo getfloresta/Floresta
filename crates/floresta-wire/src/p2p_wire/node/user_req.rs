@@ -5,7 +5,6 @@ use std::time::Instant;
 use bitcoin::Block;
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ChainBackend;
-use floresta_common::try_and_log;
 use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::info;
@@ -45,7 +44,9 @@ where
         }
 
         let peers = peers.into_iter().flatten().collect();
-        try_and_log!(responder.send(NodeResponse::GetPeerInfo(peers)));
+        if responder.send(NodeResponse::GetPeerInfo(peers)).is_err() {
+            debug!("user request was cancelled before the response could be sent");
+        }
     }
 
     /// Actually perform the user request
@@ -73,7 +74,9 @@ where
 
             UserRequest::Ping => {
                 self.broadcast_to_peers(NodeRequest::Ping);
-                try_and_log!(responder.send(NodeResponse::Ping(true)));
+                if responder.send(NodeResponse::Ping(true)).is_err() {
+                    debug!("user request was cancelled before the response could be sent");
+                }
 
                 return;
             }
@@ -95,7 +98,12 @@ where
 
             UserRequest::GetConnectionCount => {
                 let count = self.connected_peers();
-                try_and_log!(responder.send(NodeResponse::GetConnectionCount(count)));
+                if responder
+                    .send(NodeResponse::GetConnectionCount(count))
+                    .is_err()
+                {
+                    debug!("user request was cancelled before the response could be sent");
+                }
                 return;
             }
 
@@ -166,7 +174,9 @@ where
 
             UserRequest::GetAddrManInfo => {
                 let info = self.address_man.get_connection_stats();
-                try_and_log!(responder.send(NodeResponse::GetAddrManInfo(info)));
+                if responder.send(NodeResponse::GetAddrManInfo(info)).is_err() {
+                    debug!("user request was cancelled before the response could be sent");
+                }
                 return;
             }
 
