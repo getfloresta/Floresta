@@ -134,6 +134,7 @@ pub enum BlockValidationErrors {
     TooManySigops,
     TooManyCoins,
     NotEnoughPow,
+    BadDiffBits,
     BadMerkleRoot,
     BadWitnessCommitment,
     NotEnoughMoney,
@@ -210,6 +211,9 @@ impl Display for BlockValidationErrors {
             }
             Self::NotEnoughPow => {
                 write!(f, "This block doesn't have enough proof-of-work")
+            }
+            Self::BadDiffBits => {
+                write!(f, "The header's nBits differ from the required difficulty")
             }
             Self::BadMerkleRoot => write!(f, "Wrong merkle root"),
             Self::BadWitnessCommitment => write!(f, "Wrong witness commitment"),

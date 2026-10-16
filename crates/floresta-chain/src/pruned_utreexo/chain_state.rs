@@ -222,25 +222,27 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     }
 
     fn validate_header(&self, block_header: &BlockHeader) -> Result<BlockHash, BlockchainError> {
+        // As in Core, the header's own proof of work comes first: it is the cheap check, and the
+        // ones below read the chain.
+        let block_hash = block_header
+            .validate_pow(block_header.target())
+            .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
+
         let prev_block = self.get_disk_block_header(&block_header.prev_blockhash)?;
         let height = prev_block
             .height()
             .ok_or(BlockValidationErrors::BlockExtendsAnOrphanChain)?
             + 1;
 
-        // Check pow
+        // Like Core's `bad-diffbits`, the compact bits must match exactly: a harder target
+        // than the required one is invalid too.
         let expected_target = self.get_next_required_work(&prev_block, height, block_header)?;
-
-        let actual_target = block_header.target();
-        if actual_target > expected_target {
-            Err(BlockValidationErrors::NotEnoughPow)?;
+        if block_header.bits != expected_target.to_compact_lossy() {
+            Err(BlockValidationErrors::BadDiffBits)?;
         }
 
         self.check_bip94_block(block_header, height)?;
 
-        let block_hash = block_header
-            .validate_pow(actual_target)
-            .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
         Ok(block_hash)
     }
 
@@ -1006,12 +1008,13 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         // Regtest don't have retarget
         if !params.params.no_pow_retargeting {
-            // First block in this epoch
-            let first_block = self.get_header_by_height(next_height - 2016)?;
-            let last_block = self.get_header_by_height(next_height - 1)?;
+            // Core reads both ends of the epoch from the new header's own ancestors
+            // (`pindexLast->GetAncestor`), and the parent may be on a fork.
+            let first_block =
+                self.get_ancestor_at_height(last_block, next_height - 1, next_height - 2016)?;
 
             let target =
-                Consensus::calc_next_work_required(&last_block, &first_block, self.chain_params());
+                Consensus::calc_next_work_required(last_block, &first_block, self.chain_params());
 
             if target < params.params.max_attainable_target {
                 return Ok(target);
@@ -1021,6 +1024,28 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         }
 
         Ok(last_block.target())
+    }
+
+    /// Returns the ancestor of `header` at `target_height`, where `header` is at `header_height`.
+    ///
+    /// The height index only knows the best chain, so it is used when `header` is on it. Otherwise
+    /// this follows `prev_blockhash`, which is also right for a header on a fork.
+    fn get_ancestor_at_height(
+        &self,
+        header: &BlockHeader,
+        header_height: u32,
+        target_height: u32,
+    ) -> Result<BlockHeader, BlockchainError> {
+        if self.get_block_hash(header_height).ok() == Some(header.block_hash()) {
+            return Ok(*self.get_header_by_height(target_height)?);
+        }
+
+        let mut ancestor = *header;
+        for _ in target_height..header_height {
+            ancestor = *self.get_disk_block_header(&ancestor.prev_blockhash)?;
+        }
+
+        Ok(ancestor)
     }
 
     /// Check timestamp against prev for difficulty-adjustment blocks to prevent timewarp attacks.
@@ -1034,7 +1059,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             return Ok(());
         }
 
-        let prev_header = self.get_header_by_height(height - 1)?;
+        let prev_header = self.get_disk_block_header(&block.prev_blockhash)?;
         Ok(Consensus::check_bip94_time(block, &prev_header)?)
     }
 
@@ -2234,6 +2259,173 @@ mod test {
         assert_eq!(
             required_bits(&chain, &last, 4, last.time + 10 * 60),
             TESTNET_POW_LIMIT_BITS
+        );
+    }
+
+    /// A chain of `network` with `2015` headers at the pow limit, and a header at height 2015
+    /// that is a sibling of the best tip, stored as a fork and mined an hour earlier.
+    fn chain_with_fork_at_height_2015(
+        network: Network,
+    ) -> (ChainState<FlatChainStore>, Vec<BlockHeader>, BlockHeader) {
+        let chain = setup_test_chain(network, AssumeValidArg::Disabled, None);
+        let headers = store_headers_with_bits(&chain, network, &[TESTNET_POW_LIMIT_BITS; 2015]);
+
+        let fork = BlockHeader {
+            time: headers[2015].time - 3600,
+            nonce: 1,
+            ..headers[2015]
+        };
+        write_lock!(chain)
+            .chainstore
+            .save_header(&DiskBlockHeader::InFork(fork, 2015))
+            .unwrap();
+
+        (chain, headers, fork)
+    }
+
+    #[test]
+    fn retarget_is_computed_from_the_parents_own_ancestors() {
+        let (chain, headers, fork) = chain_with_fork_at_height_2015(Network::Testnet);
+        let child = BlockHeader {
+            prev_blockhash: fork.block_hash(),
+            time: fork.time + 600,
+            ..fork
+        };
+
+        // Core: `pindexLast->GetAncestor`, so the epoch ends at the fork, not at the best tip
+        let on_fork = Consensus::calc_next_work_required(&fork, &headers[0], chain.chain_params());
+        let on_best =
+            Consensus::calc_next_work_required(&headers[2015], &headers[0], chain.chain_params());
+        assert_ne!(on_fork, on_best);
+
+        assert_eq!(
+            chain
+                .get_next_required_work(&fork, 2016, &child)
+                .unwrap()
+                .to_compact_lossy(),
+            on_fork.to_compact_lossy()
+        );
+    }
+
+    #[test]
+    fn bip94_time_is_checked_against_the_parent_on_a_fork() {
+        let (chain, _, fork) = chain_with_fork_at_height_2015(Network::Testnet4);
+        let child = BlockHeader {
+            prev_blockhash: fork.block_hash(),
+            time: fork.time + 10,
+            ..fork
+        };
+
+        // The best tip is an hour later than the fork, which would make this child too early
+        assert!(chain.check_bip94_block(&child, 2016).is_ok());
+    }
+
+    /// A regtest child of genesis with the given bits and a valid proof of work.
+    fn mined_regtest_child(bits: u32) -> BlockHeader {
+        let genesis = genesis_block(Network::Regtest).header;
+        let mut header = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: genesis.block_hash(),
+            merkle_root: genesis.merkle_root,
+            time: genesis.time + 600,
+            bits: CompactTarget::from_consensus(bits),
+            nonce: 0,
+        };
+        while header.validate_pow(header.target()).is_err() {
+            header.nonce += 1;
+        }
+        header
+    }
+
+    #[test]
+    fn accept_header_rejects_harder_bits_than_required() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let genesis = genesis_block(Network::Regtest);
+
+        // Regtest requires 0x207fffff. This target is 128 times smaller (about 256 hashes to
+        // mine, against 2) and the proof of work is valid for it, but Core rejects it with
+        // `bad-diffbits`.
+        let header = mined_regtest_child(0x2000_ffff);
+
+        assert!(matches!(
+            chain.accept_header(header),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::BadDiffBits
+            ))
+        ));
+        assert_eq!(chain.get_best_block().unwrap(), (0, genesis.block_hash()));
+        assert!(chain.get_disk_block_header(&header.block_hash()).is_err());
+    }
+
+    #[test]
+    fn accept_header_accepts_exactly_the_required_bits() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+
+        let header = mined_regtest_child(EASIEST_REGTEST_TARGET_BITS);
+
+        chain.accept_header(header).unwrap();
+        assert_eq!(chain.get_best_block().unwrap(), (1, header.block_hash()));
+    }
+
+    #[test]
+    fn header_pow_is_checked_before_the_required_bits() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let genesis = genesis_block(Network::Regtest).header;
+
+        // Wrong bits, and a proof of work that does not meet them: Core reports `high-hash`
+        // from `CheckBlockHeader` before it looks at the bits.
+        let mut header = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: genesis.block_hash(),
+            merkle_root: genesis.merkle_root,
+            time: genesis.time + 600,
+            bits: CompactTarget::from_consensus(0x2000_ffff),
+            nonce: 0,
+        };
+        while header.validate_pow(header.target()).is_ok() {
+            header.nonce += 1;
+        }
+
+        assert!(matches!(
+            chain.accept_header(header),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::NotEnoughPow
+            ))
+        ));
+    }
+
+    #[test]
+    fn ancestor_at_height_follows_a_fork() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let headers = store_headers_with_bits(&chain, Network::Regtest, &[0x207f_ffff; 5]);
+
+        // A fork from height 2, with different headers at heights 3, 4 and 5
+        let mut forks = vec![headers[2]];
+        for height in 3..=5_u32 {
+            let parent = forks.last().unwrap();
+            let fork = BlockHeader {
+                prev_blockhash: parent.block_hash(),
+                nonce: 100 + height,
+                ..headers[height as usize]
+            };
+            write_lock!(chain)
+                .chainstore
+                .save_header(&DiskBlockHeader::InFork(fork, height))
+                .unwrap();
+            forks.push(fork);
+        }
+        let (fork3, fork5) = (forks[1], forks[3]);
+        assert_ne!(fork3, headers[3]);
+
+        assert_eq!(chain.get_ancestor_at_height(&fork5, 5, 3).unwrap(), fork3);
+        assert_eq!(
+            chain.get_ancestor_at_height(&fork5, 5, 2).unwrap(),
+            headers[2]
+        );
+        // On the best chain it reads the height index
+        assert_eq!(
+            chain.get_ancestor_at_height(&headers[5], 5, 3).unwrap(),
+            headers[3]
         );
     }
 
