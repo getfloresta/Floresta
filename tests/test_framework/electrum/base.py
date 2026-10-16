@@ -7,11 +7,12 @@ Base client to connect to Floresta's Electrum server.
 """
 
 import json
+import select
 import socket
+import time
 from OpenSSL import SSL
 
 from test_framework.electrum import ConfigElectrum
-from test_framework.util import wait_until
 
 # Read one byte at a time so the first ``\n`` terminates the message.
 # Any data that arrives after it stays in the kernel socket buffer and
@@ -26,6 +27,8 @@ class BaseClient:
     """
     Helper class to connect to Floresta's Electrum server.
     """
+
+    TIMEOUT: int = 30  # seconds
 
     def __init__(self, config: ConfigElectrum, log):
         self._conn = None
@@ -98,13 +101,13 @@ class BaseClient:
         else:
             self._conn = s
 
-    def receive_response(self) -> bool:
+    def receive_response(self, method: str, deadline: float) -> bool:
         """
         Receive a response from the Electrum server.
 
         Returns True if a valid response is received, False otherwise.
         """
-        response = self.read_response()
+        response = self.read_response(method, deadline)
         self.log.debug(f"Response: {response}")
         result = json.loads(response)
 
@@ -124,7 +127,7 @@ class BaseClient:
         self.result = result
         return True
 
-    def read_response(self) -> str:
+    def read_response(self, method: str, deadline: float) -> str:
         """
         Receive a single JSON-RPC message from the server (delineated by ``\\n``).
 
@@ -133,11 +136,19 @@ class BaseClient:
         request.
         """
         response = b""
-        byte = self.conn.recv(BUFFER_SIZE)
+        byte = self._recv(method, deadline)
         while byte and byte != b"\n":
             response += byte
-            byte = self.conn.recv(BUFFER_SIZE)
+            byte = self._recv(method, deadline)
         return response.decode("utf-8").strip()
+
+    def _recv(self, method: str, deadline: float) -> bytes:
+        # A TLS connection may hold decrypted bytes that `select` cannot see.
+        if not (self.tls and self.conn.pending()):
+            remaining = deadline - time.monotonic()
+            if not select.select([self.conn], [], [], max(remaining, 0))[0]:
+                raise TimeoutError(f"No reply to {method} after {self.TIMEOUT} seconds")
+        return self.conn.recv(BUFFER_SIZE)
 
     def _next_request_id(self) -> int:
         self._request_id += 1
@@ -161,11 +172,9 @@ class BaseClient:
         self.log.debug(f"GET electrum://{mnt_point}?params={params}")
         self.conn.sendall(request.encode("utf-8") + b"\n")
 
-        # pylint: disable=unnecessary-lambda
-        # Lambda is required here because wait_until needs a callable to invoke
-        # repeatedly until it returns True. Without it, receive_response() would
-        # execute immediately and pass its result, not a function.
-        wait_until(lambda: self.receive_response(), interval=0)
+        deadline = time.monotonic() + self.TIMEOUT
+        while not self.receive_response(method, deadline):
+            pass
 
         # Check for JSON-RPC error response
         error = self.result.get("error")
