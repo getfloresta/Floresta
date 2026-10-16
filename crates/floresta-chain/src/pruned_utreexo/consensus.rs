@@ -197,6 +197,10 @@ impl Consensus {
     /// - The block's signature-operation cost must not exceed the consensus limit
     /// - No output may be spent more than once within the block
     /// - All transactions must be valid, as verified by [`Consensus::verify_transaction`]
+    ///
+    /// `utxos` must contain only outputs supplied by the Utreexo proof. Outputs created by this
+    /// block are inserted after their transaction validates, preserving consensus transaction
+    /// order for same-block spends.
     #[allow(unused)]
     pub fn verify_block_transactions(
         height: u32,
@@ -234,19 +238,38 @@ impl Consensus {
                     Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
                 }
                 Self::verify_coinbase(transaction)?;
-                // Skip next checks: coinbase input is exempt, coinbase reward checked later
-                continue;
+            } else {
+                // Actually verify the transaction
+                let (in_value, out_value) = Self::verify_transaction(
+                    transaction,
+                    &mut utxos,
+                    height,
+                    verify_script,
+                    flags,
+                )?;
+
+                // Fee is the difference between inputs and outputs. In the above function call we
+                // have verified that `out_value <= in_value` (no underflow risk).
+                fee = fee
+                    .checked_add(in_value - out_value)
+                    .ok_or(BlockValidationErrors::TooManyCoins)?;
             }
 
-            // Actually verify the transaction
-            let (in_value, out_value) =
-                Self::verify_transaction(transaction, &mut utxos, height, verify_script, flags)?;
-
-            // Fee is the difference between inputs and outputs. In the above function call we have
-            // verified that `out_value <= in_value` (no underflow risk).
-            fee = fee
-                .checked_add(in_value - out_value)
-                .ok_or(BlockValidationErrors::TooManyCoins)?;
+            // Outputs become spendable only after their creating transaction has been validated.
+            // In particular, this rejects transactions that spend an output created later in the
+            // same block.
+            let txid = transaction.compute_txid();
+            for (vout, txout) in transaction.output.iter().enumerate() {
+                utxos.insert(
+                    OutPoint::new(txid, vout as u32),
+                    UtxoData {
+                        txout: txout.clone(),
+                        is_coinbase: n == 0,
+                        creation_height: height,
+                        creation_time: 0, // TODO add MTP(`height` - 1)
+                    },
+                );
+            }
         }
 
         // Check coinbase output values to ensure the miner isn't producing excess coins
@@ -1127,6 +1150,52 @@ mod tests {
             txid: Txid::all_zeros(),
             vout: 0,
         }
+    }
+
+    fn same_block_spend_fixture() -> (Vec<Transaction>, HashMap<OutPoint, UtxoData>) {
+        let proof_outpoint = dummy_outpoint();
+        let coinbase = build_tx(
+            vec![txin!(
+                OutPoint::null(),
+                ScriptBuf::from_bytes(vec![0x00, 0x00])
+            )],
+            vec![txout!(50, ScriptBuf::new())],
+        );
+        let parent = build_tx(
+            vec![txin!(proof_outpoint)],
+            vec![txout!(100, ScriptBuf::new())],
+        );
+        let child = build_tx(
+            vec![txin!(OutPoint::new(parent.compute_txid(), 0))],
+            vec![txout!(100, ScriptBuf::new())],
+        );
+        let utxos = HashMap::from([(
+            proof_outpoint,
+            UtxoData {
+                txout: txout!(100, ScriptBuf::new()),
+                is_coinbase: false,
+                creation_height: 1,
+                creation_time: 0,
+            },
+        )]);
+
+        (vec![coinbase, parent, child], utxos)
+    }
+
+    #[test]
+    fn block_transactions_accept_same_block_spends_in_order() {
+        let (transactions, utxos) = same_block_spend_fixture();
+
+        Consensus::verify_block_transactions(
+            2,
+            0,
+            utxos,
+            &transactions,
+            Amount::from_sat(50),
+            false,
+            0,
+        )
+        .expect("an output may be spent by a later transaction in the block");
     }
 
     fn tx_with_lock_time(lock_time: LockTime, sequence: Sequence) -> Transaction {

@@ -412,21 +412,22 @@ mod utreexo_proof_tests {
             .validate_block_no_acc(&block, height, utxos)
             .expect("Block validation must pass for the given UTXOs map");
 
-        // STEP 2: Add a tx that tries to spend an UTXO created later in the block; utreexo fails
+        // STEP 2: A spend of an output created later in the block does not consume proof data.
+        // Transaction validation, rather than accumulator validation, enforces creation order.
         let spending_tx: Transaction = deserialize_hex("0100000001ed5598cd2a9d8c4782e553dfc149a4a14402d1e4cfe61ae104f8cdf116486341000000008b483045022100aa2d2e5647b2ee15e42effd358946ce7d9515e5a56c21c9f6661b8d3f6f3fc51022028e433bcd457cb40bfdc253d6448f3bc2fc5bb7cc417cbf2458a9803489b9be5014104a39b9e4fbd213ef24bb9be69de4a118dd0644082e47c01fd9159d38637b83fbcdc115a5d6e970586a012d1cfe3e3a8b1a3d04e763bdc5a071c0e827c0bd834a5ffffffff0213ebd526000000001976a9140568015a9facccfd09d70d409b6fc1a5546cecc688ac80969800000000001976a91449bab0d204e6c1fdf99b0b8e0ebf70ab6421e2f488ac00000000").unwrap();
         assert_eq!(
             format!("{}", spending_tx.compute_txid()),
             "d55a5cb093e7d354ebb4ae3ecc12f281f17ca1194ff1d3ab16dd97cfd7eacf46",
         );
+        let future_outpoint = spending_tx.input[0].previous_output;
 
         let mut invalid_txdata = block.txdata.clone();
         invalid_txdata.insert(1, spending_tx);
 
-        let (del_hashes, _utxos) =
+        let (del_hashes, utxos) =
             process_proof(&proof.leaf_data, &invalid_txdata, height, get_block_hash).unwrap();
 
-        if acc.verify(&r_proof, &to_acc_hashes(del_hashes)).unwrap() {
-            panic!("Proof must be invalid")
-        }
+        assert!(acc.verify(&r_proof, &to_acc_hashes(del_hashes)).unwrap());
+        assert!(!utxos.contains_key(&future_outpoint));
     }
 }

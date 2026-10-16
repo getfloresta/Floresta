@@ -496,48 +496,47 @@ pub mod proof_util {
     /// This will be used to process this block
     type ProcessedProof = (Vec<sha256::Hash>, UtxoMap);
 
-    /// This function processes a proof of inclusion for a given block.
-    /// It takes in the [`CompactLeafData`] for this block, this block's transactions, the height
-    /// and a function to get the block hash for a given height. Then returns a [`Result`] containing
-    /// a vector with hashes for deleted leaves, and a `UtxoMap`, which is defined
-    /// as [`HashMap<OutPoint, UtxoData>`].
+    /// Processes the proof of inclusion for a block.
+    ///
+    /// The returned UTXO map contains only outputs reconstructed from `leaves`. Outputs created
+    /// within this block are excluded; block validation makes them available in transaction order.
+    /// Inputs spending any same-block output are therefore not paired with a proof leaf, including
+    /// invalid inputs that spend an output before its creating transaction.
+    ///
+    /// Returns the deleted leaf hashes and the proof-provided UTXOs needed to validate `txdata`.
     pub fn process_proof<F, E>(
         leaves: &[CompactLeafData],
         txdata: &[Transaction],
-        height: u32,
+        _height: u32,
         get_block_hash: F,
     ) -> Result<ProcessedProof, E>
     where
         F: Fn(u32) -> Result<BlockHash, E>,
         E: From<UtreexoLeafError>,
     {
+        // Compute transaction IDs once, then use output counts to distinguish same-block spends
+        // from inputs that require proof data. This intentionally ignores transaction order:
+        // validation is responsible for rejecting spends that precede output creation.
+        let txids: Vec<_> = txdata.iter().map(Transaction::compute_txid).collect();
+        let same_block_transactions: HashMap<_, _> = txids
+            .iter()
+            .copied()
+            .zip(txdata.iter().map(|tx| tx.output.len()))
+            .collect();
+
         // Initialize return values
         let mut del_hashes = Vec::new();
         let mut utxos = HashMap::new();
-
         let mut leaves_iter = leaves.iter().cloned();
 
         // Skip coinbase transaction
-        for tx in txdata.iter().skip(1) {
-            let txid = tx.compute_txid();
-
-            // Collect new UTXOs, which may be spent by later transactions in the block
-            for (vout, out) in tx.output.iter().enumerate() {
-                utxos.insert(
-                    OutPoint::new(txid, vout as u32),
-                    UtxoData {
-                        txout: out.clone(),
-                        is_coinbase: tx.is_coinbase(),
-                        creation_height: height,
-                        creation_time: 0, // TODO add MTP(`height` - 1)
-                    },
-                );
-            }
-
+        for (tx, txid) in txdata.iter().zip(txids).skip(1) {
             for (vin, input) in tx.input.iter().enumerate() {
-                // Only reconstruct UTXOs missing from the map, from prior blocks. Transactions
-                // spending uncreated UTXOs yield an invalid deletion hash, failing utreexo verification.
-                if utxos.contains_key(&input.previous_output) {
+                let previous_output = input.previous_output;
+                let is_same_block_output = same_block_transactions
+                    .get(&previous_output.txid)
+                    .is_some_and(|output_count| (previous_output.vout as usize) < *output_count);
+                if is_same_block_output {
                     continue;
                 }
                 let Some(leaf) = leaves_iter.next() else {
@@ -884,7 +883,7 @@ mod test {
             lock_time: LockTime::ZERO,
             input: vec![TxIn {
                 previous_output: OutPoint {
-                    txid: coinbase.compute_txid(),
+                    txid: bitcoin::Txid::all_zeros(),
                     vout: 0,
                 },
                 script_sig: ScriptBuf::new(),
@@ -919,6 +918,129 @@ mod test {
         );
     }
 
+    #[test]
+    fn rejects_same_block_spend_before_output_creation() {
+        fn tx(previous_output: OutPoint, value: u64) -> Transaction {
+            Transaction {
+                version: Version::TWO,
+                lock_time: LockTime::ZERO,
+                input: vec![TxIn {
+                    previous_output,
+                    ..Default::default()
+                }],
+                output: vec![TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: ScriptBuf::new(),
+                }],
+            }
+        }
+
+        let proof_outpoint = OutPoint::new(bitcoin::Txid::all_zeros(), 0);
+        let coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::from_bytes(vec![0, 0]),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(50),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let funding = tx(proof_outpoint, 90);
+        let creator = tx(OutPoint::new(funding.compute_txid(), 0), 70);
+        let uncreated_outpoint = OutPoint::new(creator.compute_txid(), 0);
+        let spender = tx(uncreated_outpoint, 60);
+        let spending_txid = spender.compute_txid();
+        let transactions = [coinbase, funding, spender, creator];
+        let leaf = CompactLeafData {
+            header_code: 1 << 1,
+            amount: 100,
+            spk_ty: ScriptPubKeyKind::Other(Box::new([])),
+        };
+
+        let (_, utxos) = process_proof(&[leaf], &transactions, 2, |_| {
+            Ok::<_, crate::BlockchainError>(BlockHash::all_zeros())
+        })
+        .expect("proof reconstruction must succeed");
+
+        match crate::pruned_utreexo::consensus::Consensus::verify_block_transactions(
+            2,
+            0,
+            utxos,
+            &transactions,
+            Amount::from_sat(50),
+            false,
+            0,
+        ) {
+            Err(crate::BlockchainError::TransactionError(error)) => {
+                assert_eq!(error.txid, spending_txid);
+                assert_eq!(
+                    error.error,
+                    crate::BlockValidationErrors::UtxoNotFound(uncreated_outpoint)
+                );
+            }
+            other => panic!("expected UtxoNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_proof_returns_only_proof_provided_utxos() {
+        let proof_outpoint = OutPoint::new(bitcoin::Txid::all_zeros(), 0);
+        let coinbase = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(50),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let parent = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: proof_outpoint,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(40),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let parent_outpoint = OutPoint::new(parent.compute_txid(), 0);
+        let child = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: parent_outpoint,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(30),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let child_outpoint = OutPoint::new(child.compute_txid(), 0);
+        let leaf = CompactLeafData {
+            header_code: 42 << 1,
+            amount: 50,
+            spk_ty: ScriptPubKeyKind::Other(Box::new([])),
+        };
+        let get_block_hash = |_| Ok::<_, UtreexoLeafError>(BlockHash::all_zeros());
+
+        let (del_hashes, utxos) =
+            process_proof(&[leaf], &[coinbase, parent, child], 100, get_block_hash)
+                .expect("proof data should be reconstructed");
+
+        assert_eq!(del_hashes.len(), 1);
+        assert_eq!(utxos.len(), 1);
+        assert!(utxos.contains_key(&proof_outpoint));
+        assert!(!utxos.contains_key(&parent_outpoint));
+        assert!(!utxos.contains_key(&child_outpoint));
+    }
     #[test]
     fn test_leaf_hash_known_vector() {
         // Precomputed reference hash generated from the original sha2::Sha512_256 implementation
