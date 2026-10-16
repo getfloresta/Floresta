@@ -1043,6 +1043,7 @@ mod tests {
     use bitcoin::TxIn;
     use bitcoin::TxOut;
     use bitcoin::Txid;
+    use bitcoin::Witness;
     use bitcoin::absolute::LockTime;
     use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
@@ -1053,6 +1054,22 @@ mod tests {
     use bitcoin::opcodes::all::OP_CHECKMULTISIG;
     use bitcoin::opcodes::all::OP_CHECKSIG;
     use bitcoin::opcodes::all::OP_NOP;
+    use bitcoin::opcodes::all::OP_PUSHNUM_1;
+    use bitcoin::opcodes::all::OP_PUSHNUM_2;
+    use bitcoin::opcodes::all::OP_PUSHNUM_3;
+    use bitcoin::opcodes::all::OP_PUSHNUM_4;
+    use bitcoin::opcodes::all::OP_PUSHNUM_5;
+    use bitcoin::opcodes::all::OP_PUSHNUM_6;
+    use bitcoin::opcodes::all::OP_PUSHNUM_7;
+    use bitcoin::opcodes::all::OP_PUSHNUM_8;
+    use bitcoin::opcodes::all::OP_PUSHNUM_9;
+    use bitcoin::opcodes::all::OP_PUSHNUM_10;
+    use bitcoin::opcodes::all::OP_PUSHNUM_11;
+    use bitcoin::opcodes::all::OP_PUSHNUM_12;
+    use bitcoin::opcodes::all::OP_PUSHNUM_13;
+    use bitcoin::opcodes::all::OP_PUSHNUM_14;
+    use bitcoin::opcodes::all::OP_PUSHNUM_15;
+    use bitcoin::opcodes::all::OP_PUSHNUM_16;
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use floresta_common::assert_err;
@@ -1560,6 +1577,120 @@ mod tests {
         // Enabling P2SH alone must not also enable witness accounting.
         assert_eq!(wpkh_spend.sigop_cost(&utxos, VERIFY_P2SH), 0);
         assert_eq!(wpkh_spend.sigop_cost(&utxos, flags), 1);
+    }
+
+    #[test]
+    fn test_get_bip34_height() {
+        let block = decode_block("./testdata/block_866342/raw.zst");
+
+        assert_eq!(Consensus::get_bip34_height(&block), Some(866_342));
+    }
+
+    #[test]
+    fn test_get_bip34_height_no_coinbase() {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata.remove(0);
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_empty_coinbase() {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = vec![Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: Vec::new(),
+            output: Vec::new(),
+        }];
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_invalid_script() {
+        let tx = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::from_bytes(vec![0x02, 0x01]),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: Vec::new(),
+        };
+
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = vec![tx];
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_non_push_instruction() {
+        let tx = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::from_bytes(vec![]),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: Vec::new(),
+        };
+
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+        block.txdata = vec![tx];
+
+        assert_eq!(Consensus::get_bip34_height(&block), None);
+    }
+
+    #[test]
+    fn test_get_bip34_height_op_pushnum() {
+        let test_cases = [
+            OP_PUSHNUM_1,
+            OP_PUSHNUM_2,
+            OP_PUSHNUM_3,
+            OP_PUSHNUM_4,
+            OP_PUSHNUM_5,
+            OP_PUSHNUM_6,
+            OP_PUSHNUM_7,
+            OP_PUSHNUM_8,
+            OP_PUSHNUM_9,
+            OP_PUSHNUM_10,
+            OP_PUSHNUM_11,
+            OP_PUSHNUM_12,
+            OP_PUSHNUM_13,
+            OP_PUSHNUM_14,
+            OP_PUSHNUM_15,
+            OP_PUSHNUM_16,
+        ];
+
+        for (expected_height, opcode) in (1..).zip(test_cases.iter()) {
+            let tx = Transaction {
+                version: Version::ONE,
+                lock_time: LockTime::ZERO,
+                input: vec![TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::from_bytes(vec![opcode.to_u8()]),
+                    sequence: Sequence::MAX,
+                    witness: Witness::default(),
+                }],
+                output: Vec::new(),
+            };
+
+            let mut block = decode_block("./testdata/block_866342/raw.zst");
+            block.txdata = vec![tx];
+
+            assert_eq!(
+                Consensus::get_bip34_height(&block),
+                Some(expected_height),
+                "opcode {:?}",
+                opcode
+            );
+        }
     }
 
     #[test]
