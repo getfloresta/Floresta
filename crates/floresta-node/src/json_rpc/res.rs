@@ -32,6 +32,7 @@ pub mod jsonrpc_interface {
     use std::fmt::Formatter;
 
     use axum::http::StatusCode;
+    use bitcoin::Txid;
     use floresta_chain::BlockchainError;
     use floresta_chain::extensions::HeaderExtError;
     use floresta_common::impl_error_from;
@@ -179,6 +180,12 @@ pub mod jsonrpc_interface {
         /// Transaction not found.
         TxNotFound,
 
+        /// `gettxoutproof` was called with an empty `txids` list.
+        EmptyTxids,
+
+        /// `gettxoutproof` was called with the same txid more than once.
+        DuplicatedTxid(Txid),
+
         /// The provided script is invalid.
         InvalidScript,
 
@@ -283,6 +290,8 @@ pub mod jsonrpc_interface {
                 | Self::InvalidParameterStructure(_)
                 | Self::MissingParameter(_)
                 | Self::InvalidNetAddress(_)
+                | Self::EmptyTxids
+                | Self::DuplicatedTxid(_)
                 | Self::Wallet(_) => StatusCode::BAD_REQUEST,
 
                 // 404 Not Found - resource/method doesn't exist
@@ -395,6 +404,16 @@ pub mod jsonrpc_interface {
                     code: INVALID_METHOD_PARAMETERS,
                     message: "Invalid network address provided".into(),
                     data: Some(Value::String(err.to_string())),
+                },
+                Self::EmptyTxids => RpcError {
+                    code: INVALID_METHOD_PARAMETERS,
+                    message: "Parameter 'txids' cannot be empty".into(),
+                    data: None,
+                },
+                Self::DuplicatedTxid(txid) => RpcError {
+                    code: INVALID_METHOD_PARAMETERS,
+                    message: "Invalid parameter, duplicated txid".into(),
+                    data: Some(Value::String(txid.to_string())),
                 },
 
                 // Internal error

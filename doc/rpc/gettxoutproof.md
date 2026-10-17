@@ -34,6 +34,8 @@ floresta-cli gettxoutproof '["txid1", "txid2"]' 000000000019d6689c085ae165831e93
 
 ### Error Enum
 
+- `JsonRpcError::EmptyTxids` - If `txids` is empty.
+- `JsonRpcError::DuplicatedTxid` - If the same transaction ID appears more than once in `txids`.
 - `JsonRpcError::TxNotFound` - If one or more of the specified transaction IDs are not found in the block.
 - `JsonRpcError::BlockNotFound` - If the specified block hash does not correspond to a known block.
 - `JsonRpcError::Chain` - If there is an error accessing blockchain data.

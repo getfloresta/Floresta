@@ -86,3 +86,44 @@ class TestGetTxOutProof:
             "gettxoutproof", params=[[fake_txid], block_hash]
         )
         log.info("Correctly returned error for nonexistent txid.")
+
+    def test_empty_txids(self, setup_nodes):
+        """gettxoutproof rejects an empty txids list, with or without a blockhash."""
+        log, (florestad, _, _) = setup_nodes
+
+        block_hash = florestad.rpc.get_blockhash(2)
+
+        log.info("Requesting proof for an empty txids list...")
+        for params in ([[]], [[], block_hash]):
+            florestad.rpc.ensure_rpc_call_error(
+                "gettxoutproof",
+                params=params,
+                expected_status_code=400,
+                expected_rpcerror_code=-32602,
+                expected_message="Parameter 'txids' cannot be empty",
+            )
+
+        log.info("Checking no gettxoutproof request is left inflight...")
+        active = florestad.rpc.get_rpcinfo()["active_commands"]
+        assert [c["method"] for c in active] == ["getrpcinfo"]
+        log.info("Correctly returned error for empty txids.")
+
+    def test_duplicated_txid(self, setup_nodes):
+        """gettxoutproof rejects a txid that appears more than once."""
+        log, (florestad, _, _) = setup_nodes
+
+        block_hash = florestad.rpc.get_blockhash(2)
+        txid = florestad.rpc.get_block(block_hash)["tx"][0]
+
+        log.info("Requesting proof with a duplicated txid...")
+        for params in ([[txid, txid]], [[txid, txid], block_hash]):
+            resp = florestad.rpc.ensure_rpc_call_error(
+                "gettxoutproof",
+                params=params,
+                expected_status_code=400,
+                expected_rpcerror_code=-32602,
+                expected_message="Invalid parameter, duplicated txid",
+            )
+            assert resp["body"]["error"]["data"] == txid
+
+        log.info("Correctly returned error for duplicated txid.")

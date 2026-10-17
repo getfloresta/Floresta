@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -610,6 +611,17 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
         tx_ids: &[Txid],
         blockhash: Option<BlockHash>,
     ) -> Result<String, JsonRpcError> {
+        if tx_ids.is_empty() {
+            return Err(JsonRpcError::EmptyTxids);
+        }
+
+        let mut seen = HashSet::with_capacity(tx_ids.len());
+        for txid in tx_ids {
+            if !seen.insert(txid) {
+                return Err(JsonRpcError::DuplicatedTxid(*txid));
+            }
+        }
+
         let block = match blockhash {
             Some(blockhash) => self.get_block_inner(blockhash).await?,
             // Using the first Txid to get the block should be fine since they are expected to all
