@@ -94,6 +94,9 @@ fn main() {
         tls_key_path: params.tls_key_path,
         allow_v1_fallback: params.allow_v1_fallback,
         backfill: !params.no_backfill,
+        disable_rpc: params.disable_rpc,
+        disable_electrum: params.disable_electrum,
+        disable_zmq: params.disable_zmq,
     };
 
     #[cfg(unix)]
