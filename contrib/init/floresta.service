@@ -8,7 +8,7 @@ Wants=network-online.target
 
 
 [Service]
-ExecStart=/usr/bin/florestad --daemon --data-dir=/var/lib/florestad --config-file /etc/florestad/config.toml --pid-file=/run/florestad/florestad.pid --log-to-file
+ExecStart=/usr/bin/florestad --daemon --data-dir=/var/lib/florestad --config-file /etc/florestad/config.toml --pid-file=/run/florestad/florestad.pid
 
 # Ensure that the service is ready after the MainPID exists
 Type=forking
