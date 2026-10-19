@@ -491,10 +491,6 @@ impl BlockchainInterface for PartialChainState {
         unimplemented!("partialChainState::subscribe")
     }
 
-    fn estimate_fee(&self, _target: usize) -> Result<f64, Self::Error> {
-        unimplemented!("partialChainState::estimate_fee")
-    }
-
     fn get_block_height(&self, _hash: &bitcoin::BlockHash) -> Result<Option<u32>, Self::Error> {
         unimplemented!("partialChainState::get_block_height")
     }

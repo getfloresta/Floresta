@@ -630,6 +630,7 @@ pub struct FlatChainStore {
 
     /// A LRU cache for the last n blocks we've touched
     cache: Mutex<LruCache<BlockHash, DiskBlockHeader>>,
+
     /// Warnings accumulated when writes fail; surfaced via [`ChainStore::get_warnings`].
     pending_warnings: Vec<ChainStoreWarning>,
 }
@@ -1469,6 +1470,7 @@ pub mod migrate_v0_to_v1 {
 
 #[cfg(test)]
 mod tests {
+    use core::assert_eq;
     use core::mem::size_of;
     use std::fs;
 
