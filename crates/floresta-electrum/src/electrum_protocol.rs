@@ -362,13 +362,13 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
             "blockchain.scripthash.get_mempool" => json_rpc_res!(request, []),
             "blockchain.scripthash.listunspent" => {
                 let hash = get_arg!(request, sha256::Hash, 0);
-                let utxos = self.address_cache.get_address_utxos(&hash)?;
-                if utxos.is_none() {
-                    return json_rpc_res!(request, []);
-                }
+                let utxos = match self.address_cache.get_address_utxos(&hash)? {
+                    Some(utxos) => utxos,
+                    None => return json_rpc_res!(request, []),
+                };
                 let mut final_utxos = Vec::new();
-                for (utxo, prevout) in utxos.unwrap().into_iter() {
-                    let height = self.address_cache.get_height(&prevout.txid).unwrap();
+                for (utxo, prevout) in utxos.into_iter() {
+                    let height = self.address_cache.get_height(&prevout.txid)?.unwrap_or(0);
 
                     final_utxos.push(json!({
                         "height": height,
