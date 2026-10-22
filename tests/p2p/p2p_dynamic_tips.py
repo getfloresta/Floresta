@@ -75,7 +75,7 @@ def test_dynamic_chain_tips_derivation_restart(
     florestad_node, bitcoind_node, utreexod_node = (
         florestad_bitcoind_utreexod_with_chain(floresta_descriptors=[])
     )
-    node_manager.wait_for_sync_nodes(is_finished_ibd=True)
+    node_manager.wait_for_sync_nodes(is_ibd_finished=True)
     log.info("Florestad IBD complete")
 
     # 2. Collect parent headers from bitcoind at heights 1..NUM_FORKS

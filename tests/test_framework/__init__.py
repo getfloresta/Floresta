@@ -12,37 +12,37 @@ The difference is that `florestad` will run under a `cargo run` subprocess, whic
 `add_node_settings`.
 """
 
+import contextlib
+import copy
 import os
 import re
-import sys
-import copy
-import socket
 import shutil
 import signal
-import contextlib
+import socket
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Pattern, Tuple, Optional
+from typing import Any, Dict, List, Optional, Pattern, Tuple
 
 from test_framework.crypto.pkcs8 import (
     create_pkcs8_private_key,
     create_pkcs8_self_signed_certificate,
 )
 from test_framework.daemon import ConfigP2P
-from test_framework.rpc import ConfigRPC
 from test_framework.electrum import ConfigElectrum, ConfigTls
-from test_framework.node import Node, NodeType
-from test_framework.util import Utility, wait_until
-from test_framework.p2p import P2P_SERVICES, P2PInterface, NetworkThread
 from test_framework.messages import (
+    MAX_MSG_PER_SECOND,
+    MAX_PROTOCOL_MESSAGE_LENGTH,
     NODE_P2P_V2,
     CAddress,
     msg_generic,
-    MAX_PROTOCOL_MESSAGE_LENGTH,
-    MAX_MSG_PER_SECOND,
 )
+from test_framework.node import Node, NodeType
+from test_framework.p2p import P2P_SERVICES, NetworkThread, P2PInterface
+from test_framework.rpc import ConfigRPC
+from test_framework.util import Utility, wait_until
 
 
 # pylint: disable=too-many-public-methods
@@ -169,7 +169,6 @@ class FlorestaTestFramework:
     def _add_node_default_config(
         self, variant: NodeType, extra_args: List[str], tls: bool
     ) -> Node:
-
         tempdir = str(Utility.get_integration_test_dir())
         targetdir = os.path.normpath(os.path.join(tempdir, "binaries"))
         data_dir = self.create_data_dir_for_daemon(variant)
@@ -264,19 +263,26 @@ class FlorestaTestFramework:
 
         raise RuntimeError(f"Error starting node '{node.variant}': {error}")
 
-    def stop_node(self, index: int):
-        """
-        Stop a node given an index on self._tests.
-        """
-        node = self.get_node(index)
-        return node.stop()
-
     def stop(self):
         """
         Stop all nodes.
+
+        Every node is asked to stop before we wait for any of them, so their
+        shutdowns overlap instead of adding up.
         """
-        for i in range(len(self._nodes)):
-            self.stop_node(i)
+        for node in self._nodes:
+            try:
+                node.request_stop()
+            # pylint: disable=broad-exception-caught
+            except Exception as e:
+                self.log.error(f"Failed to stop node '{node.variant}': {e}")
+
+        for node in self._nodes:
+            try:
+                node.wait_stopped()
+            # pylint: disable=broad-exception-caught
+            except Exception as e:
+                self.log.error(f"Failed to stop node '{node.variant}': {e}")
 
         if (
             hasattr(self, "_network_thread")
@@ -325,19 +331,12 @@ class FlorestaTestFramework:
         """
         Wait for two peers to connect/disconnect to each other.
         """
-        attempts = 0
-
-        def check_peers_connection():
-            nonlocal attempts
-
-            if attempts > 10:
-                time.sleep(1)
-
-            attempts += 1
-
-            return self.check_connection(peer_one, peer_two, is_connected)
-
-        wait_until(predicate=check_peers_connection)
+        # Every attempt pings both peers over RPC, so back off a little more
+        # than the default interval.
+        wait_until(
+            predicate=lambda: self.check_connection(peer_one, peer_two, is_connected),
+            interval=0.2,
+        )
 
         self.log.debug(
             f"Peers {peer_one.variant} and {peer_two.variant} are "
@@ -379,24 +378,28 @@ class FlorestaTestFramework:
 
         self.wait_for_peers_connections(peer_one, peer_two)
 
-    def check_sync_nodes(self, is_finished_ibd: bool = True) -> bool:
+    def check_sync_nodes(
+        self, is_ibd_finished: bool = True, nodes: Optional[List[Node]] = None
+    ) -> bool:
         """
-        Check if all nodes are synced.
+        Check if the given nodes are synced, defaulting to every node the
+        framework manages.
 
-        If is_finished_ibd is True, it will check if all florestad nodes have finished the
+        If is_ibd_finished is True, it will check if all florestad nodes have finished the
         initial block download (IBD) process. Otherwise, it will check if all
         nodes are fully synced with the network.
         """
-        if not self._nodes:
+        nodes = self._nodes if nodes is None else nodes
+        if not nodes:
             raise AssertionError("No nodes to check for synchronization")
 
-        expected_block = self._nodes[0].rpc.get_block_count()
-        for node in self._nodes:
+        expected_block = nodes[0].rpc.get_block_count()
+        for node in nodes:
             block_count = node.rpc.get_block_count()
 
             if (
                 node.variant == NodeType.FLORESTAD
-                and is_finished_ibd
+                and is_ibd_finished
                 and node.rpc.get_blockchain_info()["initialblockdownload"]
             ):
                 self.log.debug(
@@ -413,20 +416,33 @@ class FlorestaTestFramework:
 
         return True
 
-    def wait_for_sync_nodes(self, is_finished_ibd: bool = True):
+    def wait_for_sync_nodes(
+        self, is_ibd_finished: bool = True, nodes: Optional[List[Node]] = None
+    ):
         """
-        Wait for all nodes to be synced.
+        Wait for the given nodes to be synced, defaulting to every node the
+        framework manages.
 
-        If is_finished_ibd is True, it will wait until all florestad nodes have finished the
+        If is_ibd_finished is True, it will wait until all florestad nodes have finished the
         initial block download (IBD) process. Otherwise, it will wait until all
         nodes are fully synced with the network.
-        """
-        wait_until(lambda: self.check_sync_nodes(is_finished_ibd=is_finished_ibd))
 
-        self.log.debug("All nodes are synced")
+        Use this instead of sleeping after connecting a pair of nodes: it waits
+        for what actually matters, and returns as soon as it happens.
+        """
+        wait_until(
+            lambda: self.check_sync_nodes(is_ibd_finished=is_ibd_finished, nodes=nodes)
+        )
+
+        if nodes is None:
+            self.log.debug("All nodes are synced")
+        else:
+            self.log.debug(
+                f"Nodes {[node.variant.value for node in nodes]} agree on the best block"
+            )
 
     def generate_blocks_and_sync(
-        self, blocks: int, is_finished_ibd: bool = True, address: None | str = None
+        self, blocks: int, is_ibd_finished: bool = True, address: None | str = None
     ):
         """Generate blocks and wait for all nodes to sync."""
         mine_node = None
@@ -451,7 +467,7 @@ class FlorestaTestFramework:
         else:
             mine_node.rpc.generate(blocks)
 
-        self.wait_for_sync_nodes(is_finished_ibd=is_finished_ibd)
+        self.wait_for_sync_nodes(is_ibd_finished=is_ibd_finished)
 
     def add_p2p_connection(
         self,
