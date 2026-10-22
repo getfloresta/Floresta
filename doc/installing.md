@@ -8,7 +8,7 @@ or if you prefer a guided installation process, that will help you to configure 
 
 2. with this  [`bash` script to install and configure](../contrib/install.sh).
 
-> ⚠️ Currently, this script only works for debian-based systems. Also it aims to run on fresh servers, since it does some package manager operations, that is `cargo` and `apt` removing or adding dependencies. If you are insecure about the process is strongly advised to understand how the script works.
+> ⚠️ Currently, this script only works for debian-based systems. Also it aims to run on fresh servers, since it does some package manager operations, that is `cargo` and `apt` adding dependencies and removing them after the build. Only the packages and the Rust toolchain that the script itself installed are removed; anything you already had is left untouched. If you are insecure about the process is strongly advised to understand how the script works.
 
 ## About the script
 
@@ -17,6 +17,7 @@ This script will guide the user about Floresta's installation/configuration or r
 * check if you have the required dependencies to build Floresta, and if not, download them;
 * start the guide to desired Floresta's `systemd` service configuration;
 * once configured, download the [latest release](https://github.com/getfloresta/Floresta/releases/latest), build and install the `florestad` and `floresta-cli` binaries with the `jsonrpc` feature;
+* remove the build dependencies and the Rust toolchain it installed, keeping the ones you already had;
 * warn how to start and enable the `systemd` service;
 * check if the service is running.
 
