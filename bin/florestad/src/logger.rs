@@ -4,8 +4,9 @@
 //!
 //! This module configures [`tracing_subscriber`](https://docs.rs/tracing_subscriber) with up to two output layers:
 //! - **stdout** – human-friendly, ANSI-coloured when attached to a real TTY.
-//! - **file** – plain-text, appended to [`LOG_FILE`] inside `data_dir` via a
-//!   non-blocking writer.
+//! - **file** – plain-text, appended via a non-blocking writer to the path
+//!   [`resolve_log_file`] picks. File logging is on by default, writing to
+//!   [`LOG_FILE`] inside the net-specific `data_dir`.
 //!
 //! The active log level is controlled (in descending priority) by:
 //! 1. The `RUST_LOG` environment variable.
@@ -19,7 +20,7 @@ use core::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::exit;
+use std::path::PathBuf;
 
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -215,6 +216,37 @@ where
     }
 }
 
+/// Resolves the log file path from the CLI flags, mirroring Bitcoin Core.
+///
+/// File logging is on by default. `--no-log-file` turns it off and wins over any
+/// path that was also passed. `--log-file=<file>` overrides the default
+/// [`LOG_FILE`] name: absolute paths are used as given, while relative ones are
+/// prefixed by `datadir`, which is already net-specific.
+///
+/// Returns `None` when file logging is disabled.
+pub(crate) fn resolve_log_file(
+    no_log_file: bool,
+    log_file: Option<impl AsRef<Path>>,
+    datadir: impl AsRef<Path>,
+) -> Option<PathBuf> {
+    if no_log_file {
+        return None;
+    }
+
+    let path = log_file
+        .as_ref()
+        .map(AsRef::as_ref)
+        .unwrap_or(Path::new(LOG_FILE));
+
+    // Core passes absolute and empty paths through untouched; only relative
+    // ones are joined onto the datadir.
+    if path.is_absolute() || path.as_os_str().is_empty() {
+        Some(path.to_path_buf())
+    } else {
+        Some(datadir.as_ref().join(path))
+    }
+}
+
 /// Initialises the global [`tracing`] subscriber for the application.
 ///
 /// Depending on the flags provided, the subscriber can write to stdout, a log
@@ -223,9 +255,9 @@ where
 ///
 /// # Arguments
 ///
-/// * `data_dir` – Directory in which [`LOG_FILE`] is created when
-///   `log_to_file` is `true`. The directory must already exist.
-/// * `log_to_file` – Append structured log output to `<data_dir>/`[`LOG_FILE`].
+/// * `log_file` – Full path of the file log output is appended to, as resolved
+///   by [`resolve_log_file`]. `None` disables file logging. The parent
+///   directory must already exist.
 /// * `log_to_stdout` – Emit log output to stdout.
 /// * `debug` – Set the default log level to `debug`. When `false` the
 ///   level defaults to `info`. In both cases `RUST_LOG` overrides the default.
@@ -239,21 +271,18 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if `log_to_file` is `true` and [`LOG_FILE`] cannot be
-/// created or opened for appending inside `data_dir`.
+/// Returns [`io::Error`] if `log_file` is `Some` and the path has no file name,
+/// or cannot be created or opened for appending.
 ///
 /// # Panics
 ///
 /// Panics if a global [`tracing`] subscriber has already been
 /// installed (e.g. if this function is called more than once).
 pub fn start_logger(
-    datadir: impl AsRef<Path>,
-    log_to_file: bool,
+    log_file: Option<impl AsRef<Path>>,
     log_to_stdout: bool,
     log_level: Level,
 ) -> Result<Option<WorkerGuard>, io::Error> {
-    let datadir = datadir.as_ref();
-
     let is_debug = log_level >= Level::DEBUG;
     let make_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level.to_string()))
@@ -269,35 +298,38 @@ pub fn start_logger(
             .with_filter(make_filter())
     });
 
-    if log_to_file {
-        let log_file_path = datadir.join(LOG_FILE);
-
-        // Validate the log file path (`<datadir>/<LOG_FILE>`).
-        let _ = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)
-            .map_err(|e| {
-                eprintln!(
-                    "Failed to create log file at path={}: {e}",
-                    log_file_path.display()
-                );
-                exit(1)
-            });
-    }
-
     // Formatter for events destined to the log file.
     let mut guard = None;
-    let fmt_layer_logfile = log_to_file.then(|| {
-        let file_appender = tracing_appender::rolling::never(datadir, LOG_FILE);
-        let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
-        guard = Some(file_guard);
-        layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .event_format(ShortTargetFormatter::new(is_debug))
-            .with_filter(make_filter())
-    });
+    let fmt_layer_logfile = match log_file.as_ref().map(AsRef::as_ref) {
+        None => None,
+        Some(path) => {
+            // `rolling::never` takes the directory and file name separately.
+            let file_name = path.file_name().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("log file path has no file name: {}", path.display()),
+                )
+            })?;
+            let dir = path.parent().unwrap_or(Path::new("."));
+
+            // Fail before installing the subscriber if the path is unusable.
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+
+            let file_appender = tracing_appender::rolling::never(dir, file_name);
+            let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+            guard = Some(file_guard);
+            Some(
+                layer()
+                    .with_writer(non_blocking)
+                    .with_ansi(false)
+                    .event_format(ShortTargetFormatter::new(is_debug))
+                    .with_filter(make_filter()),
+            )
+        }
+    };
 
     let registry = tracing_subscriber::registry()
         .with(fmt_layer_stdout)
@@ -311,4 +343,83 @@ pub fn start_logger(
     registry.init();
 
     Ok(guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use super::LOG_FILE;
+    use super::resolve_log_file;
+
+    /// With no flags, we log to [`LOG_FILE`] inside the datadir.
+    #[test]
+    fn resolve_log_file_defaults_to_datadir() {
+        let resolved = resolve_log_file(false, None::<&Path>, "/home/user/.floresta");
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/home/user/.floresta").join(LOG_FILE))
+        );
+    }
+
+    /// The datadir is already net-specific, so the default lands under it.
+    #[test]
+    fn resolve_log_file_uses_the_net_specific_datadir() {
+        let resolved = resolve_log_file(false, None::<&Path>, "/home/user/.floresta/signet");
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/home/user/.floresta/signet/debug.log"))
+        );
+    }
+
+    /// Relative paths are prefixed by the datadir, like Core.
+    #[test]
+    fn resolve_log_file_joins_relative_paths_onto_the_datadir() {
+        let resolved = resolve_log_file(false, Some("logs/node.log"), "/home/user/.floresta");
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/home/user/.floresta/logs/node.log"))
+        );
+    }
+
+    /// Absolute paths are taken as given, ignoring the datadir.
+    #[test]
+    fn resolve_log_file_keeps_absolute_paths_untouched() {
+        let resolved = resolve_log_file(
+            false,
+            Some("/var/log/florestad.log"),
+            "/home/user/.floresta",
+        );
+
+        assert_eq!(resolved, Some(PathBuf::from("/var/log/florestad.log")));
+    }
+
+    /// `--no-log-file` disables file logging.
+    #[test]
+    fn resolve_log_file_returns_none_when_disabled() {
+        let resolved = resolve_log_file(true, None::<&Path>, "/home/user/.floresta");
+
+        assert_eq!(resolved, None);
+    }
+
+    /// `--no-log-file` wins when a path was passed too.
+    #[test]
+    fn resolve_log_file_disabled_overrides_a_supplied_path() {
+        let resolved =
+            resolve_log_file(true, Some("/var/log/florestad.log"), "/home/user/.floresta");
+
+        assert_eq!(resolved, None);
+    }
+
+    /// Core passes empty paths through untouched rather than joining them.
+    #[test]
+    fn resolve_log_file_passes_empty_paths_through() {
+        let resolved = resolve_log_file(false, Some(""), "/home/user/.floresta");
+
+        assert_eq!(resolved, Some(PathBuf::new()));
+    }
 }

@@ -33,10 +33,25 @@ pub struct Cli {
     /// Turn debugging information on
     pub debug: bool,
 
-    #[arg(long)]
-    /// Option for saving log into data_Dir
+    #[arg(long, alias = "debuglogfile", value_name = "FILE")]
+    /// Specify location of the log file (default: debug.log)
     ///
-    /// if set, log will be saved into $DATA_DIR/debug.log.
+    /// Relative paths will be prefixed by a net-specific datadir location.
+    /// Pass `--no-log-file` to disable writing the log to a file.
+    /// Core's `--debuglogfile` spelling also works.
+    pub log_file: Option<PathBuf>,
+
+    #[arg(long, alias = "nodebuglogfile")]
+    /// Disable writing the log to a file
+    ///
+    /// Core's `--nodebuglogfile` spelling also works.
+    pub no_log_file: bool,
+
+    #[arg(long, hide = true)]
+    /// Deprecated, and does nothing: logging to a file is the default
+    ///
+    /// Kept so that service files written by older installs keep starting.
+    /// Pass `--no-log-file` to turn file logging off.
     pub log_to_file: bool,
 
     #[arg(long, value_name = "PATH")]

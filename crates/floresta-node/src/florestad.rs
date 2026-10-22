@@ -173,8 +173,8 @@ pub struct Config {
     /// Whether we should write logs to `stdout`.
     pub log_to_stdout: bool,
 
-    /// Whether we should log to a fs file
-    pub log_to_file: bool,
+    /// Where we should write logs to, or `None` to not log to a file
+    pub log_file: Option<PathBuf>,
 
     /// Whether we should use assume utreexo
     pub assume_utreexo: bool,
@@ -246,7 +246,7 @@ impl Config {
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
             log_to_stdout: false,
-            log_to_file: false,
+            log_file: None,
             assume_utreexo: false,
             debug: false,
             user_agent: String::new(),
@@ -489,7 +489,11 @@ impl Florestad {
                     .as_ref()
                     .map(|x| Self::resolve_hostname(x, self.config.network.default_rpc_port()))
                     .transpose()?,
-                datadir.join("debug.log"),
+                // Core reports the path it would use even with file logging off.
+                self.config
+                    .log_file
+                    .clone()
+                    .unwrap_or_else(|| datadir.join("debug.log")),
                 self.config.user_agent.clone(),
                 proxy,
                 !self.config.allow_v1_fallback,

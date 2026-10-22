@@ -437,7 +437,7 @@ After=network-online.target time-set.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/florestad --daemon --network $network --data-dir $florestaDir --config-file $florestaLib/config.toml --pid-file $florestaRun/florestad.pid --log-to-file$([ -n "$proxy" ] && echo " --proxy $proxy ")$([ -n "$connect" ] && echo " --connect $connect ")$([ -n "$zeromq" ] && echo " --zmq-address $zeromq ")$([ -n "$assume_valid" ] && echo " --assume-valid $assume_valid ")$([ "$assume_utreexo" = true ] && echo " --assume-utreexo ")$([ "$enable_cfilters" = false ] && echo " --no-cfilters ")$([ -n "$filters_start_height" ] && echo " --filters-start-height \"$filters_start_height\" ")$([ "$enable_tls" == true ] && echo " --generate-cert --enable-electrum-tls")
+ExecStart=/usr/local/bin/florestad --daemon --network $network --data-dir $florestaDir --config-file $florestaLib/config.toml --pid-file $florestaRun/florestad.pid$([ -n "$proxy" ] && echo " --proxy $proxy ")$([ -n "$connect" ] && echo " --connect $connect ")$([ -n "$zeromq" ] && echo " --zmq-address $zeromq ")$([ -n "$assume_valid" ] && echo " --assume-valid $assume_valid ")$([ "$assume_utreexo" = true ] && echo " --assume-utreexo ")$([ "$enable_cfilters" = false ] && echo " --no-cfilters ")$([ -n "$filters_start_height" ] && echo " --filters-start-height \"$filters_start_height\" ")$([ "$enable_tls" == true ] && echo " --generate-cert --enable-electrum-tls")
 
 # Ensure that the service is ready after the MainPID exists
 Type=forking
