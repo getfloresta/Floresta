@@ -12,6 +12,7 @@ use clap::Parser;
 use clap::Subcommand;
 use floresta_common::NetworkExt;
 use floresta_rpc::jsonrpc_client::Client;
+use floresta_rpc::jsonrpc_client::JsonRPCConfig;
 use floresta_rpc::rpc_interfaces::BlockchainRpc;
 use floresta_rpc::rpc_interfaces::ControlRpc;
 use floresta_rpc::rpc_interfaces::NetworkRpc;
@@ -34,8 +35,16 @@ fn main() -> anyhow::Result<()> {
     // Parse command line arguments into a Cli struct
     let cli = Cli::parse();
 
-    // Create a new JSON-RPC client using the host from the CLI arguments
-    let client = Client::new(get_host(&cli));
+    // Resolve basic-auth credentials: explicit flags win, otherwise read the
+    // cookie file written by florestad at startup.
+    let (user, pass) = credentials::resolve(&cli)?;
+
+    // Create a new JSON-RPC client using the host and credentials.
+    let client = Client::new_with_config(JsonRPCConfig {
+        url: get_host(&cli),
+        user: Some(user),
+        pass: Some(pass),
+    });
 
     // Perform the requested RPC call and get the result
     let res = do_request(&cli, client)?;
@@ -45,6 +54,59 @@ fn main() -> anyhow::Result<()> {
 
     // Return Ok to indicate the program ran successfully
     anyhow::Ok(())
+}
+
+/// Basic-auth credential resolution for RPC calls.
+mod credentials {
+    use std::path::Path;
+
+    use anyhow::Context;
+    use floresta_rpc::net_datadir;
+    use floresta_rpc::read_cookie_file;
+    use floresta_rpc::resolve_cookie_path;
+
+    use crate::Cli;
+
+    /// Resolve the basic-auth credentials for the RPC call.
+    ///
+    /// Precedence:
+    ///   1. `--rpc-user` and `--rpc-password` both set: use them.
+    ///   2. Otherwise read the cookie file at `--rpc-cookie-file` (or the
+    ///      network's default location) and split on the first `:` into
+    ///      (user, pass).
+    ///
+    /// When exactly one of `--rpc-user`/`--rpc-password` is set, warn on
+    /// stderr and fall through to cookie auth so a partial config isn't
+    /// silently ignored.
+    pub(super) fn resolve(cli: &Cli) -> anyhow::Result<(String, String)> {
+        match (cli.rpc_user.clone(), cli.rpc_password.clone()) {
+            (Some(user), Some(pass)) => return Ok((user, pass)),
+            (Some(_), None) => {
+                eprintln!(
+                    "warning: --rpc-user set without --rpc-password; both are required together, falling back to cookie auth"
+                );
+            }
+            (None, Some(_)) => {
+                eprintln!(
+                    "warning: --rpc-password set without --rpc-user; both are required together, falling back to cookie auth"
+                );
+            }
+            (None, None) => {}
+        }
+        let datadir = net_datadir(cli.data_dir.as_deref(), cli.network);
+        let cookie_path = resolve_cookie_path(&datadir, cli.rpc_cookie_file.as_deref());
+        read_cookie(&cookie_path)
+    }
+
+    /// Wrap `floresta_rpc::read_cookie_file` with CLI-specific error context.
+    fn read_cookie(path: &Path) -> anyhow::Result<(String, String)> {
+        read_cookie_file(path).with_context(|| {
+            format!(
+                "failed to read RPC cookie file at {}; start florestad first or pass --rpc-user/--rpc-password",
+                path.display()
+            )
+        })
+    }
 }
 
 // Function to determine the RPC host based on CLI arguments and network type
@@ -165,6 +227,15 @@ pub struct Cli {
     /// The RPC password to use
     #[arg(short = 'P', long, value_name = "PASSWORD")]
     pub rpc_password: Option<String>,
+    /// Data directory florestad is using. Defaults to `~/.floresta`.
+    #[arg(long, value_name = "PATH")]
+    pub data_dir: Option<PathBuf>,
+    /// Path to the RPC cookie file. Defaults to `<datadir>/[<net>/].cookie`.
+    ///
+    /// Relative paths are prefixed by the network-specific data directory,
+    /// matching how florestad resolves the same flag.
+    #[arg(long, value_name = "PATH")]
+    pub rpc_cookie_file: Option<PathBuf>,
     /// An actual RPC command to run
     #[command(subcommand)]
     pub methods: Methods,
