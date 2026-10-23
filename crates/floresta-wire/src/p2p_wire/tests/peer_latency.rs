@@ -127,7 +127,7 @@ mod tests {
 
     #[tokio::test]
     // Verifies that address timeouts preserve ordinary peers and manual data requests
-    // are retried, while feeler and handshake timeouts still disconnect in every context.
+    // are retried, while short-lived and handshake timeouts still disconnect in every context.
     async fn test_address_timeout() {
         fn check<T: 'static + Default + NodeContext>() {
             let mut node = latency_node::<T>();
@@ -137,7 +137,7 @@ mod tests {
 
             // Missing addresses alone must not close a useful connection.
             for kind in [
-                ConnectionKind::Regular(ServiceFlags::NETWORK),
+                ConnectionKind::OutboundFullRelay(ServiceFlags::NETWORK),
                 ConnectionKind::Manual,
                 ConnectionKind::Extra,
             ] {
@@ -189,13 +189,13 @@ mod tests {
             ));
             assert!(node.inflight.is_empty());
 
-            // Feelers are temporary address-discovery connections, so close them on timeout.
+            // Addr-fetch peers are temporary address-discovery connections, so close them on timeout.
             node.inflight.clear();
             let (sender, mut messages) = unbounded_channel();
             let peer = node.peers.get_mut(&1).unwrap();
             peer.channel = sender;
             peer.state = PeerStatus::Ready;
-            peer.kind = ConnectionKind::Feeler;
+            peer.kind = ConnectionKind::AddrFetch;
             node.inflight
                 .insert(InflightRequests::GetAddresses, (1, expired));
             node.check_for_timeout().unwrap();
