@@ -36,6 +36,9 @@ pub mod spsc;
 pub use ema::Ema;
 pub use merkle::MerkleBackend;
 pub use spsc::Channel;
+// Used by `try_and_log!` and `try_and_warn!`, so callers don't need their own `tracing` dependency.
+#[doc(hidden)]
+pub use tracing;
 
 /// Computes the SHA-256 digest of the byte slice data and returns a [Hash] from `bitcoin_hashes`.
 ///
