@@ -99,6 +99,7 @@ fn parse_and_split_descriptor(
     Ok(descriptors)
 }
 
+#[cfg(test)]
 /// Derives addresses from a list of descriptors.
 /// Parses each descriptor, validates it, and derives the specified number of addresses
 /// starting from the given index.
@@ -113,6 +114,11 @@ pub(crate) fn derive_addresses_from_list_descriptors(
     }
 
     Ok(addresses)
+}
+
+/// Whether the descriptor has a wildcard, so that each index yields new scripts.
+pub(crate) fn has_wildcard(descriptor: &str) -> Result<bool, DescriptorError> {
+    Ok(Descriptor::<DescriptorPublicKey>::from_str(descriptor)?.has_wildcard())
 }
 
 /// Derives addresses from a single descriptor string.
