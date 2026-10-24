@@ -244,6 +244,12 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         self.check_bip94_block(block_header, height)?;
 
+        // Like Core's `bad-version`: old versions are rejected once their BIP activates
+        let min_version = Consensus::min_header_version(&self.chain_params().params, height);
+        if block_header.version.to_consensus() < min_version {
+            Err(BlockValidationErrors::BadVersion)?;
+        }
+
         Ok(block_hash)
     }
 
@@ -1674,6 +1680,7 @@ mod test {
     use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use bitcoin::opcodes::OP_TRUE;
+    use bitcoin::params::Params;
     use bitcoin::script::Builder;
     use bitcoin::transaction::Version as TransactionVersion;
     use floresta_common::assert_ok;
@@ -2527,6 +2534,65 @@ mod test {
                 BlockValidationErrors::NotEnoughPow
             ))
         ));
+    }
+
+    /// A regtest child of `parent` with the given version and a valid proof of work.
+    fn mined_regtest_child_of(parent: &BlockHeader, version: i32) -> BlockHeader {
+        let mut header = BlockHeader {
+            version: HeaderVersion::from_consensus(version),
+            prev_blockhash: parent.block_hash(),
+            merkle_root: parent.merkle_root,
+            time: parent.time + 600,
+            bits: CompactTarget::from_consensus(EASIEST_REGTEST_TARGET_BITS),
+            nonce: 0,
+        };
+        while header.validate_pow(header.target()).is_err() {
+            header.nonce += 1;
+        }
+        header
+    }
+
+    /// Checks that `accept_header` rejects version `min_version - 1` with `BadVersion` at
+    /// `height` on regtest, and accepts `min_version`.
+    fn assert_min_version_at(height: u32, min_version: i32) {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let headers = store_headers_with_bits(
+            &chain,
+            Network::Regtest,
+            &vec![EASIEST_REGTEST_TARGET_BITS; height as usize - 1],
+        );
+        let parent = headers.last().unwrap();
+        chain.update_tip(parent.block_hash(), height - 1);
+
+        let too_old = mined_regtest_child_of(parent, min_version - 1);
+        assert!(matches!(
+            chain.accept_header(too_old),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::BadVersion
+            ))
+        ));
+        assert!(chain.get_disk_block_header(&too_old.block_hash()).is_err());
+
+        let header = mined_regtest_child_of(parent, min_version);
+        chain.accept_header(header).unwrap();
+        assert_eq!(
+            chain.get_best_block().unwrap(),
+            (height, header.block_hash())
+        );
+    }
+
+    #[test]
+    fn accept_header_enforces_the_bip66_minimum_version() {
+        assert_min_version_at(Params::new(Network::Regtest).bip66_height, 3);
+    }
+
+    #[test]
+    fn accept_header_enforces_the_bip65_minimum_version() {
+        // On regtest BIP34 activates after both, so BIP66 and BIP65 are checked on their own
+        let params = Params::new(Network::Regtest);
+        assert!(params.bip66_height < params.bip65_height);
+        assert!(params.bip65_height < params.bip34_height);
+        assert_min_version_at(params.bip65_height, 4);
     }
 
     #[test]

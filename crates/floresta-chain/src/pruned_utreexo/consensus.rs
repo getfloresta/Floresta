@@ -26,6 +26,7 @@ use bitcoin::constants::MAX_BLOCK_SIGOPS_COST;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
 use bitcoin::locktime::relative;
+use bitcoin::params::Params;
 use bitcoin::script;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoinkernel::PrecomputedTransactionData;
@@ -669,6 +670,24 @@ impl Consensus {
         }
 
         Ok(out_value)
+    }
+
+    /// The lowest header version accepted at `height`, as in Core's `ContextualCheckBlockHeader`
+    /// (`bad-version`).
+    ///
+    /// Each of BIP34, BIP66 and BIP65 raises the minimum at its own height, and the heights are
+    /// not in order on every network (on regtest BIP34 comes last).
+    pub fn min_header_version(params: &Params, height: u32) -> i32 {
+        [
+            (params.bip34_height, 2),
+            (params.bip66_height, 3),
+            (params.bip65_height, 4),
+        ]
+        .into_iter()
+        .filter(|(activation, _)| height >= *activation)
+        .map(|(_, version)| version)
+        .max()
+        .unwrap_or(1)
     }
 
     /// Runs inexpensive, consensus-critical block checks that don't require script execution. If
@@ -1763,6 +1782,36 @@ mod tests {
         // Enabling P2SH alone must not also enable witness accounting.
         assert_eq!(wpkh_spend.sigop_cost(&utxos, VERIFY_P2SH), 0);
         assert_eq!(wpkh_spend.sigop_cost(&utxos, flags), 1);
+    }
+
+    #[test]
+    fn min_header_version_checks_each_height_on_its_own() {
+        use bitcoin::params::Params;
+
+        // Distinct heights, in the order regtest has them: BIP34 comes last
+        let mut params = Params::new(Network::Regtest);
+        params.bip66_height = 10;
+        params.bip65_height = 20;
+        params.bip34_height = 30;
+
+        let min = Consensus::min_header_version;
+
+        assert_eq!(min(&params, 9), 1);
+        assert_eq!(min(&params, 10), 3);
+        assert_eq!(min(&params, 19), 3);
+        assert_eq!(min(&params, 20), 4);
+        assert_eq!(min(&params, 30), 4);
+
+        // And in the order mainnet has them: BIP34, BIP66, BIP65
+        params.bip34_height = 10;
+        params.bip66_height = 20;
+        params.bip65_height = 30;
+        assert_eq!(min(&params, 9), 1);
+        assert_eq!(min(&params, 10), 2);
+        assert_eq!(min(&params, 19), 2);
+        assert_eq!(min(&params, 20), 3);
+        assert_eq!(min(&params, 29), 3);
+        assert_eq!(min(&params, 30), 4);
     }
 
     #[test]
