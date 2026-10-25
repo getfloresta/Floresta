@@ -1077,8 +1077,13 @@ impl AddressMan {
 
     /// Updates the service flags after we receive a version message
     pub fn update_set_service_flag(&mut self, idx: usize, flags: ServiceFlags) -> &mut Self {
-        // if this peer turns out to not have the minimum required services, we remove it
-        if !flags.has(ServiceFlags::NETWORK_LIMITED) || !flags.has(ServiceFlags::WITNESS) {
+        // NODE_NETWORK_LIMITED is the normal retention bar. A reached Utreexo
+        // peer may omit it and still be the only proof provider we can reconnect.
+        let retains_basic_services =
+            flags.has(ServiceFlags::NETWORK_LIMITED) && flags.has(ServiceFlags::WITNESS);
+        let retains_proof_service = flags.has(service_flags::UTREEXO.into())
+            || flags.has(service_flags::UTREEXO_ARCHIVE.into());
+        if !retains_basic_services && !retains_proof_service {
             self.addresses.remove(&idx);
             for peers in self.peers_by_service.values_mut() {
                 peers.retain(|&x| x != idx);
@@ -1840,5 +1845,62 @@ mod test {
                 .get_services()
                 .has(service_flags::UTREEXO.into())
         );
+    }
+
+    /// A reached Utreexo peer can omit NODE_NETWORK_LIMITED. Version processing
+    /// must leave it selectable for a later outbound connection.
+    #[test]
+    fn utreexo_provider_without_network_limited_stays_reconnectable() {
+        let mut address_man = AddressMan::new(None, &[ReachableNetworks::IPv4]);
+        let mut address = "1.2.3.4:8333".parse::<LocalAddress>().unwrap();
+        address.set_services(
+            ServiceFlags::NETWORK_LIMITED
+                | ServiceFlags::WITNESS
+                | service_flags::UTREEXO.into(),
+        );
+        address.state = AddressState::Tried(1);
+        let id = address.id;
+        address_man.push_addresses(std::slice::from_ref(&address));
+
+        let assumed = address_man
+            .get_address_to_connect(service_flags::UTREEXO.into(), false)
+            .expect("DNS-assumed utreexo peer is a connection candidate");
+        assert_eq!(assumed.0, id);
+
+        // Same order as a regular handshake, then the disconnect that follows a proof timeout.
+        let observed = ServiceFlags::WITNESS
+            | ServiceFlags::from(1_u64 << 11)
+            | service_flags::UTREEXO.into();
+        address_man
+            .update_set_state(id, AddressState::Connected)
+            .update_set_service_flag(id, observed);
+        address_man.update_set_state(id, AddressState::Tried(2));
+
+        let stored = address_man
+            .addresses
+            .get(&id)
+            .expect("proof provider was removed after version");
+        assert!(stored.services.has(service_flags::UTREEXO.into()));
+        assert!(!stored.services.has(ServiceFlags::NETWORK_LIMITED));
+        assert!(matches!(stored.state, AddressState::Tried(_)));
+        let recovered = address_man
+            .get_address_to_connect(service_flags::UTREEXO.into(), false)
+            .expect("disconnected proof provider was not selectable");
+        assert_eq!(recovered.0, id);
+    }
+
+    #[test]
+    fn ordinary_peer_without_network_limited_is_still_removed() {
+        let mut address_man = AddressMan::new(None, &[ReachableNetworks::IPv4]);
+        let mut address = "1.2.3.5:8333".parse::<LocalAddress>().unwrap();
+        address.set_services(ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS);
+        address.state = AddressState::Tried(1);
+        let id = address.id;
+        address_man.push_addresses(std::slice::from_ref(&address));
+        address_man.update_set_service_flag(
+            id,
+            ServiceFlags::WITNESS | ServiceFlags::from(1_u64 << 11),
+        );
+        assert!(!address_man.addresses.contains_key(&id));
     }
 }
