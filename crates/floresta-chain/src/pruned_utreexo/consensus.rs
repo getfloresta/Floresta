@@ -167,6 +167,16 @@ impl LockTimeCutoff {
     }
 }
 
+/// Fee/weight statistics collected while validating a block's transactions.
+#[derive(Clone, Copy, Debug)]
+pub struct BlockTxStats {
+    /// Total fees paid by the block's non-coinbase transactions.
+    pub(crate) total_fees: Amount,
+
+    /// Combined weight of the block's non-coinbase transactions.
+    pub(crate) total_weight: u64,
+}
+
 impl Consensus {
     /// Returns the block-finality lock-time cutoff for a candidate block.
     ///
@@ -255,8 +265,30 @@ impl Consensus {
     /// `utxos` must contain only outputs supplied by the Utreexo proof. Outputs created by this
     /// block are inserted after their transaction validates, preserving consensus transaction
     /// order for same-block spends.
-    #[allow(unused)]
     pub fn verify_block_transactions(
+        height: u32,
+        lock_time_cutoff: LockTimeCutoff,
+        utxos: HashMap<OutPoint, UtxoData>,
+        transactions: &[Transaction],
+        subsidy: Amount,
+        verify_script: bool,
+        flags: u32,
+    ) -> Result<(), BlockchainError> {
+        Self::verify_block_transactions_inner(
+            height,
+            lock_time_cutoff,
+            utxos,
+            transactions,
+            subsidy,
+            verify_script,
+            flags,
+        )?;
+        Ok(())
+    }
+
+    /// Same as [`Consensus::verify_block_transactions`], but returns the collected
+    /// [`BlockTxStats`] instead of discarding them.
+    pub(crate) fn verify_block_transactions_inner(
         height: u32,
         lock_time_cutoff: LockTimeCutoff,
         mut utxos: HashMap<OutPoint, UtxoData>,
@@ -264,7 +296,7 @@ impl Consensus {
         subsidy: Amount,
         verify_script: bool,
         flags: u32,
-    ) -> Result<(), BlockchainError> {
+    ) -> Result<BlockTxStats, BlockchainError> {
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
             Err(BlockValidationErrors::EmptyBlock)?;
@@ -273,6 +305,8 @@ impl Consensus {
         // Total block fees that the miner can claim in the coinbase
         let mut fee = Amount::ZERO;
         let mut sigop_cost: usize = 0;
+
+        let mut total_weight = 0u64;
 
         for (n, transaction) in transactions.iter().enumerate() {
             if !Self::is_final_transaction(transaction, height, lock_time_cutoff) {
@@ -308,6 +342,7 @@ impl Consensus {
                 fee = fee
                     .checked_add(in_value - out_value)
                     .ok_or(BlockValidationErrors::TooManyCoins)?;
+                total_weight += transaction.weight().to_wu();
             }
 
             // Outputs become spendable only after their creating transaction has been validated.
@@ -338,7 +373,10 @@ impl Consensus {
             Err(BlockValidationErrors::BadCoinbaseOutValue)?;
         }
 
-        Ok(())
+        Ok(BlockTxStats {
+            total_fees: fee,
+            total_weight,
+        })
     }
 
     /// Performs all transaction checks that are independent of the spent outputs and produces

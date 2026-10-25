@@ -22,12 +22,9 @@
 //! let block = socket.recv().unwrap();
 //! ```
 
-use std::collections::HashMap;
-
-use bitcoin::OutPoint;
 use bitcoin::consensus::serialize;
+use floresta_chain::BlockConnected;
 use floresta_chain::BlockConsumer;
-use floresta_chain::UtxoData;
 use tracing::error;
 use zmq::Context;
 use zmq::Socket;
@@ -59,17 +56,8 @@ impl ZMQServer {
 
 // Implement BlockConsumer so we can subscribe on `ChainState`
 impl BlockConsumer for ZMQServer {
-    fn wants_spent_utxos(&self) -> bool {
-        false
-    }
-
-    fn on_block(
-        &self,
-        block: &bitcoin::Block,
-        _height: u32,
-        _spent_utxos: Option<&HashMap<OutPoint, UtxoData>>,
-    ) {
-        let block = serialize(&block);
+    fn on_connected(&self, evt: BlockConnected<'_>) {
+        let block = serialize(evt.block);
         if let Err(e) = self.socket.send(block, zmq::DONTWAIT) {
             error!("while sending block over zmq: {e}");
         }
