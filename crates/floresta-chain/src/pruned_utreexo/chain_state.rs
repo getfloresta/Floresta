@@ -102,15 +102,6 @@ impl BlockConsumer for Channel<(Block, u32)> {
     }
 }
 
-impl BlockConsumer for Channel<(Block, u32, HashMap<OutPoint, UtxoData>)> {
-    fn on_connected(&self, evt: BlockConnected<'_>) {
-        let spent_utxos = evt
-            .spent_utxos
-            .expect("ChainState always provides spent UTXOs to subscribers");
-        self.send((evt.block.to_owned(), evt.height, spent_utxos.to_owned()));
-    }
-}
-
 /// Internal state of the blockchain managed by `ChainState`.
 pub struct ChainStateInner<PersistedState: ChainStore> {
     /// The acc we use for validation.
