@@ -543,9 +543,11 @@ where
                     txid: transaction.compute_txid(),
                     vout: index as u32,
                 };
-                address.utxos.push(utxo);
-                self.utxo_index.insert(utxo, hash);
-                address.balance += value;
+                if !address.utxos.contains(&utxo) {
+                    address.utxos.push(utxo);
+                    self.utxo_index.insert(utxo, hash);
+                    address.balance += value;
+                }
             }
 
             if !address.transactions.contains(&transaction_to_cache.hash) {
