@@ -128,13 +128,21 @@ fn main() {
         false => Level::INFO,
     };
 
+    // Like Core, keep the whole log while debugging.
+    let shrink_log_file = !params.no_shrink_log_file && !config.debug;
+
     // The guard must stay alive until the end of `main` to flush file logs when dropped.
-    let _logger_guard = start_logger(config.log_file.as_ref(), config.log_to_stdout, log_level)
-        .unwrap_or_else(|e| {
-            let path = config.log_file.as_deref().unwrap_or(Path::new(""));
-            eprintln!("Could not open log file {}: {e}", path.display());
-            exit(1);
-        });
+    let _logger_guard = start_logger(
+        config.log_file.as_ref(),
+        shrink_log_file,
+        config.log_to_stdout,
+        log_level,
+    )
+    .unwrap_or_else(|e| {
+        let path = config.log_file.as_deref().unwrap_or(Path::new(""));
+        eprintln!("Could not open log file {}: {e}", path.display());
+        exit(1);
+    });
 
     let _rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
