@@ -23,6 +23,8 @@ network="bitcoin"
 proxy=""
 uninstall_mode=false
 interactive_mode=true
+installed_packages=()
+installed_rust=false
 defaultRepo="getfloresta"
 defaultTag="0.8.0"
 tarSrc="https://github.com/$defaultRepo/Floresta/archive/refs/tags/v$defaultTag.tar.gz"
@@ -251,6 +253,7 @@ apt_install() {
         sudo apt update
         echo "🐧 Installing missing packages..."
         sudo apt-get install -y -q "${missing[@]}"
+        installed_packages+=("${missing[@]}")
     else
         echo "🐧 All packages installed: skip"
     fi
@@ -264,6 +267,7 @@ install_rustup() {
     haveRust=$(which cargo)
     if [ -z "$haveRust" ]; then
         echo "🦀 Rustup not found. Installing..."
+        installed_rust=true
         export RUSTUP_HOME=/home/$me/.rustup
         export CARGO_HOME=/home/$me/.cargo
         export PATH=/home/$me/.cargo/bin:$PATH
@@ -295,7 +299,7 @@ clean_on_error() {
     rm "$1"
     rm -rf "$tarDest"
     rm -rf "$bdlDir"
-    cleanup_apt gcc build-essential pkg-config libssl-dev mold
+    cleanup_apt "${installed_packages[@]}"
     cleanup_rust
     cleanup_profile
     exit 1
@@ -324,7 +328,7 @@ download_floresta() {
 
     if ! gpg --keyserver keyserver.ubuntu.com --recv-keys 2C8E0F836FD7DBBBB9E9B2EF89964EC3AB22B2E3; then
         echo "❌ Failed to download dlsouza pgp key"
-        cleanup_apt gcc build-essential pkg-config libssl-dev mold
+        cleanup_apt "${installed_packages[@]}"
         cleanup_rust
         cleanup_profile
         exit 1
@@ -528,6 +532,11 @@ cleanup_apt() {
 # Remove toolchain and directories built within
 # $HOME/.cargo/bin/rustup
 cleanup_rust() {
+    if [ "$installed_rust" = false ]; then
+        echo "🦀 Rust was already installed. Skip cleanup..."
+        return
+    fi
+
     echo "🧹 Cleaning up Rust toolchain"
     if command -v rustup >/dev/null 2>&1; then
         echo 'y' | rustup self uninstall
@@ -561,6 +570,10 @@ cleanup_rust() {
 #
 # This function clean this call, making a backup of it if anything goes wrong.
 cleanup_profile() {
+    if [ "$installed_rust" = false ]; then
+        return
+    fi
+
     echo "🐧 Creating a backup of /home/$me/.profile"
     cp ~/.profile ~/.profile.bak
 
@@ -598,7 +611,7 @@ install_floresta() {
     setup_service
     download_floresta
     build_floresta
-    cleanup_apt build-essential pkg-config libssl-dev mold cmake clang libclang-dev libboost-all-dev
+    cleanup_apt "${installed_packages[@]}"
     cleanup_rust
     cleanup_profile
     show_done
