@@ -4,8 +4,9 @@
 //!
 //! This module configures [`tracing_subscriber`](https://docs.rs/tracing_subscriber) with up to two output layers:
 //! - **stdout** – human-friendly, ANSI-coloured when attached to a real TTY.
-//! - **file** – plain-text, appended to [`LOG_FILE`] inside `data_dir` via a
-//!   non-blocking writer.
+//! - **file** – plain-text, appended via a non-blocking writer to the path
+//!   [`resolve_log_file`] picks. File logging is on by default, writing to
+//!   [`LOG_FILE`] inside the net-specific `data_dir`.
 //!
 //! The active log level is controlled (in descending priority) by:
 //! 1. The `RUST_LOG` environment variable.
@@ -18,8 +19,11 @@
 use core::fmt;
 use std::fs;
 use std::io;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::path::Path;
-use std::process::exit;
+use std::path::PathBuf;
 
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -38,6 +42,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// The file which logging events are written to.
 pub(crate) const LOG_FILE: &str = "debug.log";
+
+/// How many bytes from the end of the log file [`shrink_log_file`] keeps, matching Core.
+pub(crate) const RECENT_LOG_HISTORY_SIZE: u64 = 10_000_000;
 
 /// The string used to format the timestamp, via [`ChronoLocal`].
 ///
@@ -215,6 +222,66 @@ where
     }
 }
 
+/// Resolves the log file path from the CLI flags, mirroring Bitcoin Core.
+///
+/// File logging is on by default. `--no-log-file` turns it off and wins over any
+/// path that was also passed. `--log-file=<file>` overrides the default
+/// [`LOG_FILE`] name: absolute paths are used as given, while relative ones are
+/// prefixed by `datadir`, which is already net-specific.
+///
+/// Returns `None` when file logging is disabled.
+pub(crate) fn resolve_log_file(
+    no_log_file: bool,
+    log_file: Option<impl AsRef<Path>>,
+    datadir: impl AsRef<Path>,
+) -> Option<PathBuf> {
+    if no_log_file {
+        return None;
+    }
+
+    let path = log_file
+        .as_ref()
+        .map(AsRef::as_ref)
+        .unwrap_or(Path::new(LOG_FILE));
+
+    // Like Core, absolute paths are taken as given; relative ones are joined
+    // onto the datadir.
+    if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else {
+        Some(datadir.as_ref().join(path))
+    }
+}
+
+/// Trims the file at `path` down to its last `keep` bytes, once it has grown
+/// more than 10% past that, like Core's `-shrinkdebugfile`.
+///
+/// Unlike Core, the cut moves forward to the next line break, so the file
+/// doesn't start with half a line. Missing files and special files such as
+/// `/dev/null` are left alone.
+pub(crate) fn shrink_log_file(path: &Path, keep: u64) -> io::Result<()> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    let len = metadata.len();
+    if !metadata.is_file() || len <= keep / 10 * 11 {
+        return Ok(());
+    }
+
+    // Read one byte before the tail too, so a cut that already sits on a line
+    // boundary keeps its first line.
+    let mut file = fs::File::open(path)?;
+    file.seek(SeekFrom::Start(len - keep - 1))?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail)?;
+
+    let start = tail.iter().position(|&b| b == b'\n').map_or(1, |i| i + 1);
+    fs::write(path, &tail[start..])
+}
+
 /// Initialises the global [`tracing`] subscriber for the application.
 ///
 /// Depending on the flags provided, the subscriber can write to stdout, a log
@@ -223,9 +290,11 @@ where
 ///
 /// # Arguments
 ///
-/// * `data_dir` – Directory in which [`LOG_FILE`] is created when
-///   `log_to_file` is `true`. The directory must already exist.
-/// * `log_to_file` – Append structured log output to `<data_dir>/`[`LOG_FILE`].
+/// * `log_file` – Full path of the file log output is appended to, as resolved
+///   by [`resolve_log_file`]. `None` disables file logging. The parent
+///   directory must already exist.
+/// * `shrink` – Trim `log_file` with [`shrink_log_file`] before appending to
+///   it. A failed trim doesn't stop the node; it is logged as a warning.
 /// * `log_to_stdout` – Emit log output to stdout.
 /// * `debug` – Set the default log level to `debug`. When `false` the
 ///   level defaults to `info`. In both cases `RUST_LOG` overrides the default.
@@ -239,21 +308,19 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if `log_to_file` is `true` and [`LOG_FILE`] cannot be
-/// created or opened for appending inside `data_dir`.
+/// Returns [`io::Error`] if `log_file` is `Some` and the path has no file name,
+/// or cannot be created or opened for appending.
 ///
 /// # Panics
 ///
 /// Panics if a global [`tracing`] subscriber has already been
 /// installed (e.g. if this function is called more than once).
 pub fn start_logger(
-    datadir: impl AsRef<Path>,
-    log_to_file: bool,
+    log_file: Option<impl AsRef<Path>>,
+    shrink: bool,
     log_to_stdout: bool,
     log_level: Level,
 ) -> Result<Option<WorkerGuard>, io::Error> {
-    let datadir = datadir.as_ref();
-
     let is_debug = log_level >= Level::DEBUG;
     let make_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level.to_string()))
@@ -269,35 +336,51 @@ pub fn start_logger(
             .with_filter(make_filter())
     });
 
-    if log_to_file {
-        let log_file_path = datadir.join(LOG_FILE);
-
-        // Validate the log file path (`<datadir>/<LOG_FILE>`).
-        let _ = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)
-            .map_err(|e| {
-                eprintln!(
-                    "Failed to create log file at path={}: {e}",
-                    log_file_path.display()
-                );
-                exit(1)
-            });
-    }
-
     // Formatter for events destined to the log file.
     let mut guard = None;
-    let fmt_layer_logfile = log_to_file.then(|| {
-        let file_appender = tracing_appender::rolling::never(datadir, LOG_FILE);
-        let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
-        guard = Some(file_guard);
-        layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .event_format(ShortTargetFormatter::new(is_debug))
-            .with_filter(make_filter())
-    });
+    let mut shrink_error = None;
+    let fmt_layer_logfile = match log_file.as_ref().map(AsRef::as_ref) {
+        None => None,
+        Some(path) => {
+            // `rolling::never` takes the directory and file name separately, and
+            // panics if the file name isn't UTF-8.
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("log file path has no UTF-8 file name: {}", path.display()),
+                    )
+                })?;
+            let dir = path.parent().unwrap_or(Path::new("."));
+
+            // Trimmed before the appender opens the file. The subscriber isn't
+            // up yet, so any error is held and logged once it is.
+            if shrink {
+                shrink_error = shrink_log_file(path, RECENT_LOG_HISTORY_SIZE)
+                    .err()
+                    .map(|e| format!("Could not shrink log file {}: {e}", path.display()));
+            }
+
+            // Fail before installing the subscriber if the path is unusable.
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+
+            let file_appender = tracing_appender::rolling::never(dir, file_name);
+            let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+            guard = Some(file_guard);
+            Some(
+                layer()
+                    .with_writer(non_blocking)
+                    .with_ansi(false)
+                    .event_format(ShortTargetFormatter::new(is_debug))
+                    .with_filter(make_filter()),
+            )
+        }
+    };
 
     let registry = tracing_subscriber::registry()
         .with(fmt_layer_stdout)
@@ -310,5 +393,158 @@ pub fn start_logger(
 
     registry.init();
 
+    if let Some(error) = shrink_error {
+        tracing::warn!("{error}");
+    }
+
     Ok(guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use super::LOG_FILE;
+    use super::resolve_log_file;
+    use super::shrink_log_file;
+
+    /// Writes `count` lines of 10 bytes each (`line 0000\n`, ...) to a fresh
+    /// file named `name` in the temp dir, and returns its path and contents.
+    fn write_lines(name: &str, count: usize) -> (PathBuf, String) {
+        let path = std::env::temp_dir().join(format!("florestad-{}-{name}", std::process::id()));
+        let contents: String = (0..count).map(|i| format!("line {i:04}\n")).collect();
+        std::fs::write(&path, &contents).unwrap();
+        (path, contents)
+    }
+
+    /// A file past the threshold keeps only its last whole lines.
+    #[test]
+    fn shrink_log_file_keeps_the_last_whole_lines() {
+        let (path, contents) = write_lines("shrink-mid-line.log", 20);
+
+        // 95 bytes lands mid-line, so the partial line at the cut is dropped.
+        shrink_log_file(&path, 95).unwrap();
+        let shrunk = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(shrunk, contents[110..]);
+    }
+
+    /// A cut that already sits on a line boundary keeps that line.
+    #[test]
+    fn shrink_log_file_keeps_a_line_starting_at_the_cut() {
+        let (path, contents) = write_lines("shrink-boundary.log", 20);
+
+        shrink_log_file(&path, 100).unwrap();
+        let shrunk = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(shrunk, contents[100..]);
+    }
+
+    /// Up to 10% past `keep`, the file is left as it is.
+    #[test]
+    fn shrink_log_file_leaves_small_files_alone() {
+        let (path, contents) = write_lines("shrink-small.log", 11);
+
+        shrink_log_file(&path, 100).unwrap();
+        let unchanged = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(unchanged, contents);
+    }
+
+    /// A log file that doesn't exist yet isn't an error, and isn't created.
+    #[test]
+    fn shrink_log_file_ignores_a_missing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "florestad-{}-shrink-missing.log",
+            std::process::id()
+        ));
+
+        shrink_log_file(&path, 100).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    /// A non-UTF-8 file name is rejected with an error before the file is created,
+    /// instead of reaching `rolling::never` and panicking.
+    #[cfg(unix)]
+    #[test]
+    fn start_logger_rejects_non_utf8_file_name() {
+        use std::ffi::OsStr;
+        use std::io::ErrorKind;
+        use std::os::unix::ffi::OsStrExt;
+
+        use tracing::Level;
+
+        let path = std::env::temp_dir().join(OsStr::from_bytes(b"florestad-\xff.log"));
+        let err = super::start_logger(Some(&path), false, false, Level::INFO).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert!(!path.exists(), "no file is created for a rejected path");
+    }
+
+    /// With no flags, we log to [`LOG_FILE`] inside the datadir.
+    #[test]
+    fn resolve_log_file_defaults_to_datadir() {
+        let resolved = resolve_log_file(false, None::<&Path>, "/home/user/.floresta");
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/home/user/.floresta").join(LOG_FILE))
+        );
+    }
+
+    /// The datadir is already net-specific, so the default lands under it.
+    #[test]
+    fn resolve_log_file_uses_the_net_specific_datadir() {
+        let resolved = resolve_log_file(false, None::<&Path>, "/home/user/.floresta/signet");
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/home/user/.floresta/signet/debug.log"))
+        );
+    }
+
+    /// Relative paths are prefixed by the datadir, like Core.
+    #[test]
+    fn resolve_log_file_joins_relative_paths_onto_the_datadir() {
+        let resolved = resolve_log_file(false, Some("logs/node.log"), "/home/user/.floresta");
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/home/user/.floresta/logs/node.log"))
+        );
+    }
+
+    /// Absolute paths are taken as given, ignoring the datadir.
+    #[test]
+    fn resolve_log_file_keeps_absolute_paths_untouched() {
+        let resolved = resolve_log_file(
+            false,
+            Some("/var/log/florestad.log"),
+            "/home/user/.floresta",
+        );
+
+        assert_eq!(resolved, Some(PathBuf::from("/var/log/florestad.log")));
+    }
+
+    /// `--no-log-file` disables file logging.
+    #[test]
+    fn resolve_log_file_returns_none_when_disabled() {
+        let resolved = resolve_log_file(true, None::<&Path>, "/home/user/.floresta");
+
+        assert_eq!(resolved, None);
+    }
+
+    /// `--no-log-file` wins when a path was passed too.
+    #[test]
+    fn resolve_log_file_disabled_overrides_a_supplied_path() {
+        let resolved =
+            resolve_log_file(true, Some("/var/log/florestad.log"), "/home/user/.floresta");
+
+        assert_eq!(resolved, None);
+    }
 }
