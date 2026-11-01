@@ -19,12 +19,14 @@ pub use bitcoin::Network;
 use bitcoin::ScriptBuf;
 pub use floresta_chain::AssumeUtreexoValue;
 pub use floresta_chain::AssumeValidArg;
+use floresta_chain::BlockFeeEstimator;
+use floresta_chain::BlockchainInterface;
 use floresta_chain::ChainParams;
 use floresta_chain::ChainState;
+use floresta_chain::FeeEstimationPolicy;
+use floresta_chain::FeeRateFile;
 use floresta_chain::FlatChainStore as ChainStore;
 use floresta_chain::FlatChainStoreConfig;
-#[cfg(feature = "zmq-server")]
-use floresta_chain::pruned_utreexo::BlockchainInterface;
 use floresta_chain::pruned_utreexo::merkle::ConsensusMerkle;
 #[cfg(feature = "json-rpc")]
 use floresta_common::NetworkExt;
@@ -385,6 +387,17 @@ impl Florestad {
             self.config.assume_valid,
         )?);
 
+        // Fee estimation: a persisted rolling window of per-block fee rates, fed
+        // through the block-subscription port rather than the chain aggregate.
+        let fee_policy = FeeEstimationPolicy::default();
+        let fee_store = FeeRateFile::open(datadir.join("fee_rates.bin"), fee_policy.window as u32)
+            .map_err(FlorestadError::Io)?;
+        let fee_estimator = Arc::new(
+            BlockFeeEstimator::load(fee_store, fee_policy, blockchain_state.get_height()?)
+                .map_err(|e| FlorestadError::CouldNotLoadFlatChainStore(e.into()))?,
+        );
+        blockchain_state.subscribe(fee_estimator.clone());
+
         #[cfg(feature = "compact-filters")]
         let cfilters = if self.config.cfilters {
             let filter_store = FlatFiltersStore::new(datadir.join("cfilters"));
@@ -506,6 +519,7 @@ impl Florestad {
         let electrum_server = ElectrumServer::new(
             wallet,
             blockchain_state,
+            fee_estimator,
             cfilters,
             chain_provider.get_handle(),
         )
