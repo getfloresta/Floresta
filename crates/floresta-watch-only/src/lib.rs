@@ -175,6 +175,9 @@ struct AddressCacheInner<D: AddressCacheDatabase> {
     script_set: HashSet<sha256::Hash>,
     /// Keeps track of all utxos we own, and the script hash they belong to
     utxo_index: HashMap<OutPoint, Hash>,
+    /// Outpoints spent by a confirmed transaction we cached, so a replayed block can't
+    /// credit them again. Not persisted, rebuilt in [`AddressCacheInner::new`].
+    spent_index: HashSet<OutPoint>,
     /// Maps the script hash of a derived address to its derivation index. Not persisted,
     /// rebuilt in [`AddressCacheInner::new`].
     derived_index: HashMap<Hash, u32>,
@@ -273,8 +276,25 @@ where
             address_map,
             script_set,
             utxo_index,
+            spent_index: HashSet::new(),
             derived_index: HashMap::new(),
         };
+
+        let txids = inner
+            .database
+            .list_transactions()
+            .expect("Could not list transactions");
+        for txid in txids {
+            let Some(tx) = inner.get_transaction(&txid) else {
+                continue;
+            };
+            if tx.height == 0 {
+                continue;
+            }
+            for input in tx.tx.input.iter() {
+                inner.spent_index.insert(input.previous_output);
+            }
+        }
 
         // Wallets created before this field was maintained have 100 addresses derived and
         // a `derivation_index` of 0.
@@ -536,6 +556,7 @@ where
                 if let Some(idx) = idx {
                     let utxo = address.utxos.remove(idx);
                     self.utxo_index.remove(&utxo);
+                    self.spent_index.insert(utxo);
                 }
             } else {
                 // This transaction is creating a new utxo for this address
@@ -543,7 +564,7 @@ where
                     txid: transaction.compute_txid(),
                     vout: index as u32,
                 };
-                if !address.utxos.contains(&utxo) {
+                if !self.utxo_index.contains_key(&utxo) && !self.spent_index.contains(&utxo) {
                     address.utxos.push(utxo);
                     self.utxo_index.insert(utxo, hash);
                     address.balance += value;
@@ -1560,6 +1581,74 @@ mod test {
 
         // Only the output created by `BLOCK_SPEND` is still unspent. The utxo from
         // `BLOCK_FIRST_UTXO` was spent and must not be listed anymore.
+        let utxos = cache.get_address_utxos(&script_hash).unwrap().unwrap();
+        assert_eq!(utxos.len(), 1);
+        assert_eq!(utxos[0].0.value.to_sat(), 999_890);
+    }
+
+    /// Replaying the block that created a utxo after its spend was processed must not
+    /// resurrect it. This is what `rescanblockchain` does over a range holding both
+    /// the receive and the spend.
+    #[test]
+    fn test_replayed_block_after_spend_does_not_resurrect_utxo() {
+        let block1 = deserialize_from_str(BLOCK_FIRST_UTXO);
+        let block2 = deserialize_from_str(BLOCK_SPEND);
+
+        let spk = ScriptBuf::from_hex(TEST_ADDRESS_SPK).expect("Valid address");
+        let script_hash = get_spk_hash(&spk);
+        let cache = get_test_cache();
+
+        cache.cache_address(spk).unwrap();
+
+        cache.block_process(&block1, 118510).unwrap();
+        cache.block_process(&block2, 118511).unwrap();
+        cache.block_process(&block1, 118510).unwrap();
+
+        assert_eq!(
+            cache.get_address_balance(&script_hash).unwrap(),
+            Some(999_890)
+        );
+
+        let utxos = cache.get_address_utxos(&script_hash).unwrap().unwrap();
+        assert_eq!(utxos.len(), 1);
+        assert_eq!(utxos[0].0.value.to_sat(), 999_890);
+    }
+
+    /// The spent outpoints are rebuilt from the cached transactions on reload, so a
+    /// rescan after a restart doesn't resurrect a spent utxo, while an unspent output
+    /// missing from the utxo set can still be recovered.
+    #[test]
+    fn test_rescan_after_reload_does_not_resurrect_spent_utxo() {
+        let block1 = deserialize_from_str(BLOCK_FIRST_UTXO);
+        let block2 = deserialize_from_str(BLOCK_SPEND);
+
+        let spk = ScriptBuf::from_hex(TEST_ADDRESS_SPK).expect("Valid address");
+        let script_hash = get_spk_hash(&spk);
+        let datadir = std::env::temp_dir().join(format!("{}.floresta", rand::random::<u32>()));
+
+        let cache = AddressCache::new(KvDatabase::new(&datadir).unwrap(), ConsensusMerkle);
+        cache.cache_address(spk).unwrap();
+        cache.block_process(&block1, 118510).unwrap();
+        cache.block_process(&block2, 118511).unwrap();
+        drop(cache);
+
+        let cache = AddressCache::new(KvDatabase::new(&datadir).unwrap(), ConsensusMerkle);
+        cache.block_process(&block1, 118510).unwrap();
+
+        let utxos = cache.get_address_utxos(&script_hash).unwrap().unwrap();
+        assert!(
+            utxos
+                .iter()
+                .all(|(txout, _)| txout.value.to_sat() != 1_000_000)
+        );
+
+        cache.block_process(&block2, 118511).unwrap();
+
+        assert_eq!(
+            cache.get_address_balance(&script_hash).unwrap(),
+            Some(999_890)
+        );
+
         let utxos = cache.get_address_utxos(&script_hash).unwrap().unwrap();
         assert_eq!(utxos.len(), 1);
         assert_eq!(utxos[0].0.value.to_sat(), 999_890);
