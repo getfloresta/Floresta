@@ -573,8 +573,8 @@ where
 
             if !address.transactions.contains(&transaction_to_cache.hash) {
                 address.transactions.push(transaction_to_cache.hash);
-                self.database.update(address);
             }
+            self.database.update(address);
         }
     }
 
@@ -1614,9 +1614,8 @@ mod test {
         assert_eq!(utxos[0].0.value.to_sat(), 999_890);
     }
 
-    /// The spent outpoints are rebuilt from the cached transactions on reload, so a
-    /// rescan after a restart doesn't resurrect a spent utxo, while an unspent output
-    /// missing from the utxo set can still be recovered.
+    /// A reload must restore the state as it was, including a change output paid back
+    /// to the spending address, and replaying the blocks after it must not change it.
     #[test]
     fn test_rescan_after_reload_does_not_resurrect_spent_utxo() {
         let block1 = deserialize_from_str(BLOCK_FIRST_UTXO);
@@ -1626,6 +1625,18 @@ mod test {
         let script_hash = get_spk_hash(&spk);
         let datadir = std::env::temp_dir().join(format!("{}.floresta", rand::random::<u32>()));
 
+        let state = |cache: &AddressCache<KvDatabase>| {
+            let balance = cache.get_address_balance(&script_hash).unwrap();
+            let utxos: Vec<_> = cache
+                .get_address_utxos(&script_hash)
+                .unwrap()
+                .unwrap()
+                .iter()
+                .map(|(txout, _)| txout.value.to_sat())
+                .collect();
+            (balance, utxos)
+        };
+
         let cache = AddressCache::new(KvDatabase::new(&datadir).unwrap(), ConsensusMerkle);
         cache.cache_address(spk).unwrap();
         cache.block_process(&block1, 118510).unwrap();
@@ -1633,24 +1644,17 @@ mod test {
         drop(cache);
 
         let cache = AddressCache::new(KvDatabase::new(&datadir).unwrap(), ConsensusMerkle);
+        let reloaded = state(&cache);
         cache.block_process(&block1, 118510).unwrap();
-
-        let utxos = cache.get_address_utxos(&script_hash).unwrap().unwrap();
-        assert!(
-            utxos
-                .iter()
-                .all(|(txout, _)| txout.value.to_sat() != 1_000_000)
-        );
-
+        let after_replay_1 = state(&cache);
         cache.block_process(&block2, 118511).unwrap();
+        let after_replay_2 = state(&cache);
+        drop(cache);
+        std::fs::remove_dir_all(&datadir).unwrap();
 
-        assert_eq!(
-            cache.get_address_balance(&script_hash).unwrap(),
-            Some(999_890)
-        );
-
-        let utxos = cache.get_address_utxos(&script_hash).unwrap().unwrap();
-        assert_eq!(utxos.len(), 1);
-        assert_eq!(utxos[0].0.value.to_sat(), 999_890);
+        let expected = (Some(999_890), vec![999_890]);
+        assert_eq!(reloaded, expected);
+        assert_eq!(after_replay_1, expected);
+        assert_eq!(after_replay_2, expected);
     }
 }
