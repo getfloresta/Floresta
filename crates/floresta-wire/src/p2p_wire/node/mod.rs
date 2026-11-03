@@ -170,14 +170,13 @@ pub(crate) enum InflightRequests {
     GetAddresses,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, PartialEq, Clone, Copy)]
 /// The kind of connection we see this peer as.
 ///
 /// Core's counterpart: <https://github.com/bitcoin/bitcoin/blob/bf9ef4f0433551e850a11c2da8baae0ec6439a99/src/node/connection_types.h#L18>.
 pub enum ConnectionKind {
     /// A regular outbound peer, used to relay transactions, addresses, and blocks.
-    OutboundFullRelay(#[serde(skip)] ServiceFlags),
+    OutboundFullRelay(ServiceFlags),
 
     /// A connection that was manually requested by our user. This type of peer won't be banned on
     /// misbehaving, and won't respect the [`ServiceFlags`] requirements when creating a
@@ -197,7 +196,7 @@ pub enum ConnectionKind {
     AddrFetch,
 
     /// A peer that is only used to relay blocks, not transactions or addresses.
-    BlockRelayOnly(#[serde(skip)] ServiceFlags),
+    BlockRelayOnly(ServiceFlags),
 
     /// A temporary extra peer created if our tip hasn't moved for too long.
     ///
@@ -205,12 +204,12 @@ pub enum ConnectionKind {
     /// last processed block, we use this to make sure we are not in a partitioned
     /// subnet, unable to learn about new blocks. If this peer returns useful
     /// headers, we keep it as a [`ConnectionKind::BlockRelayOnly`] peer.
-    #[serde(rename = "block-relay-only")]
     Extra,
 }
 
 impl ConnectionKind {
-    /// The name of this connection kind, as reported by `getpeerinfo`.
+    /// The name of this connection kind, as reported by `getpeerinfo` and used by its
+    /// [`Serialize`] implementation.
     ///
     /// These match Bitcoin Core's connection type names. [`ConnectionKind::Extra`] is
     /// reported as `block-relay-only`, since that's how it behaves to the outside.
@@ -261,6 +260,13 @@ impl ConnectionKind {
     /// Whether this connection kind is block-relay-only.
     pub(crate) const fn is_block_relay_only(&self) -> bool {
         matches!(self, Self::BlockRelayOnly(_))
+    }
+}
+
+/// Serializes the public connection kind name returned by [`ConnectionKind::as_str`].
+impl Serialize for ConnectionKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -514,13 +520,26 @@ mod tests {
     use super::ConnectionKind;
 
     #[test]
-    fn extra_connection_kind_serializes_as_block_relay_only() {
-        // Extra is an internal stale-tip connection kind. It is exposed through
-        // RPC as block-relay-only, matching its externally visible behavior.
-        let serialized =
-            serde_json::to_string(&ConnectionKind::Extra).expect("kind should serialize");
+    fn connection_kind_serializes_as_its_name() {
+        // Payload variants carry non-empty flags to show they never reach the output.
+        let services = ServiceFlags::NETWORK | ServiceFlags::WITNESS;
+        let kinds = [
+            ConnectionKind::OutboundFullRelay(services),
+            ConnectionKind::Manual,
+            ConnectionKind::Feeler,
+            ConnectionKind::AddrFetch,
+            ConnectionKind::BlockRelayOnly(services),
+            ConnectionKind::Extra,
+        ];
 
-        assert_eq!(serialized, "\"block-relay-only\"");
+        for kind in kinds {
+            let serialized = serde_json::to_value(kind).expect("kind should serialize");
+            assert_eq!(
+                serialized,
+                serde_json::Value::from(kind.as_str()),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
