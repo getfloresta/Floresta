@@ -276,6 +276,13 @@ class Node:
         self.set_p2p_config(new_p2p_config)
         self.set_config_electrum(new_electrum_config)
 
+    def count_log_lines(self, text: str) -> int:
+        """
+        Return how many lines of this node's log contain `text`.
+        """
+        with open(self._log_path, encoding="utf-8") as log:
+            return sum(text in line for line in log)
+
     def start(self):
         """
         Start the node.

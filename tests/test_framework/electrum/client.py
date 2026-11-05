@@ -10,7 +10,6 @@ More here: https://electrumx.readthedocs.io/en/latest/protocol-methods.html
 """
 
 import hashlib
-import time
 
 from test_framework.electrum.base import BaseClient
 from test_framework.util import wait_until
@@ -192,36 +191,17 @@ class ElectrumClient(BaseClient):
 
         return balance, len(utxos)
 
-    def wait_for_wallet_funded(self, script_hash: str, timeout: int = 60) -> tuple:
+    def wait_for_wallet_state(
+        self, script_hash: str, state: tuple, timeout: int = 60
+    ) -> None:
         """
-        Poll the wallet until it holds a positive balance for a script hash.
+        Poll the wallet until its state for a script hash matches `state`.
 
-        Raises a `TimeoutError` when the balance never shows up.
+        Raises a `TimeoutError` when the wallet never gets there.
         """
         wait_until(
-            lambda: self.wallet_state(script_hash)[0],
+            lambda: self.wallet_state(script_hash) == state,
             timeout=timeout,
             interval=WALLET_POLL_INTERVAL,
-            error_msg=f"wallet was never funded for script hash {script_hash}",
+            error_msg=f"wallet never reached {state} for script hash {script_hash}",
         )
-
-        return self.wallet_state(script_hash)
-
-    def wait_for_wallet_change(
-        self, script_hash: str, state: tuple, timeout: int = 30
-    ) -> tuple:
-        """
-        Poll the wallet until its state for a script hash moves away from `state`.
-
-        Returns `state` untouched when nothing ever moved, which is what lets a
-        caller assert that some operation left the wallet alone.
-        """
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            current = self.wallet_state(script_hash)
-            if current != state:
-                return current
-
-            time.sleep(WALLET_POLL_INTERVAL)
-
-        return state
