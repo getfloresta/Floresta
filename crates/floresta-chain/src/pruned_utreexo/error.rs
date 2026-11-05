@@ -136,6 +136,7 @@ pub enum BlockValidationErrors {
     TooManyCoins,
     NotEnoughPow,
     BadDiffBits,
+    BadVersion,
     BadMerkleRoot,
     BadWitnessCommitment,
     NotEnoughMoney,
@@ -216,6 +217,9 @@ impl Display for BlockValidationErrors {
             }
             Self::BadDiffBits => {
                 write!(f, "The header's nBits differ from the required difficulty")
+            }
+            Self::BadVersion => {
+                write!(f, "The header's version is too old for its height")
             }
             Self::BadMerkleRoot => write!(f, "Wrong merkle root"),
             Self::BadWitnessCommitment => write!(f, "Wrong witness commitment"),
