@@ -543,8 +543,9 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
         &self,
         txid: Txid,
         outpoint: u32,
-        _include_mempool: Option<bool>,
+        include_mempool: Option<bool>,
     ) -> Result<Option<GetTxOut>, JsonRpcError> {
+        let include_mempool = include_mempool.unwrap_or(true);
         let res = match (
             self.wallet.get_transaction(&txid)?,
             self.wallet.get_height(&txid)?,
@@ -554,6 +555,9 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
             })?,
         ) {
             (Some(cached_tx), Some(height), Some(txout)) => {
+                if height == 0 && !include_mempool {
+                    return Ok(None);
+                }
                 let is_coinbase = cached_tx.tx.is_coinbase();
                 let Ok((bestblock_height, bestblock_hash)) = self.chain.get_best_block() else {
                     return Err(JsonRpcError::BlockNotFound);
@@ -583,9 +587,17 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
                     required_signatures: None,
                 };
 
+                let confirmations = if height == 0 {
+                    0
+                } else if bestblock_height >= height {
+                    bestblock_height - height + 1
+                } else {
+                    0
+                };
+
                 Some(GetTxOut {
                     best_block: bestblock_hash.to_string(),
-                    confirmations: bestblock_height - height + 1,
+                    confirmations,
                     value: txout.value.to_btc(),
                     script_pubkey,
                     coinbase: is_coinbase,

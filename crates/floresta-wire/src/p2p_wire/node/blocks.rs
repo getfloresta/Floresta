@@ -673,6 +673,7 @@ mod tests {
             BlockValidationErrors::TooManySigops,
             BlockValidationErrors::NotEnoughPow,
             BlockValidationErrors::BadDiffBits,
+            BlockValidationErrors::BadVersion,
             BlockValidationErrors::TooManyCoins,
             BlockValidationErrors::NotEnoughMoney,
             BlockValidationErrors::FirstTxIsNotCoinbase,
@@ -746,6 +747,7 @@ mod tests {
             | TooManySigops
             | NotEnoughPow
             | BadDiffBits
+            | BadVersion
             | TooManyCoins
             | NotEnoughMoney
             | FirstTxIsNotCoinbase
