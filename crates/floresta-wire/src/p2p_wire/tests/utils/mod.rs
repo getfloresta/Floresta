@@ -71,6 +71,8 @@ use crate::p2p_wire::transport::TransportProtocol;
 
 pub mod mock_chain;
 
+pub const PEER_TEST: u32 = 0;
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UtreexoRoots {
     roots: Option<Vec<String>>,
@@ -327,11 +329,20 @@ pub fn mutate_block(block: &mut Block) {
     block.txdata[0].output[0].script_pubkey.as_mut_bytes()[0] ^= 1;
 }
 
+/// How [`synthetic_block`] deviates from a non-mutated block.
+pub enum Mutation {
+    None,
+    /// The header commits to a merkle root that doesn't match the transaction list.
+    MerkleRoot,
+    /// The coinbase uses witness, making a witness commitment required, but has none.
+    WitnessCommitment,
+}
+
 /// Builds a coinbase-only block that isn't a valid block, but passes the
 /// mutated-block checks: with a single transaction the merkle root is its txid, and
 /// since no transaction uses witness, the witness commitment is optional.
-pub fn synthetic_block() -> Block {
-    let coinbase = Transaction {
+pub fn synthetic_block(mutation: Mutation) -> Block {
+    let mut coinbase = Transaction {
         version: TransactionVersion::TWO,
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
@@ -346,7 +357,16 @@ pub fn synthetic_block() -> Block {
         }],
     };
 
-    let merkle_root = TxMerkleNode::from_byte_array(coinbase.compute_txid().to_byte_array());
+    if let Mutation::WitnessCommitment = mutation {
+        coinbase.input[0].witness.push([0u8; 32]);
+    }
+
+    let merkle_root = match mutation {
+        // Any hash that isn't the coinbase txid
+        Mutation::MerkleRoot => TxMerkleNode::from_byte_array([0x42; 32]),
+        // The txid doesn't commit to the witness, so it's still the merkle root
+        _ => TxMerkleNode::from_byte_array(coinbase.compute_txid().to_byte_array()),
+    };
 
     Block {
         header: Header {
@@ -435,7 +455,8 @@ where
 
     for (i, peer_data) in args.peers.into_iter().enumerate() {
         let peer_id = i as u32;
-        let peer = spawn_peer(peer_data, node.node_tx.clone(), peer_id);
+        let mut peer = spawn_peer(peer_data, node.node_tx.clone(), peer_id);
+        peer.message_times.add(1.0);
 
         // Add a fixed peer to avoid opening real P2P connections
         if i == 0 {
@@ -490,6 +511,23 @@ pub async fn setup_swiftsync(
         .unwrap();
 
     chain
+}
+
+pub fn setup_unit_node<T>() -> UtreexoNode<Arc<ChainState<FlatChainStore>>, T>
+where
+    T: 'static + Default + NodeContext,
+{
+    let datadir = format!("./tmp-db/{}.unit_node", rand::random::<u32>());
+    let blocks = signet_blocks();
+    let headers = signet_headers();
+
+    let peers = vec![
+        PeerData::new(Vec::new(), blocks.clone(), HashMap::new()),
+        PeerData::new(headers, blocks, HashMap::new()),
+    ];
+    let arg = SetupNodeArgs::new(peers, false, Network::Signet, datadir, 9);
+
+    setup_node::<T>(arg)
 }
 
 #[cfg(test)]

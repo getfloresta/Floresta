@@ -138,6 +138,25 @@ where
         Ok(())
     }
 
+    /// Validates the structure of the block using
+    /// [`Block::check_block_structure`].
+    ///
+    /// If validation fails, [`Self::handle_block_error`] is called to handle the
+    /// error and apply the appropriate network consensus.
+    ///
+    /// [`Block::check_block_structure`]: floresta_chain::extensions::BlockExt::check_block_structure
+    pub(crate) fn enforce_block_structure_check(
+        &mut self,
+        block: &Block,
+        peer: PeerId,
+    ) -> Result<(), WireError> {
+        let Err(e) = block.check_block_structure() else {
+            return Ok(());
+        };
+
+        self.handle_block_error(e.into(), Arc::new(block.clone()), peer, None)
+    }
+
     pub(crate) fn request_block_proof(
         &mut self,
         block: Block,
@@ -554,6 +573,7 @@ mod tests {
     use crate::node::LocalPeerView;
     use crate::node::PeerStatus;
     use crate::node::sync_ctx::SyncNode;
+    use crate::p2p_wire::tests::utils::Mutation;
     use crate::p2p_wire::tests::utils::mock_chain::MockChain;
     use crate::p2p_wire::tests::utils::synthetic_block;
     use crate::p2p_wire::transport::TransportProtocol;
@@ -635,7 +655,7 @@ mod tests {
     /// A coinbase-only block: it passes the merkle-root and witness-commitment
     /// checks, and counts as ready to process when wrapped in an [`InflightBlock`].
     fn dummy_block() -> Arc<Block> {
-        Arc::new(synthetic_block())
+        Arc::new(synthetic_block(Mutation::None))
     }
 
     fn assert_peer_state(node: &MockNode, peer: PeerId, state: PeerStatus) {
