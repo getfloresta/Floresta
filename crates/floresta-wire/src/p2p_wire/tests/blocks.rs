@@ -14,23 +14,25 @@ mod tests {
     use tokio::sync::oneshot::Receiver;
 
     use crate::node::InflightRequests;
+    use crate::node::PeerStatus;
     use crate::node::UtreexoNode;
     use crate::node::sync_ctx::SyncNode;
     use crate::node_handle::NodeResponse;
     use crate::node_handle::UserRequest;
+    use crate::p2p_wire::error::WireError;
+    use crate::p2p_wire::tests::utils::Mutation;
+    use crate::p2p_wire::tests::utils::PEER_TEST;
     use crate::p2p_wire::tests::utils::PeerData;
     use crate::p2p_wire::tests::utils::SetupNodeArgs;
     use crate::p2p_wire::tests::utils::setup_node;
+    use crate::p2p_wire::tests::utils::setup_unit_node;
     use crate::p2p_wire::tests::utils::signet_blocks;
     use crate::p2p_wire::tests::utils::signet_headers;
+    use crate::p2p_wire::tests::utils::synthetic_block;
 
-    const PEER_TEST: u32 = 0;
+    type TestNode = UtreexoNode<Arc<ChainState<FlatChainStore>>, SyncNode>;
 
-    type TestSetup = (
-        UtreexoNode<Arc<ChainState<FlatChainStore>>, SyncNode>,
-        Block,
-        Option<Receiver<NodeResponse>>,
-    );
+    type TestSetup = (TestNode, Block, Option<Receiver<NodeResponse>>);
 
     fn setup_test(is_user_request: bool) -> TestSetup {
         let datadir = format!("./tmp-db/{}.blocks", rand::random::<u32>());
@@ -67,6 +69,55 @@ mod tests {
         }
 
         (node, block, response)
+    }
+
+    #[tokio::test]
+    async fn test_enforce_block_structure_check_unmutated_block_is_ok() {
+        let mut node: TestNode = setup_unit_node();
+        let block = synthetic_block(Mutation::None);
+
+        node.enforce_block_structure_check(&block, PEER_TEST)
+            .unwrap();
+
+        // The peer shouldn't be punished
+        assert_eq!(node.peers.get(&PEER_TEST).unwrap().state, PeerStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn test_enforce_block_structure_check_mutated_block_bans_peer() {
+        let mut node: TestNode = setup_unit_node();
+        let block = synthetic_block(Mutation::MerkleRoot);
+        assert!(!block.check_merkle_root());
+
+        let result = node
+            .enforce_block_structure_check(&block, PEER_TEST)
+            .unwrap_err();
+
+        assert!(matches!(result, WireError::PeerMisbehaving));
+        assert_eq!(
+            node.peers.get(&PEER_TEST).unwrap().state,
+            PeerStatus::Banned
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforce_block_structure_check_bad_witness_commitment_bans_peer() {
+        let mut node: TestNode = setup_unit_node();
+        let block = synthetic_block(Mutation::WitnessCommitment);
+
+        // The merkle root matches, so only the witness commitment is invalid
+        assert!(block.check_merkle_root());
+        assert!(!block.check_witness_commitment());
+
+        let result = node
+            .enforce_block_structure_check(&block, PEER_TEST)
+            .unwrap_err();
+
+        assert!(matches!(result, WireError::PeerMisbehaving));
+        assert_eq!(
+            node.peers.get(&PEER_TEST).unwrap().state,
+            PeerStatus::Banned
+        );
     }
 
     #[tokio::test]
