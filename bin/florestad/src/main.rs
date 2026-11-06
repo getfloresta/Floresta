@@ -42,6 +42,7 @@ use tracing::info;
 
 #[cfg(unix)]
 use crate::daemonize::Daemon;
+use crate::logger::resolve_log_file;
 use crate::logger::start_logger;
 
 fn main() {
@@ -58,6 +59,9 @@ fn main() {
         exit(1);
     });
 
+    // Resolved before `datadir` is moved into the config below.
+    let log_file = resolve_log_file(params.no_log_file, params.log_file.as_ref(), &datadir);
+
     let config = Config {
         datadir,
         disable_dns_seeds: !params.connect.is_empty() || params.disable_dns_seeds,
@@ -73,10 +77,7 @@ fn main() {
         log_to_stdout: !params.daemon,
         #[cfg(not(unix))]
         log_to_stdout: true,
-        #[cfg(unix)]
-        log_to_file: params.log_to_file || params.daemon,
-        #[cfg(not(unix))]
-        log_to_file: params.log_to_file,
+        log_file,
         assume_valid: params.assume_valid,
         #[cfg(feature = "zmq-server")]
         zmq_address: params.zmq_address,
@@ -96,6 +97,17 @@ fn main() {
         backfill: !params.no_backfill,
     };
 
+    // Warned before forking, while stderr is still attached to the terminal.
+    // Daemon mode turns stdout logging off, so opting out of the file as well
+    // leaves the node logging nowhere.
+    #[cfg(unix)]
+    if params.daemon && config.log_file.is_none() {
+        eprintln!(
+            "Warning: --daemon disables logging to stdout, so combining it with --no-log-file \
+             leaves no logs at all."
+        );
+    }
+
     #[cfg(unix)]
     if params.daemon {
         let mut daemon = Daemon::new(&config.datadir);
@@ -112,12 +124,12 @@ fn main() {
     };
 
     // The guard must stay alive until the end of `main` to flush file logs when dropped.
-    let _logger_guard = start_logger(
-        &config.datadir,
-        config.log_to_file,
-        config.log_to_stdout,
-        log_level,
-    );
+    let _logger_guard = start_logger(config.log_file.as_ref(), config.log_to_stdout, log_level)
+        .unwrap_or_else(|e| {
+            let path = config.log_file.as_deref().unwrap_or(Path::new(""));
+            eprintln!("Could not open log file {}: {e}", path.display());
+            exit(1);
+        });
 
     let _rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
