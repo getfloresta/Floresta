@@ -756,6 +756,7 @@ mod tests {
             | UnspendableUTXO
             | NonFinalTransaction
             | CoinbaseNotMatured
+            | BadVersion
             | BadRelativeLockTime => ExpectedBlame::InvalidatesBlock,
 
             // An output spent before being created in the same block is a consensus
