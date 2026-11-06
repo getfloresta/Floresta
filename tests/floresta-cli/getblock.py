@@ -43,7 +43,7 @@ class TestGetBlock:
 
         block_count = self.bitcoind.rpc.get_block_count()
 
-        self.node_manager.wait_for_sync_nodes(is_finished_ibd=False)
+        self.node_manager.wait_for_sync_nodes(is_ibd_finished=False)
 
         self.log.info("Testing getblock RPC in the genesis block")
         self.compare_block(0)
