@@ -88,6 +88,8 @@ fn main() {
         user_agent: env!("USER_AGENT").to_owned(),
         assumeutreexo_value: None,
         electrum_address: params.electrum_address,
+        #[cfg(feature = "metrics")]
+        metrics_address: params.metrics_address,
         enable_electrum_tls: params.enable_electrum_tls,
         electrum_address_tls: params.electrum_address_tls,
         tls_cert_path: params.tls_cert_path,

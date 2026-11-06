@@ -127,6 +127,14 @@ pub struct Cli {
     /// The address where the Electrum Server should listen to, in the format `<address>[:<port>]`
     pub electrum_address: Option<String>,
 
+    #[cfg(feature = "metrics")]
+    #[arg(long, value_name = "address[:<port>]")]
+    /// The address where the Prometheus metrics server should listen to, in the format `<address>[:<port>]`
+    ///
+    /// Defaults to `0.0.0.0` on a per-network port: 3333 (bitcoin), 3334 (testnet),
+    /// 3335 (testnet4), 3336 (signet) and 3337 (regtest).
+    pub metrics_address: Option<String>,
+
     #[arg(long, default_value_t = false)]
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,
