@@ -58,6 +58,12 @@ const MAX_ADDRESSES: usize = 50_000;
 /// A type alias for a list of addresses to send to our peers
 type AddressToSend = Vec<(AddrV2, u64, ServiceFlags, u16)>;
 
+/// Unique identifier for an address in the [`AddressMan`].
+///
+/// This is a `u64` rather than `usize` so IDs have the same width on every
+/// platform and survive being saved to and loaded from disk.
+pub type AddressId = u64;
+
 #[derive(Debug, Copy, Clone, PartialEq, Deserialize, Serialize)]
 /// A local state for how we see this peer. It helps us during peer selection,
 /// by keeping track of our past encounters with this node (if any),
@@ -155,7 +161,7 @@ pub struct LocalAddress {
     services: ServiceFlags,
 
     /// Random id for this peer
-    pub id: usize,
+    pub id: AddressId,
 }
 
 impl Display for LocalAddress {
@@ -180,8 +186,7 @@ impl From<BitcoinSocketAddr> for LocalAddress {
             state: AddressState::NeverTried,
             services: ServiceFlags::NONE,
 
-            // TODO(Davidson): Refactor `id` to be a `u64`?
-            id: rand::random::<u64>() as usize,
+            id: rand::random::<AddressId>(),
         }
     }
 }
@@ -194,8 +199,7 @@ impl From<AddrV2Message> for LocalAddress {
             last_connected: value.time.into(),
             state: AddressState::NeverTried,
             services: value.services,
-            // TODO(Davidson): Refactor `id` to be a `u64`?
-            id: rand::random::<u64>() as usize,
+            id: rand::random::<AddressId>(),
         }
     }
 }
@@ -212,8 +216,7 @@ impl FromStr for LocalAddress {
                 .as_secs(),
             super::address_man::AddressState::NeverTried,
             ServiceFlags::NONE,
-            // TODO(Davidson): Refactor `id` to be a `u64`?
-            rand::random::<u64>() as usize,
+            rand::random::<AddressId>(),
         ))
     }
 
@@ -226,7 +229,7 @@ impl LocalAddress {
         last_connected: u64,
         state: AddressState,
         services: ServiceFlags,
-        id: usize,
+        id: AddressId,
     ) -> Self {
         Self {
             address,
@@ -414,24 +417,24 @@ impl LocalAddress {
 /// A module that keeps track of known addresses and chooses addresses that our node can connect
 pub struct AddressMan {
     /// A map of all peers we know, mapping the address id to the actual address.
-    addresses: HashMap<usize, LocalAddress>,
+    addresses: HashMap<AddressId, LocalAddress>,
 
     /// All indexes of "good" addresses
     ///
     /// Good peers are those which we think are live, and haven't banned yet.
     /// If we try to connect with one peer, and the connection doesn't succeed,
     /// this peer is assumed to be down and removed from good addresses for some time.
-    good_addresses: Vec<usize>,
+    good_addresses: Vec<AddressId>,
 
     /// A map of a set of good peers indexes by their [`ServiceFlags`]
     ///
     /// We use this to make peer selection, if we are looking for a specific kind of peer (like utreexo or CBF peers)
-    good_peers_by_service: HashMap<ServiceFlags, Vec<usize>>,
+    good_peers_by_service: HashMap<ServiceFlags, Vec<AddressId>>,
 
     /// A map of a set of peers indexes by their [`ServiceFlags`]
     ///
     /// This works similarly to `good_peers_by_service`. However, we keep all peers here, not only good peers
-    peers_by_service: HashMap<ServiceFlags, Vec<usize>>,
+    peers_by_service: HashMap<ServiceFlags, Vec<AddressId>>,
 
     /// The maximum number of entries this address manager can hold
     max_size: usize,
@@ -756,7 +759,7 @@ impl AddressMan {
         &mut self,
         required_service: ServiceFlags,
         feeler: bool,
-    ) -> Option<(usize, LocalAddress)> {
+    ) -> Option<(AddressId, LocalAddress)> {
         if self.addresses.is_empty() {
             return None;
         }
@@ -847,7 +850,7 @@ impl AddressMan {
         Ok(())
     }
 
-    fn get_address_by_service(&self, service: ServiceFlags) -> Option<(usize, LocalAddress)> {
+    fn get_address_by_service(&self, service: ServiceFlags) -> Option<(AddressId, LocalAddress)> {
         let candidates = self.good_peers_by_service.get(&service)?;
 
         candidates
@@ -923,7 +926,7 @@ impl AddressMan {
     /// If we cannot find a peer that advertises the required service, we return any peer
     /// that we have in our list of known peers. Luckily, either we'll connect to a peer that has
     /// this but we didn't know, or one of those peers will give us useful addresses.
-    fn try_with_service(&self, service: ServiceFlags) -> Option<(usize, LocalAddress)> {
+    fn try_with_service(&self, service: ServiceFlags) -> Option<(AddressId, LocalAddress)> {
         if let Some(peers) = self.peers_by_service.get(&service) {
             let peers = peers
                 .iter()
@@ -957,7 +960,7 @@ impl AddressMan {
         None
     }
 
-    fn get_random_address(&self, service: ServiceFlags) -> Option<(usize, LocalAddress)> {
+    fn get_random_address(&self, service: ServiceFlags) -> Option<(AddressId, LocalAddress)> {
         if self.addresses.is_empty() {
             return None;
         }
@@ -974,7 +977,7 @@ impl AddressMan {
     }
 
     /// Updates the state of an address
-    pub fn update_set_state(&mut self, idx: usize, state: AddressState) -> &mut Self {
+    pub fn update_set_state(&mut self, idx: AddressId, state: AddressState) -> &mut Self {
         if let Some(address) = self.addresses.get_mut(&idx) {
             address.state = state;
         }
@@ -1026,7 +1029,7 @@ impl AddressMan {
     }
 
     /// Adds a peer to the list of peers known to have some service
-    fn add_peer_to_service(&mut self, idx: usize, service: ServiceFlags) {
+    fn add_peer_to_service(&mut self, idx: AddressId, service: ServiceFlags) {
         if let Some(peers) = self.peers_by_service.get_mut(&service) {
             if peers.contains(&idx) {
                 return;
@@ -1039,7 +1042,7 @@ impl AddressMan {
     }
 
     /// Removes a peer from the list of peers known to have some service
-    fn remove_peer_from_service(&mut self, idx: usize, service: ServiceFlags) {
+    fn remove_peer_from_service(&mut self, idx: AddressId, service: ServiceFlags) {
         if let Some(peers) = self.peers_by_service.get_mut(&service) {
             peers.retain(|&x| x != idx);
         }
@@ -1050,7 +1053,7 @@ impl AddressMan {
     /// If a peer used to advertise a service, but now it doesn't, we remove it from the list
     /// of peers that have that service. If a peer didn't advertise a service, but now it does,
     /// we add it to the list of peers that have that service.
-    fn update_peer_for_service(&mut self, id: usize, service: ServiceFlags) {
+    fn update_peer_for_service(&mut self, id: AddressId, service: ServiceFlags) {
         let Some(peer) = self.addresses.get(&id) else {
             return;
         };
@@ -1070,13 +1073,13 @@ impl AddressMan {
     /// filter them out when we add them to the address manager, therefore, all peers in this list
     /// is already known for having those. And we don't care about the rest of the services,
     /// like NODE_BLOOM.
-    fn update_peer_services_buckets(&mut self, idx: usize) {
+    fn update_peer_services_buckets(&mut self, idx: AddressId) {
         self.update_peer_for_service(idx, service_flags::UTREEXO.into());
         self.update_peer_for_service(idx, ServiceFlags::COMPACT_FILTERS);
     }
 
     /// Updates the service flags after we receive a version message
-    pub fn update_set_service_flag(&mut self, idx: usize, flags: ServiceFlags) -> &mut Self {
+    pub fn update_set_service_flag(&mut self, idx: AddressId, flags: ServiceFlags) -> &mut Self {
         // if this peer turns out to not have the minimum required services, we remove it
         if !flags.has(ServiceFlags::NETWORK_LIMITED) || !flags.has(ServiceFlags::WITNESS) {
             self.addresses.remove(&idx);
@@ -1142,7 +1145,7 @@ pub struct DiskLocalAddress {
     /// Network port this peers listens to
     port: u16,
     /// An id to identify this address
-    id: Option<usize>,
+    id: Option<AddressId>,
 }
 
 impl From<LocalAddress> for DiskLocalAddress {
@@ -1195,9 +1198,7 @@ impl From<DiskLocalAddress> for LocalAddress {
             last_connected: value.last_connected,
             state: value.state,
             services,
-            id: value
-                .id
-                .unwrap_or_else(|| rand::rng().random_range(0..usize::MAX)),
+            id: value.id.unwrap_or_else(rand::random::<AddressId>),
         }
     }
 }
@@ -1367,7 +1368,7 @@ mod test {
                 last_connected: seed.last_connected,
                 state,
                 services: ServiceFlags::from(seed.services),
-                id: rng.random::<u64>() as usize,
+                id: rng.random::<AddressId>(),
             };
             addresses.push(local_address);
         }
@@ -1537,6 +1538,23 @@ mod test {
     }
 
     #[test]
+    fn test_address_id_above_u32_max_survives_disk_roundtrip() {
+        let id: AddressId = u64::from(u32::MAX) + 1;
+        let address = LocalAddress::new(
+            "1.2.3.4:8333".parse().unwrap(),
+            0,
+            AddressState::NeverTried,
+            ServiceFlags::NONE,
+            id,
+        );
+
+        let json = serde_json::to_string(&DiskLocalAddress::from(address)).unwrap();
+        let disk: DiskLocalAddress = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(LocalAddress::from(disk).id, id);
+    }
+
+    #[test]
     fn test_is_routable() {
         // random addresses that are private
         let addresses = vec![
@@ -1601,7 +1619,7 @@ mod test {
             addresses
                 .iter()
                 .map(|addr| (addr.id, addr.clone()))
-                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+                .collect::<std::collections::HashMap<AddressId, LocalAddress>>(),
         );
 
         assert_eq!(address_man.addresses.len(), addresses.len());
@@ -1754,7 +1772,7 @@ mod test {
             addresses
                 .iter()
                 .map(|addr| (addr.id, addr.clone()))
-                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+                .collect::<std::collections::HashMap<AddressId, LocalAddress>>(),
         );
 
         assert_eq!(address_man.addresses.len(), addresses.len(),);
@@ -1772,7 +1790,7 @@ mod test {
             addresses
                 .iter()
                 .map(|addr| (addr.id, addr.clone()))
-                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+                .collect::<std::collections::HashMap<AddressId, LocalAddress>>(),
         );
 
         for addr in addresses {
@@ -1796,7 +1814,7 @@ mod test {
             addresses
                 .iter()
                 .map(|addr| (addr.id, addr.clone()))
-                .collect::<std::collections::HashMap<usize, LocalAddress>>(),
+                .collect::<std::collections::HashMap<AddressId, LocalAddress>>(),
         );
 
         for addr in addresses {

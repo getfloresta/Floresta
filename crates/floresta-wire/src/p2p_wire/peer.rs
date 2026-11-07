@@ -50,6 +50,7 @@ use super::node::NodeRequest;
 use super::transport::TransportError;
 use super::transport::TransportProtocol;
 use super::transport::WriteTransport;
+use crate::address_man::AddressId;
 use crate::address_man::LocalAddress;
 use crate::block_proof::UtreexoProofMask;
 use crate::node::ConnectionKind;
@@ -912,7 +913,7 @@ pub struct Version {
     pub protocol_version: u32,
     pub blocks: u32,
     pub id: u32,
-    pub address_id: usize,
+    pub address_id: AddressId,
     pub services: ServiceFlags,
     pub time_offset: i64,
     pub kind: ConnectionKind,
@@ -940,7 +941,7 @@ pub enum PeerMessages {
     Ready(Version),
 
     /// Remote peer disconnected
-    Disconnected(usize),
+    Disconnected(AddressId),
 
     /// Remote peer doesn't know the data we asked for
     NotFound(Inventory),
