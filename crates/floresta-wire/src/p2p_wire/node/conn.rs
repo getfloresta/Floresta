@@ -34,6 +34,7 @@ use super::NodeRequest;
 use super::PeerStatus;
 use super::UtreexoNode;
 use crate::TransportProtocol;
+use crate::address_man::AddressId;
 use crate::address_man::AddressMan;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
@@ -594,7 +595,7 @@ where
                             .as_secs(),
                     ),
                     ServiceFlags::NONE,
-                    peers_count as usize,
+                    AddressId::from(peers_count),
                 );
 
                 // Finally, open the connection with the node

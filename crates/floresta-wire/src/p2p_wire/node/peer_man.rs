@@ -27,6 +27,7 @@ use super::LocalPeerView;
 use super::NodeRequest;
 use super::PeerStatus;
 use super::UtreexoNode;
+use crate::address_man::AddressId;
 use crate::address_man::AddressMan;
 use crate::address_man::AddressState;
 use crate::address_man::LocalAddress;
@@ -566,7 +567,11 @@ where
         }
     }
 
-    pub(crate) fn handle_disconnection(&mut self, peer: u32, idx: usize) -> Result<(), WireError> {
+    pub(crate) fn handle_disconnection(
+        &mut self,
+        peer: u32,
+        idx: AddressId,
+    ) -> Result<(), WireError> {
         if let Some(p) = self.peers.remove(&peer) {
             if p.kind.is_long_lived() && p.state == PeerStatus::Ready {
                 info!("Peer disconnected: {peer}");
