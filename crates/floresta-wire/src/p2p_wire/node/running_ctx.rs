@@ -928,6 +928,7 @@ mod tests {
 
     use crate::TransportProtocol;
     use crate::UtreexoNodeConfig;
+    use crate::address_man::AddressId;
     use crate::address_man::AddressMan;
     use crate::address_man::AddressState;
     use crate::address_man::LocalAddress;
@@ -993,7 +994,7 @@ mod tests {
             0,
             AddressState::NeverTried,
             peer_services(),
-            peer_id as usize,
+            AddressId::from(peer_id),
         )
     }
 
@@ -1042,7 +1043,7 @@ mod tests {
             protocol_version: 70016,
             blocks: 1,
             id: peer_id,
-            address_id: peer_id as usize,
+            address_id: AddressId::from(peer_id),
             services: peer_services(),
             time_offset: 0,
             kind,

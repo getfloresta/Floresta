@@ -53,6 +53,7 @@ use tokio::time::timeout;
 use zstd;
 
 use crate::UtreexoNodeConfig;
+use crate::address_man::AddressId;
 use crate::address_man::AddressMan;
 use crate::node::ConnectionKind;
 use crate::node::InflightRequests;
@@ -106,7 +107,7 @@ impl SimulatedPeer {
             protocol_version: 0,
             blocks: rand::random::<u32>() % 23,
             id: self.peer_id,
-            address_id: rand::random::<u64>() as usize,
+            address_id: rand::random::<AddressId>(),
             services: simulated_peer_services(),
             time_offset: 0,
             kind: ConnectionKind::OutboundFullRelay(service_flags::UTREEXO.into()),
@@ -179,7 +180,7 @@ impl SimulatedPeer {
         self.node_tx
             .send(NodeNotification::FromPeer(
                 self.peer_id,
-                PeerMessages::Disconnected(self.peer_id as usize),
+                PeerMessages::Disconnected(AddressId::from(self.peer_id)),
                 Instant::now(),
             ))
             .unwrap();
