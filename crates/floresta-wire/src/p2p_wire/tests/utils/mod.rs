@@ -410,7 +410,7 @@ where
     let config = FlatChainStoreConfig {
         block_index_size: Some(32_768),
         headers_file_size: Some(32_768),
-        ..FlatChainStoreConfig::new(&datadir)
+        ..FlatChainStoreConfig::new_with_path(&datadir)
     };
     // Create `ChainState` and add headers to it
     let chainstore = FlatChainStore::new(config).unwrap();
@@ -630,7 +630,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_utreexo_peers_node_level() {
         let tempdir = tempfile::tempdir().unwrap();
-        let config = FlatChainStoreConfig::new(tempdir.path());
+        let config = FlatChainStoreConfig::new_with_path(tempdir.path());
         let chainstore = FlatChainStore::new(config).unwrap();
         let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
         let chain =

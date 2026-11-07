@@ -955,7 +955,7 @@ mod tests {
         let datadir = format!("./tmp-db/{}.running_node", rand::random::<u32>());
         fs::create_dir_all(&datadir).expect("test datadir should be created");
 
-        let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(&datadir))
+        let chainstore = FlatChainStore::new(FlatChainStoreConfig::new_with_path(&datadir))
             .expect("chain store should be created");
         let chain = Arc::new(
             ChainState::open(chainstore, Network::Signet, AssumeValidArg::Disabled)
