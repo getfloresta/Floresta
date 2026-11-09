@@ -278,22 +278,52 @@ class Node:
 
     def start(self):
         """
-        Start the node.
+        Start the node and wait until it is usable.
+
+        `BaseDaemon.start` only spawns the daemon, so this is where a daemon
+        that dies on startup is turned into an error: both the wait for the RPC
+        port and the poll for RPC answers check the process on every iteration.
         """
         if self.daemon.is_running:
             raise RuntimeError(f"Node '{self.variant}' is already running.")
 
         self.daemon.start()
-        self.rpc.wait_on_socket(opened=True)
+        # The daemon is not given a fixed amount of time to boot: we wait for
+        # its RPC port and bail out as soon as the process dies.
+        socket_opened = self.rpc.try_wait_on_socket(
+            opened=True,
+            keep_waiting_if=lambda: self.daemon.is_running,
+        )
+        # Report the daemon's own error rather than a timeout it never reached.
+        self.daemon.raise_if_died()
+        if not socket_opened:
+            raise TimeoutError(
+                f"Node '{self.variant.value}' did not open its RPC port "
+                f"{self.rpc.address} after {self.rpc.TIMEOUT} seconds. "
+                f"See its log at {self._log_path}"
+            )
 
         # An open port is not readiness: the daemon only answers RPC calls once
         # it is done loading, so poll it until it does.
+        def is_responsive_or_died():
+            # Check the process on every poll, not only once the wait is over.
+            # When another process already holds the RPC port, the wait above
+            # finds it open right away and our daemon dies on bind a moment
+            # later; without this the poll below would keep failing against the
+            # other process until the timeout, and the daemon's own error would
+            # never be reported.
+            self.daemon.raise_if_died()
+            return self.rpc.is_responsive()
+
         wait_until(
-            self.rpc.is_responsive,
+            is_responsive_or_died,
             timeout=self.rpc.TIMEOUT,
             interval=self.rpc.POLL_INTERVAL,
-            error_msg=f"Node '{self.variant}' did not answer RPC calls",
+            error_msg=f"Node '{self.variant.value}' did not answer RPC calls",
         )
+        # The daemon may also die right after the last poll, while the process
+        # that took its port is the one that answered.
+        self.daemon.raise_if_died()
 
         # When starting Floresta for the first time, it is ideal to check
         # if the Electrum server is ready to receive requests.

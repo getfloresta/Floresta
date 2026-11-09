@@ -41,6 +41,8 @@ class BaseRPC(ABC):
 
     TIMEOUT: int = 30  # seconds
     POLL_INTERVAL: float = 0.05  # seconds
+    # Per-call budget for readiness probes, which are retried in a loop.
+    PROBE_TIMEOUT: float = 1.0  # seconds
 
     def __init__(self, config: ConfigRPC, log):
         self._config = config
@@ -102,7 +104,7 @@ class BaseRPC(ABC):
 
         return logmsg
 
-    def _build_request_kwargs(self, timeout: int = None) -> Dict[str, Any]:
+    def _build_request_kwargs(self, timeout: float = None) -> Dict[str, Any]:
         """
         Build the common HTTP-level request kwargs (url, headers, auth, timeout).
         Does NOT include the JSON-RPC payload body.
@@ -117,12 +119,19 @@ class BaseRPC(ABC):
         return kwargs
 
     def build_request(
-        self, method: str, params: List[Any] = None, request_id: str = "test"
+        self,
+        method: str,
+        params: List[Any] = None,
+        request_id: str = "test",
+        timeout: float = None,
     ) -> Dict[str, Any]:
         """
         Build the full request dictionary for a JSON-RPC call.
+
+        `timeout` defaults to `TIMEOUT`; pass it for calls that must not hold
+        the caller for the whole budget.
         """
-        request = self._build_request_kwargs()
+        request = self._build_request_kwargs(timeout)
         payload = {
             "jsonrpc": self._jsonrpc_version,
             "id": request_id,
@@ -142,10 +151,14 @@ class BaseRPC(ABC):
         return {"status_code": response.status_code, "body": response.json()}
 
     def noraise_request(
-        self, method: str, params: List[Any] = None, request_id: str = "test"
+        self,
+        method: str,
+        params: List[Any] = None,
+        request_id: str = "test",
+        timeout: float = None,
     ) -> Dict[str, Any]:
         """Send a standard JSON-RPC request and return the parsed response (no raise)."""
-        request = self.build_request(method, params, request_id)
+        request = self.build_request(method, params, request_id, timeout)
         return self._send_request(request)
 
     def noraise_raw_request(
@@ -171,6 +184,7 @@ class BaseRPC(ABC):
         self,
         method: str,
         params: List[int | str | float | Dict[str, str | Dict[str, str]]] = [],
+        timeout: float = None,
     ) -> Any:
         """
         Perform a JSON-RPC request to the RPC server given the method
@@ -186,7 +200,7 @@ class BaseRPC(ABC):
         )
         self.log.debug(self.log_msg(logmsg))
 
-        resp = self.noraise_request(method, params)
+        resp = self.noraise_request(method, params, timeout=timeout)
 
         if resp["status_code"] != 200:
             self.log.error(
@@ -223,19 +237,35 @@ class BaseRPC(ABC):
         A listening socket does not mean the daemon is ready: bitcoind accepts
         the connection and answers 503 until it finishes loading, so any failure
         here just means "not ready yet".
+
+        The probe uses `PROBE_TIMEOUT` instead of the full `TIMEOUT`: a process
+        that holds the port but never answers would otherwise block a single
+        probe for the whole startup budget, so the caller would poll exactly
+        once and never get to notice its own daemon dying in the meantime.
         """
         try:
-            self.get_blockchain_info()
-            return True
+            resp = self.noraise_request("getblockchaininfo", timeout=self.PROBE_TIMEOUT)
+            if resp["status_code"] != 200:
+                return False
+            return resp["body"].get("error") is None
         # pylint: disable=broad-exception-caught
         except Exception:
             return False
 
-    def try_wait_on_socket(self, opened: bool, timeout: float) -> bool:
+    def try_wait_on_socket(
+        self, opened: bool, timeout: float | None = None, keep_waiting_if=None
+    ) -> bool:
         """
         Verifies that the RPC socket connection matches the expected one, retrying for
         the specified duration. Returns true if the connection matches, false otherwise.
+
+        `timeout` defaults to `TIMEOUT` seconds.
+
+        `keep_waiting_if` is an optional predicate checked on every poll; when it
+        returns False we give up early, so a daemon that died on startup is not
+        waited on until the timeout.
         """
+        timeout = self.TIMEOUT if timeout is None else timeout
         start = time.time()
         while time.time() - start < timeout:
             if self.is_socket_listening() == opened:
@@ -244,6 +274,8 @@ class BaseRPC(ABC):
                     self.log_msg(f"{self._config.host}:{self._config.port} {state}")
                 )
                 return True
+            if keep_waiting_if is not None and not keep_waiting_if():
+                return False
             time.sleep(0.5)
 
         return False
