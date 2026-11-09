@@ -14,13 +14,33 @@ The primary communication channel is the [GitHub repository](https://github.com/
 Contribution Workflow
 ---------------------
 
-The contribution workflow is designed to facilitate cooperation and ensure a high level of quality in the project. The process is as follows:
+The contribution workflow is designed to facilitate cooperation and ensure a high level of quality in the project.
+
+### Before opening a pull request
+
+**Discuss the problem and your proposed approach with project members in a
+GitHub issue before opening a pull request.** This gives contributors and
+maintainers an opportunity to agree on the need for the change and its direction
+before reviewing a patch. It also reduces the burden on reviewers by helping
+avoid pull requests for changes that are not planned or are already being worked
+on.
+
+The project prioritizes work according to its quarterly [roadmap](https://github.com/getfloresta/Floresta#roadmap).
+Issues outside the current roadmap scope tend to receive lower priority for
+discussion and review.
+
+**You must understand and be able to explain your changes**, including the
+problem, the proposed solution and its trade-offs. This also applies when using
+LLMs or other tools. Do not submit generated changes that you cannot explain
+and maintain.
 
 To contribute a patch, the workflow is as follows:
 
-  1. Fork Repository
-  2. Create topic branch
-  3. Commit patches
+  1. Discuss the problem and proposed approach with project members
+  2. Fork Repository
+  3. Create topic branch
+  4. Commit patches
+  5. Open a pull request
 
 ### Working on crates published to crates.io
 
