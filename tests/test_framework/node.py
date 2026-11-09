@@ -317,6 +317,9 @@ class Node:
             self.daemon.raise_if_died()
             return self.rpc.is_responsive()
 
+        # Unlike the other RPC-polling waits, this one keeps the 50ms interval:
+        # each probe already blocks for up to `PROBE_TIMEOUT`, so the probe, not
+        # the interval, sets the pace, and startup wants the lowest latency.
         wait_until(
             is_responsive_or_died,
             timeout=self.rpc.TIMEOUT,

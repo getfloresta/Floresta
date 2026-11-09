@@ -281,7 +281,7 @@ class BaseRPC(ABC):
                 return True
             if keep_waiting_if is not None and not keep_waiting_if():
                 return False
-            time.sleep(0.5)
+            time.sleep(self.POLL_INTERVAL)
 
         return False
 

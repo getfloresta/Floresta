@@ -25,7 +25,7 @@ def test_get_block_count(florestad_utreexod, node_manager):
     assert initial_florestad_count == initial_utreexod_count == 0
 
     # Mine blocks with utreexod
-    node_manager.generate_blocks_and_sync(MINE_BLOCKS, is_finished_ibd=False)
+    node_manager.generate_blocks_and_sync(MINE_BLOCKS, is_ibd_finished=False)
 
     # Get final block counts
     final_florestad_count = florestad.rpc.get_block_count()

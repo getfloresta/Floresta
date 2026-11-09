@@ -27,7 +27,7 @@ def test_get_block_hash(florestad_utreexod, node_manager):
     assert initial_florestad_hash == initial_utreexod_hash == GENESIS_BLOCK_HASH
 
     # Mine blocks with utreexod
-    node_manager.generate_blocks_and_sync(MINED_BLOCKS, is_finished_ibd=False)
+    node_manager.generate_blocks_and_sync(MINED_BLOCKS, is_ibd_finished=False)
 
     # Get final block hashes
     final_florestad_hash = florestad.rpc.get_blockhash(MINED_BLOCKS)
