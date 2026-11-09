@@ -225,17 +225,6 @@ class FlorestaTestFramework:
 
         return node
 
-    def get_node(self, index: int) -> Node:
-        """
-        Given an index, return a node configuration.
-        If the node not exists, raise a IndexError exception.
-        """
-        if index < 0 or index >= len(self._nodes):
-            raise IndexError(
-                f"Node {index} not found. Please run it with add_node_settings"
-            )
-        return self._nodes[index]
-
     def run_node(self, node: Node):
         """
         Start a node and wait for its RPC server to become available.
@@ -263,13 +252,6 @@ class FlorestaTestFramework:
                     node.update_configs()
 
         raise RuntimeError(f"Error starting node '{node.variant}': {error}")
-
-    def stop_node(self, index: int):
-        """
-        Stop a node given an index on self._tests.
-        """
-        node = self.get_node(index)
-        return node.stop()
 
     def stop(self):
         """

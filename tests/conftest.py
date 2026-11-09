@@ -217,7 +217,6 @@ def florestad_bitcoind_utreexod_with_chain(
     def _create_nodes_with_chain(
         blocks: int = 100,
         floresta_descriptors: List[str] | None = None,
-        addr_coinbase: str | None = None,
     ) -> tuple[Node, Node, Node]:
         if floresta_descriptors is None:
             floresta_descriptors = [
@@ -230,11 +229,7 @@ def florestad_bitcoind_utreexod_with_chain(
 
         # utreexod mines the chain, so it already has every block and its
         # proof by the time florestad connects and asks for them.
-        if addr_coinbase:
-            bitcoind_node.rpc.generatetoaddress(blocks, addr_coinbase)
-        else:
-            utreexod_node.rpc.generate(blocks)
-
+        utreexod_node.rpc.generate(blocks)
         node_manager.connect_nodes(bitcoind_node, utreexod_node)
 
         # Connect the rest and wait once, so the nodes sync in parallel.
