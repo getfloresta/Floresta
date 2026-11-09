@@ -1045,6 +1045,8 @@ where
             // user request made through the node handle. If it isn't, we punish this
             // peer for sending an unrequested block.
             PeerMessages::Block(block) => {
+                self.inflight
+                    .remove(&InflightRequests::Blocks(block.block_hash()));
                 // Enforce the block structure policy and check whether there is an
                 // outstanding user request before proceeding.
                 if self.enforce_block_structure_check_and_retry_user_request(&block, peer)? {
@@ -1081,7 +1083,10 @@ mod tests {
     use crate::node_handle::UserRequest;
     use crate::p2p_wire::tests::utils::Mutation;
     use crate::p2p_wire::tests::utils::PEER_TEST;
+    use crate::p2p_wire::tests::utils::mutate_block;
     use crate::p2p_wire::tests::utils::setup_unit_node;
+    use crate::p2p_wire::tests::utils::signet_blocks;
+    use crate::p2p_wire::tests::utils::signet_headers;
     use crate::p2p_wire::tests::utils::synthetic_block;
 
     type TestNode = UtreexoNode<Arc<ChainState<FlatChainStore>>, ChainSelector>;
@@ -1216,6 +1221,66 @@ mod tests {
         assert!(
             node.inflight_user_requests
                 .contains_key(&UserRequest::Block(block_hash))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_mutated_then_valid_user_request_clears_inflight() {
+        let mut node = setup_unit_node();
+        let block_hash = signet_headers()[1].block_hash();
+        let blocks = signet_blocks();
+        assert!(blocks.contains_key(&block_hash));
+        let Some(valid) = blocks.get(&block_hash).cloned() else {
+            return;
+        };
+        let mut mutated = valid.clone();
+        mutate_block(&mut mutated);
+        assert_eq!(mutated.block_hash(), block_hash);
+
+        let (tx, rx) = oneshot::channel();
+        node.inflight_user_requests.insert(
+            UserRequest::Block(block_hash),
+            (PEER_TEST, Instant::now(), tx),
+        );
+
+        let result = node
+            .handle_peer_notification(PeerMessages::Block(mutated), PEER_TEST, Instant::now())
+            .await;
+        assert!(result.is_ok());
+
+        let retry_peer = node
+            .inflight
+            .get(&InflightRequests::Blocks(block_hash))
+            .map(|req| req.0);
+        assert!(matches!(retry_peer, Some(peer) if peer != PEER_TEST));
+        let Some(retry_peer) = retry_peer else {
+            return;
+        };
+        assert!(
+            node.inflight_user_requests
+                .contains_key(&UserRequest::Block(block_hash))
+        );
+
+        let result = node
+            .handle_peer_notification(PeerMessages::Block(valid), retry_peer, Instant::now())
+            .await;
+        assert!(result.is_ok());
+
+        let response = rx.await;
+        assert!(
+            matches!(response, Ok(NodeResponse::Block(Some(block))) if block.block_hash() == block_hash)
+        );
+
+        assert!(
+            !node
+                .inflight_user_requests
+                .contains_key(&UserRequest::Block(block_hash))
+        );
+        // A leftover entry would be retried after delivery and punish the peer that answers.
+        assert!(
+            !node
+                .inflight
+                .contains_key(&InflightRequests::Blocks(block_hash))
         );
     }
 
