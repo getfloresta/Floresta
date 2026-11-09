@@ -9,6 +9,7 @@ including their daemon processes, RPC interfaces, and configurations.
 """
 
 from enum import Enum
+from subprocess import TimeoutExpired
 from typing import List, Tuple, Optional
 
 from test_framework.daemon import ConfigP2P
@@ -109,6 +110,7 @@ class Node:
         self._tls = tls
         self._variant = variant
         self._static_values = True
+        self._stop_requested = False
         self._log = log
         self._log_path = p2p_config.log_path
 
@@ -330,21 +332,97 @@ class Node:
         if self.variant == NodeType.FLORESTAD and self.static_values is not True:
             self.electrum.ping()
 
-    def stop(self):
+    def request_stop(self):
         """
-        Stop the node.
-        """
-        response = None
-        if self.daemon.is_running:
-            try:
-                response = self.rpc.stop()
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                self.daemon.process.terminate()
+        Ask the daemon to stop, without waiting for it to be gone.
 
+        Use together with `wait_stopped`, so several nodes can shut down at the
+        same time instead of one after the other.
+        """
+        if not self.daemon.is_running:
+            self._report_unrequested_exit()
+            return None
+
+        self._stop_requested = True
+        try:
+            return self.rpc.stop()
+        # pylint: disable=broad-exception-caught
+        except Exception as e:
+            # Say so: a daemon that had to be terminated did not shut down the
+            # way the test expected, and this used to leave no trace at all.
+            self._log.warning(
+                f"Node '{self.variant.value}' did not accept `stop` ({e}); "
+                f"terminating it. See its log at {self._log_path}"
+            )
+            self.daemon.process.terminate()
+            return None
+
+    def _report_unrequested_exit(self):
+        """
+        Report a daemon that was already gone when it was asked to stop.
+
+        `wait_stopped` does not look at a node nobody asked to stop, so this is
+        the only place where a daemon that died on its own gets reported, and
+        the only place left to release the stderr pipe nobody will read now.
+
+        A non-zero exit means the daemon died or refused to run, which is worth
+        a line; exit 0 is what a test that stopped the daemon itself leaves
+        behind (`floresta-cli/stop.py`), so it stays quiet. This warns instead
+        of failing the teardown because a non-zero exit is not always a
+        surprise: `florestad/wallet.py`'s invalid-config cases expect florestad
+        to refuse its configuration, and leave it dead with exit 1.
+        """
+        process = self.daemon.process
+        if process is None:
+            return
+
+        if process.returncode != 0:
+            self._log.warning(
+                f"Node '{self.variant.value}' was already gone (exit "
+                f"{process.returncode}) before being asked to stop; "
+                f"see its log at {self._log_path}"
+            )
+
+        if process.stderr is not None and not process.stderr.closed:
+            process.stderr.close()
+
+    def wait_stopped(self):
+        """
+        Wait for a daemon asked to stop by `request_stop` to be gone.
+        """
+        if self.daemon.process is None or not self._stop_requested:
+            return
+
+        # Wait on the process itself instead of polling the RPC socket:
+        # it wakes up the moment the daemon is gone.
+        try:
+            self.daemon.process.wait(timeout=self.daemon.PROC_WAIT_TIMEOUT)
+        except TimeoutExpired as e:
+            # `TimeoutExpired` only carries the command line, so say which node
+            # it was and where to read what it was busy with.
+            e.add_note(
+                f"node '{self.variant.value}' did not exit within "
+                f"{self.daemon.PROC_WAIT_TIMEOUT} seconds; "
+                f"see its log at {self._log_path}"
+            )
+            # Do not leave a hung daemon holding the ports and data dir of the
+            # next test on this worker.
+            self.daemon.process.kill()
             self.daemon.process.wait()
+            self._stop_requested = False
+            raise
+        # The port is released with the process, so one check is enough.
+        if self.rpc.is_socket_listening():
             self.rpc.wait_on_socket(opened=False)
 
+        self._stop_requested = False
+
+    def stop(self):
+        """
+        Stop the node and wait for it to be gone.
+        """
+        response = self.request_stop()
+        self.wait_stopped()
         return response
 
     def connect_node(

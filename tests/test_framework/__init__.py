@@ -274,9 +274,34 @@ class FlorestaTestFramework:
     def stop(self):
         """
         Stop all nodes.
+
+        Every node is asked to stop before we wait for any of them, so their
+        shutdowns overlap instead of adding up.
+
+        A node that fails to shut down does not stop us from stopping the
+        others, but it does fail the test: `wait_stopped` kills a daemon that
+        outlived its timeout, so swallowing the error here would hide a hung
+        daemon behind a log line that xdist only prints for failing tests.
         """
-        for i in range(len(self._nodes)):
-            self.stop_node(i)
+        errors = []
+
+        for node in self._nodes:
+            try:
+                node.request_stop()
+            # pylint: disable=broad-exception-caught
+            except Exception as e:
+                self.log.error(f"Failed to stop node '{node.variant.value}': {e}")
+                e.add_note(f"while asking node '{node.variant.value}' to stop")
+                errors.append(e)
+
+        for node in self._nodes:
+            try:
+                node.wait_stopped()
+            # pylint: disable=broad-exception-caught
+            except Exception as e:
+                self.log.error(f"Failed to stop node '{node.variant.value}': {e}")
+                e.add_note(f"while waiting for node '{node.variant.value}' to be gone")
+                errors.append(e)
 
         if (
             hasattr(self, "_network_thread")
@@ -285,6 +310,9 @@ class FlorestaTestFramework:
         ):
             self._network_thread.close(timeout=10)
             NetworkThread.network_event_loop = None
+
+        if errors:
+            raise ExceptionGroup("Failed to stop every node", errors)
 
     def check_connection(self, peer_one: Node, peer_two: Node, is_connected: bool):
         """

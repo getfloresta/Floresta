@@ -17,7 +17,7 @@ from test_framework.daemon import ConfigP2P
 from test_framework.electrum import ConfigElectrum
 
 
-# pylint: disable=too-many-public-methods
+# pylint: disable=too-many-public-methods,too-many-instance-attributes
 class BaseDaemon(ABC):
     """
     Base class for managing daemon processes (e.g., florestad, utreexod) in regtest mode.
@@ -27,7 +27,13 @@ class BaseDaemon(ABC):
     Waiting for a daemon to be up or gone is `Node`'s job, not this class's.
     """
 
-    # pylint: disable=too-many-arguments too-many-instance-attributes too-many-positional-arguments
+    # How long the process is given to be gone once it has accepted `stop`.
+    # This is a budget for the process, not for an RPC call: it covers the
+    # flush the daemon does after it has already answered. Bitcoin Core keeps
+    # the same split, with `BITCOIND_PROC_WAIT_TIMEOUT = 60`.
+    PROC_WAIT_TIMEOUT: int = 30  # seconds
+
+    # pylint: disable=too-many-arguments too-many-positional-arguments
     def __init__(
         self,
         name: str,

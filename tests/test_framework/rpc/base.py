@@ -43,6 +43,11 @@ class BaseRPC(ABC):
     POLL_INTERVAL: float = 0.05  # seconds
     # Per-call budget for readiness probes, which are retried in a loop.
     PROBE_TIMEOUT: float = 1.0  # seconds
+    # Per-call budget for the `stop` request. Daemons answer `stop` when they
+    # accept it, not when they are done shutting down, so one that has not
+    # answered within this budget is not going to; waiting the full TIMEOUT for
+    # it serializes the first pass of `NodeManager.stop`.
+    STOP_TIMEOUT: float = 5.0  # seconds
 
     def __init__(self, config: ConfigRPC, log):
         self._config = config
@@ -299,11 +304,15 @@ class BaseRPC(ABC):
 
     def stop(self):
         """
-        Perform the `stop` RPC command to the daemon and wait for the connection to close
+        Perform the `stop` RPC command to the daemon.
+
+        Returns as soon as the daemon accepts the request. Callers that need the
+        daemon to be gone should wait on its process, which is what Bitcoin Core
+        does in `TestNode.is_node_stopped` (it polls `self.process.poll()`, never
+        the RPC socket):
+        https://github.com/bitcoin/bitcoin/blob/master/test/functional/test_framework/test_node.py
         """
-        result = self.perform_request("stop")
-        self.wait_on_socket(opened=False)
-        return result
+        return self.perform_request("stop", timeout=self.STOP_TIMEOUT)
 
     def addnode(self, node: str, command: str, v2transport: bool = False):
         """
