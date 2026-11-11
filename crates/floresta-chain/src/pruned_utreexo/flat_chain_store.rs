@@ -179,15 +179,30 @@ pub struct FlatChainStoreConfig {
     pub path: PathBuf,
 }
 
+/// Default permission for the files we create
+const DEFAULT_FILE_PERMISSION: u32 = 0o666;
+
+/// Default size of the fork headers file, in headers
+const DEFAULT_FORK_FILE_SIZE: usize = 10_000;
+
+/// Default size of the headers file, in headers
+const DEFAULT_HEADERS_FILE_SIZE: usize = 10_000_000;
+
+/// Default size of the block index, in buckets
+const DEFAULT_BLOCK_INDEX_SIZE: usize = 10_000_000;
+
+/// Default size of the LRU cache, in blocks
+const DEFAULT_CACHE_SIZE: usize = 10_000;
+
 impl FlatChainStoreConfig {
     /// Creates a new configuration with the default values
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
-            file_permission: Some(0o666),
-            fork_file_size: Some(10_000),
-            headers_file_size: Some(10_000_000),
-            block_index_size: Some(10_000_000),
-            cache_size: Some(10_000),
+            file_permission: Some(DEFAULT_FILE_PERMISSION),
+            fork_file_size: Some(DEFAULT_FORK_FILE_SIZE),
+            headers_file_size: Some(DEFAULT_HEADERS_FILE_SIZE),
+            block_index_size: Some(DEFAULT_BLOCK_INDEX_SIZE),
+            cache_size: Some(DEFAULT_CACHE_SIZE),
             path: path.as_ref().into(),
         }
     }
