@@ -217,7 +217,11 @@ pub trait UpdatableChainstate {
     fn accept_header(&self, header: BlockHeader) -> Result<(), BlockchainError>;
     /// Not used for now, but in a future blockchain with mempool, we can process transactions
     /// that are not in a block yet.
-    fn handle_transaction(&self) -> Result<(), BlockchainError>;
+    ///
+    /// Backends without a mempool return [`BlockchainError::Unsupported`].
+    fn handle_transaction(&self) -> Result<(), BlockchainError> {
+        Err(BlockchainError::Unsupported)
+    }
     /// Persists our data. Should be invoked periodically.
     fn flush(&self) -> Result<(), BlockchainError>;
     /// Update IBD state
