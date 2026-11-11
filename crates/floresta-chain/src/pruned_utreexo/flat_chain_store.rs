@@ -403,7 +403,7 @@ impl BlockIndex {
         &self,
         hash: BlockHash,
         index: Index,
-        get_header_by_index: impl Fn(Index) -> Result<HashedDiskHeader, ChainstoreError>,
+        get_header_by_index: impl Fn(Index) -> Result<Option<HashedDiskHeader>, ChainstoreError>,
     ) -> Result<bool, ChainstoreError> {
         let pos = unsafe { self.hash_map_find_pos(hash, get_header_by_index) }?;
 
@@ -427,7 +427,7 @@ impl BlockIndex {
     unsafe fn get_index_for_hash(
         &self,
         hash: BlockHash,
-        get_header_by_index: impl Fn(Index) -> Result<HashedDiskHeader, ChainstoreError>,
+        get_header_by_index: impl Fn(Index) -> Result<Option<HashedDiskHeader>, ChainstoreError>,
     ) -> Result<Option<(Index, DiskBlockHeader)>, ChainstoreError> {
         match unsafe { self.hash_map_find_pos(hash, get_header_by_index) }? {
             IndexBucket::Empty { .. } => Ok(None),
@@ -445,7 +445,7 @@ impl BlockIndex {
     unsafe fn hash_map_find_pos(
         &self,
         block_hash: BlockHash,
-        get_header_by_index: impl Fn(Index) -> Result<HashedDiskHeader, ChainstoreError>,
+        get_header_by_index: impl Fn(Index) -> Result<Option<HashedDiskHeader>, ChainstoreError>,
     ) -> Result<IndexBucket, ChainstoreError> {
         let mut hash = Self::index_hash_fn(block_hash) as usize;
 
@@ -464,12 +464,18 @@ impl BlockIndex {
             let candidate_index = unsafe { *entry_ptr };
 
             // If the header at `candidate_index` matches `block_hash`, this is the target bucket
-            let file_header = get_header_by_index(candidate_index)?;
-            if file_header.hash == block_hash {
-                return Ok(IndexBucket::Occupied {
-                    ptr: entry_ptr,
-                    header: file_header.header,
-                });
+            match get_header_by_index(candidate_index)? {
+                Some(file_header) if file_header.hash == block_hash => {
+                    return Ok(IndexBucket::Occupied {
+                        ptr: entry_ptr,
+                        header: file_header.header,
+                    });
+                }
+                // An occupied bucket must point at a written header
+                None if !candidate_index.is_empty() => {
+                    return Err(ChainstoreError::CorruptedDatabase);
+                }
+                _ => {}
             }
 
             // If we find an empty index, this bucket is where the entry would be added
@@ -741,9 +747,10 @@ impl FlatChainStore {
             return Err(ChainstoreError::FullIndex);
         }
         let is_new = unsafe {
-            self.block_index
-                .set_index_for_hash(hash, index, |index| self.get_disk_header(index).copied())
-        }?;
+            self.block_index.set_index_for_hash(hash, index, |index| {
+                self.get_disk_header(index).map(|opt| opt.copied())
+            })?
+        };
         // Only increment the index occupancy if this is a new entry, i.e., a new block. Otherwise,
         // if this is a reorg, the occupancy is kept the same as we just overwrite indexes.
         if is_new {
@@ -841,8 +848,12 @@ impl FlatChainStore {
         Ok(mmap)
     }
 
-    /// Returns a reference to the respective disk header from the file. Errors if nothing is found.
-    unsafe fn get_disk_header(&self, index: Index) -> Result<&HashedDiskHeader, ChainstoreError> {
+    /// Returns a reference to the respective disk header from the file, or `None` if the slot
+    /// is uninitialized (all-zeros hash).
+    unsafe fn get_disk_header(
+        &self,
+        index: Index,
+    ) -> Result<Option<&HashedDiskHeader>, ChainstoreError> {
         let metadata = unsafe { self.get_metadata()? };
         let (max_size, base_ptr) = match index.is_main_chain() {
             true => (metadata.headers_file_size, self.headers.as_ptr()),
@@ -860,10 +871,10 @@ impl FlatChainStore {
 
         // Uninitialized memory means we haven't written anything here yet
         if header.hash == BlockHash::all_zeros() {
-            return Err(ChainstoreError::HeaderNotFound);
+            return Ok(None);
         }
 
-        Ok(header)
+        Ok(Some(header))
     }
 
     /// Returns a mutable reference to the respective disk header from the file, which may be
@@ -926,7 +937,9 @@ impl FlatChainStore {
 
         for i in 0..fork_count {
             let index = Index::new_fork(i as u32)?;
-            let hdr = unsafe { self.get_disk_header(index)? };
+            // Every slot below `fork_count` has been written, so an empty one means corruption
+            let hdr = unsafe { self.get_disk_header(index)? }
+                .ok_or(ChainstoreError::CorruptedDatabase)?;
             match hdr.header {
                 DiskBlockHeader::InFork(..)
                 | DiskBlockHeader::Orphan(..)
@@ -974,9 +987,10 @@ impl FlatChainStore {
         hash: BlockHash,
     ) -> Result<Option<DiskBlockHeader>, ChainstoreError> {
         let result = unsafe {
-            self.block_index
-                .get_index_for_hash(hash, |height| self.get_disk_header(height).copied())
-        }?
+            self.block_index.get_index_for_hash(hash, |height| {
+                self.get_disk_header(height).map(|opt| opt.copied())
+            })?
+        }
         .map(|idx_and_header| idx_and_header.1);
         Ok(result)
     }
@@ -1158,7 +1172,8 @@ impl ChainStore for FlatChainStore {
 
         if height <= validation_index {
             // this is probably a reorg, truncate the file up to the previous block height
-            let header = unsafe { self.get_disk_header(index)? };
+            let header =
+                unsafe { self.get_disk_header(index)? }.ok_or(ChainstoreError::HeaderNotFound)?;
 
             // this is where the new acc starts, truncating the file to this position
             let pos = header.acc_pos as u64;
@@ -1191,7 +1206,8 @@ impl ChainStore for FlatChainStore {
     fn load_roots_for_block(&mut self, height: u32) -> Result<Option<Vec<u8>>, Self::Error> {
         let index = Index::new(height)?;
 
-        let header = unsafe { self.get_disk_header(index)? };
+        let header =
+            unsafe { self.get_disk_header(index)? }.ok_or(ChainstoreError::HeaderNotFound)?;
         let size = header.acc_len as usize;
 
         if size == 0 {
@@ -1228,13 +1244,7 @@ impl ChainStore for FlatChainStore {
     fn get_header_by_height(&self, height: u32) -> Result<Option<DiskBlockHeader>, Self::Error> {
         let index = Index::new(height)?;
 
-        unsafe {
-            match self.get_disk_header(index) {
-                Ok(header) => Ok(Some(header.header)),
-                Err(ChainstoreError::HeaderNotFound) => Ok(None),
-                Err(e) => Err(e),
-            }
-        }
+        unsafe { self.get_disk_header(index) }.map(|opt| opt.map(|h| h.header))
     }
 
     fn load_height(&self) -> Result<Option<crate::BestChain>, Self::Error> {
@@ -1273,13 +1283,7 @@ impl ChainStore for FlatChainStore {
     fn get_block_hash(&self, height: u32) -> Result<Option<BlockHash>, Self::Error> {
         let index = Index::new(height)?;
 
-        unsafe {
-            match self.get_disk_header(index) {
-                Ok(header) => Ok(Some(header.hash)),
-                Err(ChainstoreError::HeaderNotFound) => Ok(None),
-                Err(e) => Err(e),
-            }
-        }
+        unsafe { self.get_disk_header(index) }.map(|opt| opt.map(|h| h.hash))
     }
 
     fn update_block_index(&mut self, height: u32, hash: BlockHash) -> Result<(), Self::Error> {
@@ -1686,15 +1690,15 @@ mod tests {
         // Test that the inner header-fetching function returns the proper error for mainnet indices
         unsafe {
             match store.get_disk_header(Index::new(151).unwrap()) {
-                Err(ChainstoreError::HeaderNotFound) => (),
+                Ok(None) => (),
                 Err(e) => panic!("Unexpected err: {e:?}"),
-                Ok(val) => panic!("Should not have found a header at height 151: {val:?}"),
+                Ok(Some(val)) => panic!("Should not have found a header at height 151: {val:?}"),
             }
             // Last available position
             match store.get_disk_header(Index::new(32_767).unwrap()) {
-                Err(ChainstoreError::HeaderNotFound) => (),
+                Ok(None) => (),
                 Err(e) => panic!("Unexpected err: {e:?}"),
-                Ok(val) => panic!("Should not have found a header at height 32767: {val:?}"),
+                Ok(Some(val)) => panic!("Should not have found a header at height 32767: {val:?}"),
             }
             // Exceeds header file capacity, must be FullIndex, not a silent wildcard
             let err = store
@@ -1709,15 +1713,15 @@ mod tests {
         // Test that the inner header-fetching function returns the proper error for fork indices
         unsafe {
             match store.get_disk_header(Index::new_fork(0).unwrap()) {
-                Err(ChainstoreError::HeaderNotFound) => (),
+                Ok(None) => (),
                 Err(e) => panic!("Unexpected err: {e:?}"),
-                Ok(val) => panic!("Should not have found any fork header: {val:?}"),
+                Ok(Some(val)) => panic!("Should not have found any fork header: {val:?}"),
             }
             // Last available position
             match store.get_disk_header(Index::new_fork(16_383).unwrap()) {
-                Err(ChainstoreError::HeaderNotFound) => (),
+                Ok(None) => (),
                 Err(e) => panic!("Unexpected err: {e:?}"),
-                Ok(val) => panic!("Should not have found any fork header: {val:?}"),
+                Ok(Some(val)) => panic!("Should not have found any fork header: {val:?}"),
             }
             // Exceeds fork file capacity, must be FullIndex, not a silent wildcard
             let err = store
@@ -2122,6 +2126,22 @@ mod tests {
     }
 
     #[test]
+    fn derive_alternative_tips_corrupted_on_empty_fork_slot() {
+        let mut fb = ForkBuilder::new(0x0f10_e57a_0008);
+
+        fb.add_independent_fork();
+
+        // Claim one more fork header than was ever written, leaving slot 1 empty
+        let metadata = unsafe { fb.store.get_metadata_mut().unwrap() };
+        metadata.fork_count += 1;
+
+        assert!(matches!(
+            fb.store.derive_alternative_tips(),
+            Err(ChainstoreError::CorruptedDatabase)
+        ));
+    }
+
+    #[test]
     fn test_warnings_block_index_full() {
         // capacity=2 allows exactly one insert before FullIndex fires
         // (occupancy 0→1 < 2 succeeds; 1+1=2 >= 2 fails)
@@ -2227,6 +2247,20 @@ mod tests {
         // Height 1 was never written, so there are no roots to load for it
         let err = store.load_roots_for_block(1).unwrap_err();
         assert!(matches!(err, ChainstoreError::HeaderNotFound));
+    }
+
+    #[test]
+    fn propagates_corrupted_database_from_index_entry_without_header() {
+        let mut store = get_test_chainstore(None).unwrap();
+
+        // A power loss can persist an index entry but not the header it points at
+        let hash = BlockHash::from_byte_array([0x42; 32]);
+        store.update_block_index(5, hash).unwrap();
+
+        assert!(matches!(
+            store.get_header(&hash),
+            Err(ChainstoreError::CorruptedDatabase)
+        ));
     }
 
     #[test]
