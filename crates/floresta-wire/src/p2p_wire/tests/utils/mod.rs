@@ -34,13 +34,17 @@ use floresta_chain::AssumeValidArg;
 use floresta_chain::ChainState;
 use floresta_chain::FlatChainStore;
 use floresta_chain::FlatChainStoreConfig;
+use floresta_chain::pruned_utreexo::BlockchainInterface;
+use floresta_chain::pruned_utreexo::ChainBackend;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
+use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_common::Ema;
 use floresta_common::service_flags;
 use floresta_mempool::Mempool;
 use rand::Rng;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
+use rustreexo::stump::Stump;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -415,22 +419,19 @@ where
     setup_node_with_assume_valid(args, AssumeValidArg::Disabled)
 }
 
-/// Builds a test node with the given AssumeValid setting.
-pub fn setup_node_with_assume_valid<T>(
-    args: SetupNodeArgs,
+/// Opens a small `ChainState` and accepts the first `num_blocks` headers for
+/// `net`. Shared by the sync-node and backfill test harnesses.
+fn open_test_chain(
+    datadir: &str,
+    net: Network,
+    num_blocks: usize,
     assume_valid: AssumeValidArg,
-) -> UtreexoNode<Chain, T>
-where
-    T: 'static + Default + NodeContext,
-{
-    let net = args.network;
-    let datadir = args.datadir;
-
+) -> Arc<ChainState<FlatChainStore>> {
     // Small test databases avoid exhausting disk space on Windows
     let config = FlatChainStoreConfig {
         block_index_size: Some(32_768),
         headers_file_size: Some(32_768),
-        ..FlatChainStoreConfig::new(&datadir)
+        ..FlatChainStoreConfig::new(datadir)
     };
     // Create `ChainState` and add headers to it
     let chainstore = FlatChainStore::new(config).unwrap();
@@ -442,18 +443,45 @@ where
         Network::Regtest => Vec::new(),
         _ => panic!("unavailable headers for net: {net}"),
     };
-    for header in headers.into_iter().skip(1).take(args.num_blocks) {
+    for header in headers.into_iter().skip(1).take(num_blocks) {
         chain.accept_header(header).unwrap();
     }
 
+    chain
+}
+
+/// Builds a test node with the given AssumeValid setting.
+pub fn setup_node_with_assume_valid<T>(
+    args: SetupNodeArgs,
+    assume_valid: AssumeValidArg,
+) -> UtreexoNode<Chain, T>
+where
+    T: 'static + Default + NodeContext,
+{
+    let chain = open_test_chain(&args.datadir, args.network, args.num_blocks, assume_valid);
+
     // Create `UtreexoNode` and spawn the simulated peers
-    let config = get_node_config(datadir, net, args.pow_fraud_proofs);
+    let config = get_node_config(args.datadir, args.network, args.pow_fraud_proofs);
+
     let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
     let kill_signal = Arc::new(RwLock::new(false));
     let addr_man = AddressMan::new(None, &[]);
     let mut node = UtreexoNode::new(config, chain, mempool, None, kill_signal, addr_man).unwrap();
 
-    for (i, peer_data) in args.peers.into_iter().enumerate() {
+    attach_simulated_peers(&mut node, args.peers);
+
+    node
+}
+
+/// Spawns the simulated peers and wires them into the node's peer tables.
+///
+/// Extracted from `setup_node_with_assume_valid` so the backfill harness
+/// attaches peers exactly like production-backed test nodes do.
+fn attach_simulated_peers<Chain: ChainBackend, Ctx>(
+    node: &mut UtreexoNode<Chain, Ctx>,
+    peers: Vec<PeerData>,
+) {
+    for (i, peer_data) in peers.into_iter().enumerate() {
         let peer_id = i as u32;
         let mut peer = spawn_peer(peer_data, node.node_tx.clone(), peer_id);
         peer.message_times.add(1.0);
@@ -483,8 +511,66 @@ where
             (peer_id, Instant::now()),
         );
     }
+}
+
+/// Builds a backfill node over a [`PartialChainState`] exactly like production
+/// does in `running_ctx::backfill`: a small `ChainState` accepts the signet
+/// headers, then the node runs over `chain.get_partial_chain(0, end, Stump::default())`.
+pub fn setup_backfill_node(args: SetupNodeArgs) -> UtreexoNode<PartialChainState, SyncNode> {
+    let chain = open_test_chain(
+        &args.datadir,
+        args.network,
+        args.num_blocks,
+        AssumeValidArg::Disabled,
+    );
+
+    let partial = chain
+        .get_partial_chain(0, args.num_blocks as u32, Stump::default())
+        .unwrap();
+
+    // Create `UtreexoNode` and spawn the simulated peers
+    let config = get_node_config(args.datadir, args.network, args.pow_fraud_proofs);
+    let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
+    let kill_signal = Arc::new(RwLock::new(false));
+    let addr_man = AddressMan::new(None, &[]);
+    let mut node = UtreexoNode::new(config, partial, mempool, None, kill_signal, addr_man).unwrap();
+
+    attach_simulated_peers(&mut node, args.peers);
 
     node
+}
+
+/// The observable end state of a backfill run.
+pub struct BackfillOutcome {
+    pub height: u32,
+    pub acc: Stump,
+    pub has_invalid_blocks: bool,
+    pub is_in_ibd: bool,
+}
+
+/// Runs a backfill node to completion, capturing the outcome inside the `run`
+/// completion closure. `PartialChainState` is not `Clone` and `run` consumes
+/// the node, so the outcome is captured via a shared mutex.
+pub async fn run_backfill(args: SetupNodeArgs) -> BackfillOutcome {
+    let node = setup_backfill_node(args);
+    let outcome = Arc::new(std::sync::Mutex::new(None));
+    let outcome_cb = outcome.clone();
+
+    timeout(
+        NODE_TIMEOUT,
+        node.run(move |chain: &PartialChainState| {
+            *outcome_cb.lock().unwrap() = Some(BackfillOutcome {
+                height: chain.get_height().unwrap(),
+                acc: chain.get_acc(),
+                has_invalid_blocks: chain.has_invalid_blocks(),
+                is_in_ibd: chain.is_in_ibd(),
+            });
+        }),
+    )
+    .await
+    .unwrap();
+
+    outcome.lock().unwrap().take().unwrap()
 }
 
 const NODE_TIMEOUT: Duration = Duration::from_secs(100);
