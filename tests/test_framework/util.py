@@ -151,6 +151,41 @@ class Utility:
         return (pk_path, cert_path)
 
 
+def is_port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    """Check, in a single attempt, whether `host` accepts connections on `port`.
+
+    Returns True when the connection succeeds, False otherwise. Pair it with
+    `wait_until` when the port is expected to change state over time.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        return sock.connect_ex((host, port)) == 0
+
+
+def florestad_has_feature(flag: str) -> bool:
+    """Check whether the `florestad` under test exposes `flag`.
+
+    Feature-gated flags are only compiled into the CLI when their cargo feature is
+    enabled, so asking `--help` for one tells us whether this build has the feature.
+    Returns False when the binary cannot be run, so callers skip instead of erroring.
+    """
+    try:
+        daemon = os.path.join(
+            Utility.get_integration_test_dir(), "binaries", "florestad"
+        )
+        result = subprocess.run(
+            [daemon, "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError, RuntimeError):
+        return False
+
+    return flag in (result.stdout + result.stderr)
+
+
 def wait_until_helper_internal(
     predicate, *, timeout=60, lock=None, timeout_factor=1.0, check_interval=0.05
 ):
