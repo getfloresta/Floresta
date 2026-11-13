@@ -198,6 +198,24 @@ pub struct Cli {
     /// This will run in the background and wont't affect node's operation. However,
     /// to disable backfilling, run floresta using this flag.
     pub no_backfill: bool,
+
+    #[cfg(feature = "json-rpc")]
+    #[arg(long, default_value_t = false)]
+    /// Whether the JSON-RPC server should be disabled
+    pub disable_rpc: bool,
+
+    #[arg(long, default_value_t = false)]
+    /// Whether the Electrum server should be disabled
+    ///
+    /// The Electrum server is what feeds newly validated blocks into the watch-only wallet, so
+    /// while this flag is set the wallet will not update for new blocks. You can still catch the
+    /// wallet up afterwards with the `rescan` RPC.
+    pub disable_electrum: bool,
+
+    #[cfg(feature = "zmq-server")]
+    #[arg(long, default_value_t = false)]
+    /// Whether the ZMQ server should be disabled
+    pub disable_zmq: bool,
 }
 
 impl Cli {

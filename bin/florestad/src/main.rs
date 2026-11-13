@@ -95,6 +95,11 @@ fn main() {
         tls_key_path: params.tls_key_path,
         allow_v1_fallback: params.allow_v1_fallback,
         backfill: !params.no_backfill,
+        #[cfg(feature = "json-rpc")]
+        disable_rpc: params.disable_rpc,
+        disable_electrum: params.disable_electrum,
+        #[cfg(feature = "zmq-server")]
+        disable_zmq: params.disable_zmq,
     };
 
     // Warned before forking, while stderr is still attached to the terminal.
