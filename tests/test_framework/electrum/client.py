@@ -9,7 +9,13 @@ This should be conformant to the ElectrumX specs.
 More here: https://electrumx.readthedocs.io/en/latest/protocol-methods.html
 """
 
+import hashlib
+
 from test_framework.electrum.base import BaseClient
+from test_framework.util import wait_until
+
+# How often the wallet is polled while waiting for a rescan to land.
+WALLET_POLL_INTERVAL = 1
 
 
 # pylint: disable=too-many-public-methods
@@ -166,3 +172,36 @@ class ElectrumClient(BaseClient):
         Only the first server.version() message is accepted.
         """
         return self.request("server.version", ["test-client", "1.2"])
+
+    @staticmethod
+    def script_hash(script_pubkey: str) -> str:
+        """
+        Build the Electrum script hash of a scriptPubKey: its sha256, byte reversed.
+        """
+        return hashlib.sha256(bytes.fromhex(script_pubkey)).digest()[::-1].hex()
+
+    def wallet_state(self, script_hash: str) -> tuple:
+        """
+        Return the confirmed balance and the utxo count held for a script hash.
+
+        The balance is `None` while the address is not cached by the wallet.
+        """
+        balance = self.get_balance(script_hash)["confirmed"]
+        utxos = self.list_unspent(script_hash)
+
+        return balance, len(utxos)
+
+    def wait_for_wallet_state(
+        self, script_hash: str, state: tuple, timeout: int = 60
+    ) -> None:
+        """
+        Poll the wallet until its state for a script hash matches `state`.
+
+        Raises a `TimeoutError` when the wallet never gets there.
+        """
+        wait_until(
+            lambda: self.wallet_state(script_hash) == state,
+            timeout=timeout,
+            interval=WALLET_POLL_INTERVAL,
+            error_msg=f"wallet never reached {state} for script hash {script_hash}",
+        )
