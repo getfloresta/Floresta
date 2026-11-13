@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::p2p::ServiceFlags;
 use floresta_chain::ThreadSafeChain;
@@ -16,6 +18,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::node::ConnectionKind;
 use crate::node::NodeNotification;
@@ -208,16 +211,36 @@ where
             .get_validation_index()
             .expect("validation index block should present");
 
-        let best_block = self
+        let (best_block, tip_hash) = self
             .chain
             .get_best_block()
-            .expect("best block should present")
-            .0;
+            .expect("best block should present");
 
         if validation_index == best_block {
-            info!("IBD is finished, switching to normal operation mode");
-            self.chain.update_ibd(IBDState::Done);
-            return LoopControl::Break;
+            // Skip the tip-age check at genesis: the genesis timestamp (~2009) would
+            // always look stale and trap regtest nodes in IBD indefinitely.
+            let stale = best_block > 0 && {
+                let tip_time = self
+                    .chain
+                    .get_block_header(&tip_hash)
+                    .expect("tip header is always present")
+                    .time;
+                let now: u32 = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as u32)
+                    .unwrap_or(0);
+                now.saturating_sub(tip_time) > self.config.max_tip_age_secs
+            };
+
+            if stale {
+                warn!(
+                    "validation caught up to a stale tip; chain store may be stuck, staying in IBD"
+                );
+            } else {
+                info!("IBD is finished, switching to normal operation mode");
+                self.chain.update_ibd(IBDState::Done);
+                return LoopControl::Break;
+            }
         }
 
         periodic_job!(
