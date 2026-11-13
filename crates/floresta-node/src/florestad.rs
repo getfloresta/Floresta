@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-#[cfg(feature = "metrics")]
-use core::net::IpAddr;
-#[cfg(feature = "metrics")]
-use core::net::Ipv4Addr;
 use core::net::SocketAddr;
 use std::fs;
 use std::path::Path;
@@ -191,6 +187,10 @@ pub struct Config {
     /// Address the Electrum Server will listen to.
     pub electrum_address: Option<String>,
 
+    #[cfg(feature = "metrics")]
+    /// Address the Prometheus metrics server will listen to.
+    pub metrics_address: Option<String>,
+
     /// Whether to enable the Electrum TLS server.
     pub enable_electrum_tls: bool,
 
@@ -252,6 +252,8 @@ impl Config {
             user_agent: String::new(),
             assumeutreexo_value: None,
             electrum_address: None,
+            #[cfg(feature = "metrics")]
+            metrics_address: None,
             enable_electrum_tls: false,
             electrum_address_tls: None,
             generate_cert: false,
@@ -622,8 +624,19 @@ impl Florestad {
         // Metrics
         #[cfg(feature = "metrics")]
         {
-            let metrics_server_address =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
+            let default_metrics_port = Self::get_default_metrics_port(self.config.network);
+
+            let metrics_server_address: SocketAddr = self
+                .config
+                .metrics_address
+                .as_ref()
+                .map(|addr| Self::resolve_hostname(addr, default_metrics_port))
+                .transpose()?
+                .unwrap_or(
+                    format!("0.0.0.0:{default_metrics_port}")
+                        .parse()
+                        .expect("Hardcoded address"),
+                );
 
             task::spawn(floresta_metrics::metrics_server(metrics_server_address));
             info!("Started metrics server on: {metrics_server_address}",);
@@ -840,6 +853,24 @@ impl Florestad {
         electrum_port
     }
 
+    /// Get the default Prometheus metrics port for the Network.
+    ///
+    /// Bitcoin  => 3333
+    /// Testnet3 => 3334
+    /// Testnet4 => 3335
+    /// Signet   => 3336
+    /// Regtest  => 3337
+    #[cfg(feature = "metrics")]
+    fn get_default_metrics_port(network: Network) -> u16 {
+        match network {
+            Network::Bitcoin => 3333,
+            Network::Testnet => 3334,
+            Network::Testnet4 => 3335,
+            Network::Signet => 3336,
+            Network::Regtest => 3337,
+        }
+    }
+
     /// Generate a self-signed TLS certificate from a random private key.
     pub fn generate_self_signed_certificate(
         tls_key_path: impl AsRef<Path>,
@@ -916,5 +947,19 @@ impl From<Config> for Florestad {
             #[cfg(feature = "json-rpc")]
             json_rpc: OnceLock::new(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_metrics_port() {
+        assert_eq!(Florestad::get_default_metrics_port(Network::Bitcoin), 3333);
+        assert_eq!(Florestad::get_default_metrics_port(Network::Testnet), 3334);
+        assert_eq!(Florestad::get_default_metrics_port(Network::Testnet4), 3335);
+        assert_eq!(Florestad::get_default_metrics_port(Network::Signet), 3336);
+        assert_eq!(Florestad::get_default_metrics_port(Network::Regtest), 3337);
     }
 }
