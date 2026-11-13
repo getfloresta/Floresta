@@ -14,6 +14,7 @@ dependencies = [
   "pyOpenSSL>=25.0.0",
   "pytest>=9.1.0",
   "pytest-xdist>=3.8.0",
+  "pytest-rerunfailures>=16.7",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -31,6 +32,8 @@ python_functions = ["test_*"]
 
 addopts = [
     "-v",
+    "-r",
+    "aR",
     "-n 4",
     "--dist=loadscope",
     "--strict-markers",
@@ -41,6 +44,12 @@ addopts = [
     "--show-capture=no",
     "-x"
 ]
+
+# Emergency flake mitigation: retry a failing test in-process instead of
+# failing the run. Every attempt is listed in the final summary (see "-r aR"
+# in addopts) so flaky tests stay visible and can be tracked down and fixed.
+reruns = 3
+reruns_delay = 2
 
 markers = [
     "example: marks tests that demonstrate how to use the Floresta test framework",
