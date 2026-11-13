@@ -9,6 +9,7 @@ including their daemon processes, RPC interfaces, and configurations.
 """
 
 from enum import Enum
+from subprocess import TimeoutExpired
 from typing import List, Tuple, Optional
 
 from test_framework.daemon import ConfigP2P
@@ -109,6 +110,7 @@ class Node:
         self._tls = tls
         self._variant = variant
         self._static_values = True
+        self._stop_requested = False
         self._log = log
         self._log_path = p2p_config.log_path
 
@@ -278,43 +280,152 @@ class Node:
 
     def start(self):
         """
-        Start the node.
+        Start the node and wait until it is usable.
+
+        `BaseDaemon.start` only spawns the daemon, so this is where a daemon
+        that dies on startup is turned into an error: both the wait for the RPC
+        port and the poll for RPC answers check the process on every iteration.
         """
         if self.daemon.is_running:
             raise RuntimeError(f"Node '{self.variant}' is already running.")
 
         self.daemon.start()
-        self.rpc.wait_on_socket(opened=True)
+        # The daemon is not given a fixed amount of time to boot: we wait for
+        # its RPC port and bail out as soon as the process dies.
+        socket_opened = self.rpc.try_wait_on_socket(
+            opened=True,
+            keep_waiting_if=lambda: self.daemon.is_running,
+        )
+        # Report the daemon's own error rather than a timeout it never reached.
+        self.daemon.raise_if_died()
+        if not socket_opened:
+            raise TimeoutError(
+                f"Node '{self.variant.value}' did not open its RPC port "
+                f"{self.rpc.address} after {self.rpc.TIMEOUT} seconds. "
+                f"See its log at {self._log_path}"
+            )
 
         # An open port is not readiness: the daemon only answers RPC calls once
         # it is done loading, so poll it until it does.
+        def is_responsive_or_died():
+            # Check the process on every poll, not only once the wait is over.
+            # When another process already holds the RPC port, the wait above
+            # finds it open right away and our daemon dies on bind a moment
+            # later; without this the poll below would keep failing against the
+            # other process until the timeout, and the daemon's own error would
+            # never be reported.
+            self.daemon.raise_if_died()
+            return self.rpc.is_responsive()
+
+        # Unlike the other RPC-polling waits, this one keeps the 50ms interval:
+        # each probe already blocks for up to `PROBE_TIMEOUT`, so the probe, not
+        # the interval, sets the pace, and startup wants the lowest latency.
         wait_until(
-            self.rpc.is_responsive,
+            is_responsive_or_died,
             timeout=self.rpc.TIMEOUT,
             interval=self.rpc.POLL_INTERVAL,
-            error_msg=f"Node '{self.variant}' did not answer RPC calls",
+            error_msg=f"Node '{self.variant.value}' did not answer RPC calls",
         )
+        # The daemon may also die right after the last poll, while the process
+        # that took its port is the one that answered.
+        self.daemon.raise_if_died()
 
         # When starting Floresta for the first time, it is ideal to check
         # if the Electrum server is ready to receive requests.
         if self.variant == NodeType.FLORESTAD and self.static_values is not True:
             self.electrum.ping()
 
-    def stop(self):
+    def request_stop(self):
         """
-        Stop the node.
-        """
-        response = None
-        if self.daemon.is_running:
-            try:
-                response = self.rpc.stop()
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                self.daemon.process.terminate()
+        Ask the daemon to stop, without waiting for it to be gone.
 
+        Use together with `wait_stopped`, so several nodes can shut down at the
+        same time instead of one after the other.
+        """
+        if not self.daemon.is_running:
+            self._report_unrequested_exit()
+            return None
+
+        self._stop_requested = True
+        try:
+            return self.rpc.stop()
+        # pylint: disable=broad-exception-caught
+        except Exception as e:
+            # Say so: a daemon that had to be terminated did not shut down the
+            # way the test expected, and this used to leave no trace at all.
+            self._log.warning(
+                f"Node '{self.variant.value}' did not accept `stop` ({e}); "
+                f"terminating it. See its log at {self._log_path}"
+            )
+            self.daemon.process.terminate()
+            return None
+
+    def _report_unrequested_exit(self):
+        """
+        Report a daemon that was already gone when it was asked to stop.
+
+        `wait_stopped` does not look at a node nobody asked to stop, so this is
+        the only place where a daemon that died on its own gets reported, and
+        the only place left to release the stderr pipe nobody will read now.
+
+        A non-zero exit means the daemon died or refused to run, which is worth
+        a line; exit 0 is what a test that stopped the daemon itself leaves
+        behind (`floresta-cli/stop.py`), so it stays quiet. This warns instead
+        of failing the teardown because a non-zero exit is not always a
+        surprise: `florestad/wallet.py`'s invalid-config cases expect florestad
+        to refuse its configuration, and leave it dead with exit 1.
+        """
+        process = self.daemon.process
+        if process is None:
+            return
+
+        if process.returncode != 0:
+            self._log.warning(
+                f"Node '{self.variant.value}' was already gone (exit "
+                f"{process.returncode}) before being asked to stop; "
+                f"see its log at {self._log_path}"
+            )
+
+        if process.stderr is not None and not process.stderr.closed:
+            process.stderr.close()
+
+    def wait_stopped(self):
+        """
+        Wait for a daemon asked to stop by `request_stop` to be gone.
+        """
+        if self.daemon.process is None or not self._stop_requested:
+            return
+
+        # Wait on the process itself instead of polling the RPC socket:
+        # it wakes up the moment the daemon is gone.
+        try:
+            self.daemon.process.wait(timeout=self.daemon.PROC_WAIT_TIMEOUT)
+        except TimeoutExpired as e:
+            # `TimeoutExpired` only carries the command line, so say which node
+            # it was and where to read what it was busy with.
+            e.add_note(
+                f"node '{self.variant.value}' did not exit within "
+                f"{self.daemon.PROC_WAIT_TIMEOUT} seconds; "
+                f"see its log at {self._log_path}"
+            )
+            # Do not leave a hung daemon holding the ports and data dir of the
+            # next test on this worker.
+            self.daemon.process.kill()
             self.daemon.process.wait()
+            self._stop_requested = False
+            raise
+        # The port is released with the process, so one check is enough.
+        if self.rpc.is_socket_listening():
             self.rpc.wait_on_socket(opened=False)
 
+        self._stop_requested = False
+
+    def stop(self):
+        """
+        Stop the node and wait for it to be gone.
+        """
+        response = self.request_stop()
+        self.wait_stopped()
         return response
 
     def connect_node(

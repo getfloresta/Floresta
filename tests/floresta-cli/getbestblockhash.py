@@ -23,7 +23,7 @@ def test_get_best_block_hash(node_manager, florestad_utreexod):
     utreexo_best_block = utreexod.rpc.get_blockchain_info()["bestblockhash"]
     assert floresta_best_block == utreexo_best_block
 
-    node_manager.generate_blocks_and_sync(10, is_finished_ibd=False)
+    node_manager.generate_blocks_and_sync(10, is_ibd_finished=False)
 
     utreexo_chain = utreexod.rpc.get_blockchain_info()
     floresta_best_block = florestad.rpc.get_bestblockhash()

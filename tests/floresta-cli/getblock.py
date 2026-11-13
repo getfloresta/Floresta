@@ -6,7 +6,6 @@ floresta_cli_getblock.py
 This functional test cli utility to interact with a Floresta node with `getblock`
 """
 
-import time
 import random
 from typing import Any
 import pytest
@@ -36,14 +35,13 @@ class TestGetBlock:
         self.node_manager = node_manager
 
         self.bitcoind.rpc.generate(2017)
-        time.sleep(1)
         self.bitcoind.rpc.generate(6)
 
         self.node_manager.connect_nodes(self.florestad, self.bitcoind)
 
         block_count = self.bitcoind.rpc.get_block_count()
 
-        self.node_manager.wait_for_sync_nodes(is_finished_ibd=False)
+        self.node_manager.wait_for_sync_nodes(is_ibd_finished=False)
 
         self.log.info("Testing getblock RPC in the genesis block")
         self.compare_block(0)
