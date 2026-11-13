@@ -106,6 +106,9 @@ pub enum UserRequest {
         /// The remote node will send min(height(stop_hash), 2_000) headers on each request.
         stop_hash: BlockHash,
     },
+
+    /// Ban a peer by its address, disconnecting it immediately.
+    BanPeer(BitcoinSocketAddr),
 }
 
 #[derive(Debug)]
@@ -155,6 +158,9 @@ pub enum NodeResponse {
 
     /// Received compact block filter headers.
     CFilterHeaders(CFHeaders),
+
+    /// A response indicating whether a peer was successfully banned.
+    BanPeer(bool),
 }
 
 #[derive(Debug)]
@@ -307,6 +313,12 @@ impl NetworkMethods for NodeHandle {
         let val = self.send_request(UserRequest::GetAddrManInfo).await?;
 
         extract_variant!(GetAddrManInfo, val)
+    }
+
+    async fn ban_peer(&self, addr: BitcoinSocketAddr) -> Result<bool, Self::Error> {
+        let val = self.send_request(UserRequest::BanPeer(addr)).await?;
+
+        extract_variant!(BanPeer, val)
     }
 }
 
