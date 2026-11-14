@@ -376,6 +376,74 @@ impl Florestad {
         Ok(sock)
     }
 
+    /// Logs that the ZMQ server is off, and warns about the flags that are
+    /// ignored because of it.
+    #[cfg(feature = "zmq-server")]
+    fn log_disabled_zmq(&self) {
+        info!("ZMQ server is disabled, new blocks will not be published to clients");
+
+        if let Some(address) = self.config.zmq_address.as_deref() {
+            warn!("--zmq-address {address} is set but ignored, the ZMQ server is disabled");
+        }
+    }
+
+    /// Logs that the JSON-RPC server is off, and warns about the flags that are
+    /// ignored because of it.
+    #[cfg(feature = "json-rpc")]
+    fn log_disabled_rpc(&self) {
+        info!("JSON-RPC server is disabled, clients will not be able to connect");
+
+        if let Some(address) = self.config.json_rpc_address.as_deref() {
+            warn!("--rpc-address {address} is set but ignored, the JSON-RPC server is disabled");
+        }
+    }
+
+    /// Logs that the Electrum server is off, and warns about the flags that are
+    /// ignored because of it.
+    ///
+    /// The Electrum server is what feeds validated blocks into the watch-only
+    /// wallet, so the log line says the wallet will not update: that's the reason
+    /// an operator usually needs to know about.
+    fn log_disabled_electrum(&self) {
+        info!("Electrum server is disabled, the watch-only wallet will not update for new blocks");
+
+        if let Some(address) = self.config.electrum_address.as_deref() {
+            warn!(
+                "--electrum-address {address} is set but ignored, \
+                 the Electrum server is disabled"
+            );
+        }
+
+        if let Some(address) = self.config.electrum_address_tls.as_deref() {
+            warn!(
+                "--electrum-address-tls {address} is set but ignored, \
+                 the Electrum server is disabled"
+            );
+        }
+
+        if self.config.enable_electrum_tls {
+            warn!("--enable-electrum-tls is set but ignored, the Electrum server is disabled");
+        }
+
+        if let Some(path) = self.config.tls_key_path.as_deref() {
+            warn!(
+                "--tls-key-path {} is set but ignored, the Electrum server is disabled",
+                path.display()
+            );
+        }
+
+        if let Some(path) = self.config.tls_cert_path.as_deref() {
+            warn!(
+                "--tls-cert-path {} is set but ignored, the Electrum server is disabled",
+                path.display()
+            );
+        }
+
+        if self.config.generate_cert {
+            warn!("--generate-cert is set but ignored, the Electrum server is disabled");
+        }
+    }
+
     /// Initializes the daemon and starts its background services.
     ///
     /// This loads the wallet and chain state, constructs the P2P and Electrum services and spawns
@@ -488,6 +556,8 @@ impl Florestad {
             } else {
                 error!("Could not create zmq server, skipping");
             };
+        } else {
+            self.log_disabled_zmq();
         }
 
         info!("Starting server");
@@ -517,6 +587,8 @@ impl Florestad {
             if self.json_rpc.set(server).is_err() {
                 core::panic!("We should be the first one setting this");
             }
+        } else {
+            self.log_disabled_rpc();
         }
 
         // Electrum Server configuration.
@@ -628,6 +700,8 @@ impl Florestad {
 
             // Electrum Server's main loop.
             task::spawn(electrum_server.main_loop());
+        } else {
+            self.log_disabled_electrum();
         }
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
