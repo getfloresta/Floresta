@@ -2720,6 +2720,23 @@ mod test {
     }
 
     #[test]
+    fn headers_only_chain_keeps_validation_index_at_genesis() {
+        // With only headers and no connected blocks, the best header height moves forward
+        // but the validated height must stay at genesis. `getblockcount` reports the latter.
+        let file = include_bytes!("../../testdata/signet_headers.zst");
+        let uncompressed: Vec<u8> = zstd::decode_all(Cursor::new(file)).unwrap();
+        let mut buffer = uncompressed.as_slice();
+
+        let chain = setup_test_chain(Network::Signet, AssumeValidArg::Hardcoded, None);
+        while let Ok(header) = BlockHeader::consensus_decode(&mut buffer) {
+            chain.accept_header(header).unwrap();
+        }
+
+        assert_eq!(chain.get_height().unwrap(), 2015);
+        assert_eq!(chain.get_validation_index().unwrap(), 0);
+    }
+
+    #[test]
     fn test_calc_next_work_required() {
         let first_block: BlockHeader = deserialize_hex("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a008f4d5fae77031e8ad22203").unwrap();
         let last_block: BlockHeader = deserialize_hex("00000020dec6741f7dc5df6661bcb2d3ec2fceb14bd0e6def3db80da904ed1eeb8000000d1f308132e6a72852c04b059e92928ea891ae6d513cd3e67436f908c804ec7be51df535fae77031e4d00f800").unwrap();

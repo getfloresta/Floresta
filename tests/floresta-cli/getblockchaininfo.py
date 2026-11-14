@@ -51,8 +51,7 @@ def test_get_blockchain_info(node_manager, florestad_bitcoind_utreexod_with_chai
     utreexod.rpc.generate(EXTRA_BLOCKS)
     node_manager.wait_for_sync_nodes()
 
-    # Poll for growth: get_block_count moves on header receipt, but acc roots
-    # are only written post-validation.
+    # Poll for growth: acc roots are only written post-validation.
     wait_until(
         lambda: florestad.rpc.get_blockchain_info()["size_on_disk"] > size_before
     )

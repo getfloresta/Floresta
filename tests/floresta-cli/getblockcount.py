@@ -32,3 +32,7 @@ def test_get_block_count(florestad_utreexod, node_manager):
     final_utreexod_count = utreexod.rpc.get_block_count()
 
     assert final_florestad_count == final_utreexod_count == MINE_BLOCKS
+
+    # `getblockcount` must report the validated height, same as
+    # `getblockchaininfo.blocks`, not the best header height.
+    assert final_florestad_count == florestad.rpc.get_blockchain_info()["blocks"]

@@ -445,7 +445,11 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
 
     // getblockcount
     async fn get_block_count(&self) -> Result<u32, JsonRpcError> {
-        self.chain.get_height().map_err(|_| JsonRpcError::Chain)
+        // Like Bitcoin Core, report the last fully validated block, not the best header.
+        // This matches the `blocks` field of `getblockchaininfo`.
+        self.chain
+            .get_validation_index()
+            .map_err(|_| JsonRpcError::Chain)
     }
 
     // getblockfilter
