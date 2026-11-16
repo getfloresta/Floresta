@@ -89,6 +89,30 @@ To disable compact block filters, start the node with the `--no-cfilters` flag. 
 florestad --no-cfilters
 ```
 
+## Disabling interfaces
+
+`florestad` exposes three interfaces that you can turn off individually.
+
+The JSON-RPC server is built with the `json-rpc` feature, which is enabled by default. When it is compiled in, you can disable it at runtime with `--disable-rpc`.
+
+```bash
+florestad --disable-rpc
+```
+
+The Electrum server can be disabled with `--disable-electrum`.
+
+```bash
+florestad --disable-electrum
+```
+
+The Electrum server is what feeds newly validated blocks into the watch-only wallet, so while it is disabled the wallet will not update as new blocks are validated. Once you start it again, you can catch the wallet up with the `rescanblockchain` RPC, as long as the JSON-RPC server is enabled.
+
+The ZMQ server is built with the `zmq-server` feature, which is not enabled by default. When it is compiled in, you can disable it at runtime with `--disable-zmq`.
+
+```bash
+florestad --disable-zmq
+```
+
 ## Getting Help
 
 You can get a list of all the available commands by running
