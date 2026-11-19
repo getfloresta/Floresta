@@ -835,10 +835,29 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         network: Network,
         assume_valid: AssumeValidArg,
     ) -> Result<Self, BlockchainError> {
-        if chainstore.load_height()?.is_some() {
-            return Self::load_chain_state(chainstore, network, assume_valid);
+        let chainstate = match chainstore.load_height()? {
+            Some(_) => Self::load_chain_state(chainstore, network, assume_valid)?,
+            None => Self::new(chainstore, network, assume_valid),
+        };
+
+        chainstate.recover_unsaved_headers()?;
+        Ok(chainstate)
+    }
+
+    /// Reindexes if headers are stored past our saved best height, e.g. after a kill
+    /// during header sync, since the height is only saved on flush.
+    fn recover_unsaved_headers(&self) -> Result<(), BlockchainError> {
+        let best_height = self.get_best_block()?.0;
+        let next = read_lock!(self)
+            .chainstore
+            .get_block_hash(best_height + 1)?;
+
+        if next.is_some() {
+            warn!("Found headers past our saved best height {best_height}. Reindexing.");
+            self.reindex_chain()?;
         }
-        Ok(Self::new(chainstore, network, assume_valid))
+
+        Ok(())
     }
 
     /// Checks whether our database got a file-level corruption, and if so, reindex.
@@ -3332,5 +3351,51 @@ mod test {
             acc,
             "a restart must not throw the assumed accumulator away",
         );
+    }
+
+    #[test]
+    fn open_recovers_headers_stored_past_the_saved_height() {
+        let json_blocks = include_str!("../../testdata/test_reorg.json");
+        let blocks: Vec<Vec<&str>> = serde_json::from_str(json_blocks).unwrap();
+        let headers: Vec<BlockHeader> = blocks[0]
+            .iter()
+            .map(|s| deserialize_hex::<Block>(s).unwrap().header)
+            .collect();
+
+        let test_id = rand::random::<u64>();
+        let path = format!("./tmp-db/{test_id}/");
+        let config = || FlatChainStoreConfig {
+            block_index_size: Some(DEFAULT_TEST_CHAINSTORE_SIZE),
+            headers_file_size: Some(DEFAULT_TEST_CHAINSTORE_SIZE),
+            fork_file_size: Some(TEST_FORK_FILE_SIZE),
+            cache_size: Some(10),
+            file_permission: Some(0o660),
+            path: path.clone().into(),
+        };
+        let open = || {
+            ChainState::open(
+                FlatChainStore::new(config()).unwrap(),
+                Network::Regtest,
+                AssumeValidArg::Hardcoded,
+            )
+            .unwrap()
+        };
+
+        // Killed before the first flush: no height was ever saved
+        let chain = open();
+        for header in &headers[..5] {
+            chain.accept_header(*header).unwrap();
+        }
+        drop(chain);
+        assert_eq!(open().get_height().unwrap(), 5);
+
+        // Killed after a flush: the saved height lags behind the stored headers
+        let chain = open();
+        chain.flush().unwrap();
+        for header in &headers[5..] {
+            chain.accept_header(*header).unwrap();
+        }
+        drop(chain);
+        assert_eq!(open().get_height().unwrap(), headers.len() as u32);
     }
 }
