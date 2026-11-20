@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 
 use bitcoin::Address;
 pub use bitcoin::Network;
+use bitcoin::Script;
 use bitcoin::ScriptBuf;
 pub use floresta_chain::AssumeUtreexoValue;
 pub use floresta_chain::AssumeValidArg;
@@ -44,6 +45,7 @@ use floresta_wire::address_man::AddressMan;
 use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::node::UtreexoNode;
 use floresta_wire::node::running_ctx::RunningNode;
+use floresta_wire::signet_magic;
 use rcgen::BasicConstraints;
 use rcgen::CertificateParams;
 use rcgen::IsCa;
@@ -77,6 +79,17 @@ use crate::zmq::ZMQServer;
 ///
 /// This is the same default as Bitcoin Core.
 const DEFAULT_MEMPOOL_MAX_SIZE_BYTES: usize = 300_000_000; // 300 MiB
+
+/// Returns the data-directory name for a signet challenge.
+pub fn signet_data_dir_name(challenge: Option<&Script>) -> String {
+    match challenge {
+        None => "signet".to_owned(),
+        Some(challenge) if challenge == ChainParams::default_signet_challenge() => {
+            "signet".to_owned()
+        }
+        Some(challenge) => format!("signet-{}", signet_magic(challenge)),
+    }
+}
 
 #[derive(Clone)]
 /// General configuration for the floresta daemon.
@@ -136,6 +149,11 @@ pub struct Config {
     /// The network we are running in, it may be one of: bitcoin, signet, regtest or testnet.
     pub network: Network,
 
+    /// A custom BIP-325 challenge for signet.
+    ///
+    /// Explicit configuration takes precedence over the config-file value.
+    pub signet_challenge: Option<ScriptBuf>,
+
     /// Whether we should build and store compact block filters
     ///
     /// Those filters are used for rescanning our wallet for historical transactions. If you don't
@@ -164,6 +182,12 @@ pub struct Config {
     ///
     /// If non-empty, we'll connect **only** to these nodes.
     pub connect: Vec<String>,
+
+    /// Nodes used to bootstrap peer address discovery.
+    ///
+    /// Unlike `connect`, these peers are disconnected after returning addresses and do not
+    /// disable other discovery methods.
+    pub seednode: Vec<String>,
 
     #[cfg(feature = "json-rpc")]
     /// The address our json-rpc should listen to
@@ -275,11 +299,13 @@ impl Config {
             config_file: None,
             proxy: None,
             network,
+            signet_challenge: None,
             cfilters: false,
             filters_start_height: None,
             #[cfg(feature = "zmq-server")]
             zmq_address: None,
             connect: Vec::new(),
+            seednode: Vec::new(),
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
             #[cfg(feature = "json-rpc")]
@@ -441,6 +467,11 @@ impl Florestad {
         // Check that the directory exists and is writable
         Self::validate_data_dir(datadir)?;
 
+        let chain_params = self.chain_params()?;
+        let network = chain_params.network;
+        let is_custom_signet = chain_params.is_custom_signet();
+        let signet_challenge = chain_params.signet_challenge.clone();
+
         info!("Loading watch-only wallet");
         let wallet = self.setup_wallet()?;
 
@@ -449,7 +480,7 @@ impl Florestad {
         info!("Loading blockchain database");
         let blockchain_state = Arc::new(Self::load_chain_state(
             datadir,
-            self.config.network,
+            chain_params,
             self.config.assume_valid,
         )?);
 
@@ -472,9 +503,8 @@ impl Florestad {
         let cfilters = None;
 
         // If this network already allows pow fraud proofs, we should use it instead of assumeutreexo
-        let assume_utreexo = match self.config.assume_utreexo {
-            true => Some(ChainParams::get_assume_utreexo(self.config.network)),
-
+        let assume_utreexo = match (self.config.assume_utreexo, is_custom_signet) {
+            (true, false) => Some(ChainParams::get_assume_utreexo(network)),
             _ => None,
         };
 
@@ -487,11 +517,13 @@ impl Florestad {
 
         let config = UtreexoNodeConfig {
             disable_dns_seeds: self.config.disable_dns_seeds,
-            network: self.config.network,
+            network,
+            signet_challenge,
             pow_fraud_proofs: false,
             proxy,
             datadir: datadir.into(),
             fixed_peers: self.config.connect.clone(),
+            seed_nodes: self.get_seednodes(),
             compact_filters: self.config.cfilters,
             assume_utreexo: self.config.assumeutreexo_value.clone().or(assume_utreexo),
             backfill: self.config.backfill,
@@ -843,6 +875,28 @@ impl Florestad {
         Ok(())
     }
 
+    /// Builds the consensus parameters from explicit and file-based configuration.
+    fn chain_params(&self) -> Result<ChainParams, FlorestadError> {
+        let signet_challenge = self
+            .config
+            .signet_challenge
+            .as_ref()
+            .or_else(|| self.get_config_file().signet_challenge.as_ref());
+
+        if signet_challenge.is_some() && self.config.network != Network::Signet {
+            return Err(FlorestadError::SignetChallengeOnNonSignet(
+                self.config.network,
+            ));
+        }
+
+        let mut chain_params = ChainParams::from(self.config.network);
+        if let Some(signet_challenge) = signet_challenge {
+            chain_params.signet_challenge = Some(signet_challenge.clone());
+        }
+
+        Ok(chain_params)
+    }
+
     /// Load config from disk; prefer explicit `config_file`, otherwise use `{data_dir}/config.toml`.
     /// Returns default if it cannot load it. Parsed once, so a missing or
     /// malformed file warns a single time no matter how many getters consult it.
@@ -893,7 +947,7 @@ impl Florestad {
 
     fn load_chain_state(
         datadir: impl AsRef<Path>,
-        network: Network,
+        chain_params: ChainParams,
         assume_valid: AssumeValidArg,
     ) -> Result<ChainState<ChainStore>, FlorestadError> {
         let chain_store_config = FlatChainStoreConfig::new(datadir.as_ref().join("chaindata"));
@@ -901,7 +955,7 @@ impl Florestad {
         let chain_store = ChainStore::new(chain_store_config)
             .map_err(|e| FlorestadError::CouldNotLoadFlatChainStore(e.into()))?;
 
-        ChainState::open(chain_store, network, assume_valid)
+        ChainState::open(chain_store, chain_params, assume_valid)
             .map_err(FlorestadError::CouldNotLoadFlatChainStore)
     }
 
@@ -980,6 +1034,16 @@ impl Florestad {
             .collect()
     }
 
+    /// Returns seed nodes from explicit and file-based configuration.
+    fn get_seednodes(&self) -> Vec<String> {
+        self.config
+            .seednode
+            .iter()
+            .chain(self.get_config_file().seednode.iter())
+            .cloned()
+            .collect()
+    }
+
     /// Resolved cookie file path override; CLI wins over the config file.
     #[cfg(feature = "json-rpc")]
     fn get_rpc_cookie_file(&self) -> Option<PathBuf> {
@@ -997,7 +1061,6 @@ impl Florestad {
     fn cookie_auth_disabled(&self) -> bool {
         self.config.no_rpc_cookie_file
     }
-
     /// Get the wallet descriptors from the config file
     fn get_descriptors(&self) -> Vec<String> {
         self.config
@@ -1142,5 +1205,80 @@ impl From<Config> for Florestad {
             cookie_path: OnceLock::new(),
             config_file: OnceLock::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn signet_data_directories_are_challenge_specific() {
+        assert_eq!(signet_data_dir_name(None), "signet");
+        assert_eq!(
+            signet_data_dir_name(Some(ChainParams::default_signet_challenge())),
+            "signet"
+        );
+        assert_eq!(
+            signet_data_dir_name(Some(Script::from_bytes(&[0x51]))),
+            "signet-54d26fbd"
+        );
+    }
+
+    #[test]
+    fn config_file_sets_signet_challenge() {
+        let tempdir = tempdir().expect("temporary directory");
+        let config_path = tempdir.path().join("config.toml");
+        std::fs::write(&config_path, "signet_challenge = \"51\"").expect("write configuration");
+
+        let mut config = Config::new(Network::Signet, tempdir.path());
+        config.config_file = Some(config_path);
+        let florestad = Florestad::from(config);
+
+        assert_eq!(
+            florestad
+                .chain_params()
+                .expect("valid signet configuration")
+                .signet_challenge,
+            Some(ScriptBuf::from_bytes(vec![0x51]))
+        );
+    }
+
+    #[test]
+    fn config_file_rejects_signet_challenge_on_other_networks() {
+        let tempdir = tempdir().expect("temporary directory");
+        let config_path = tempdir.path().join("config.toml");
+        std::fs::write(&config_path, "signet_challenge = \"51\"").expect("write configuration");
+
+        let mut config = Config::new(Network::Bitcoin, tempdir.path());
+        config.config_file = Some(config_path);
+        let florestad = Florestad::from(config);
+
+        assert!(matches!(
+            florestad.chain_params(),
+            Err(FlorestadError::SignetChallengeOnNonSignet(Network::Bitcoin))
+        ));
+    }
+    #[test]
+    fn combines_explicit_and_file_seednodes() {
+        let tempdir = tempdir().expect("temporary directory");
+        let config_path = tempdir.path().join("config.toml");
+        std::fs::write(&config_path, "seednode = [\"file-seed.example:38333\"]")
+            .expect("write configuration");
+
+        let mut config = Config::new(Network::Signet, tempdir.path());
+        config.config_file = Some(config_path);
+        config.seednode = vec!["cli-seed.example:38333".to_owned()];
+        let florestad = Florestad::from(config);
+
+        assert_eq!(
+            florestad.get_seednodes(),
+            [
+                "cli-seed.example:38333".to_owned(),
+                "file-seed.example:38333".to_owned()
+            ]
+        );
     }
 }
