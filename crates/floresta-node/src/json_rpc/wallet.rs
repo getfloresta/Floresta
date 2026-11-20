@@ -142,6 +142,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             }
         }
 
+        info!("rescan finished");
+
         Ok(())
     }
 
