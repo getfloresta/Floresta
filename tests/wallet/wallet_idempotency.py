@@ -7,6 +7,8 @@ This functional test checks that handing the wallet blocks it already processed
 does not credit them twice, driving the replay through `rescanblockchain`.
 """
 
+import hashlib
+
 import pytest
 
 from test_framework.constants import WALLET_ADDRESS, WALLET_DESCRIPTOR_EXTERNAL
@@ -16,6 +18,25 @@ from test_framework.util import wait_until
 BLOCKS = 20
 COINBASE_SATS = 5_000_000_000
 SETTLED_STATE = (BLOCKS * COINBASE_SATS, BLOCKS)
+
+
+def script_hash_of(script_pubkey: str) -> str:
+    """
+    Build the Electrum script hash of a scriptPubKey: its sha256, byte reversed.
+    """
+    return hashlib.sha256(bytes.fromhex(script_pubkey)).digest()[::-1].hex()
+
+
+def wallet_state(electrum: ElectrumClient, script_hash: str) -> tuple:
+    """
+    Return the confirmed balance and the utxo count held for a script hash.
+
+    The balance is `None` while the address is not cached by the wallet.
+    """
+    balance = electrum.get_balance(script_hash)["confirmed"]
+    utxos = electrum.list_unspent(script_hash)
+
+    return balance, len(utxos)
 
 
 @pytest.mark.wallet
@@ -31,10 +52,10 @@ def test_rescanblockchain_does_not_double_count(
     script_pubkey = bitcoind.rpc.perform_request("validateaddress", [WALLET_ADDRESS])[
         "scriptPubKey"
     ]
-    script_hash = ElectrumClient.script_hash(script_pubkey)
+    script_hash = script_hash_of(script_pubkey)
 
     # No descriptor was loaded, so the wallet ignored every block it just saw.
-    assert florestad.electrum.wallet_state(script_hash) == (None, 0)
+    assert wallet_state(florestad.electrum, script_hash) == (None, 0)
 
     # Loading the descriptor kicks off a rescan driven by the block filters. The
     # state only settles once every block was credited, which proves the filters
@@ -42,7 +63,12 @@ def test_rescanblockchain_does_not_double_count(
     log.info("Loading the wallet descriptor and waiting for the filter rescan...")
     florestad.rpc.load_descriptor(WALLET_DESCRIPTOR_EXTERNAL)
 
-    florestad.electrum.wait_for_wallet_state(script_hash, SETTLED_STATE)
+    wait_until(
+        lambda: wallet_state(florestad.electrum, script_hash) == SETTLED_STATE,
+        timeout=60,
+        interval=1,
+        error_msg=f"wallet never reached {SETTLED_STATE}",
+    )
 
     # Rescanning the same range hands the wallet blocks it already processed.
     log.info("Rescanning the very same range...")
@@ -56,4 +82,4 @@ def test_rescanblockchain_does_not_double_count(
         error_msg="rescans never finished",
     )
 
-    assert florestad.electrum.wallet_state(script_hash) == SETTLED_STATE
+    assert wallet_state(florestad.electrum, script_hash) == SETTLED_STATE

@@ -285,9 +285,10 @@ where
             .list_transactions()
             .expect("Could not list transactions");
         for txid in txids {
-            let Some(tx) = inner.get_transaction(&txid) else {
-                continue;
-            };
+            let tx = inner
+                .database
+                .get_transaction(&txid)
+                .expect("Could not load cached transaction");
             if tx.height == 0 {
                 continue;
             }
