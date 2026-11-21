@@ -15,14 +15,14 @@ from test_framework.util import (
 
 EXPECTED_KEYS = {
     "id",
-    "address",
+    "addr",
     "services",
     "servicesnames",
-    "user_agent",
+    "subver",
     "initial_height",
-    "kind",
+    "connection_type",
     "state",
-    "transport_protocol",
+    "transport_protocol_type",
     "relaytxes",
     "inbound",
     "bip152_hb_to",
@@ -45,7 +45,7 @@ EXPECTED_PEER_INFO = {
     "bip152_hb_to": False,
     "bip152_hb_from": False,
     "permissions": [],
-    "kind": "manual",
+    "connection_type": "manual",
     "state": "Ready",
 }
 
@@ -54,14 +54,14 @@ def assert_peer_info_shape(peer):
     """Assert the stable, documented fields returned for a peer."""
     assert set(peer.keys()) == EXPECTED_KEYS
     assert isinstance(peer["id"], int)
-    assert isinstance(peer["address"], str)
+    assert isinstance(peer["addr"], str)
     assert isinstance(peer["services"], str)
     assert isinstance(peer["servicesnames"], list)
-    assert isinstance(peer["user_agent"], str)
+    assert isinstance(peer["subver"], str)
     assert isinstance(peer["initial_height"], int)
-    assert peer["kind"] in EXPECTED_KINDS
+    assert peer["connection_type"] in EXPECTED_KINDS
     assert peer["state"] in {"Ready", "Awaiting", "Banned"}
-    assert peer["transport_protocol"] in {"V1", "V2"}
+    assert peer["transport_protocol_type"] in {"v1", "v2"}
     assert isinstance(peer["relaytxes"], bool)
     assert isinstance(peer["inbound"], bool)
     assert isinstance(peer["bip152_hb_to"], bool)
@@ -92,7 +92,7 @@ def test_peer_info(florestad_node, bitcoind_node, node_manager):
     assert_bitcoind_service_fields(peer)
     compare_fields(peer, EXPECTED_PEER_INFO)
     assert abs(peer["timeoffset"]) < 60
-    assert "Satoshi" in peer["user_agent"]
+    assert "Satoshi" in peer["subver"]
 
 
 def has_ready_peer(node):
@@ -118,4 +118,4 @@ def test_peer_info_automatic_peer(florestad_utreexod):
 
     peer = florestad.rpc.get_peerinfo()[0]
     assert_peer_info_shape(peer)
-    assert peer["kind"] == "outbound-full-relay"
+    assert peer["connection_type"] == "outbound-full-relay"

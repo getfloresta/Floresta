@@ -41,6 +41,7 @@ pub struct PeerInfo {
     /// This peer's ID in the peer manager.
     pub id: u32,
     /// The network address for this peer.
+    #[serde(rename = "addr")]
     pub address: String,
     /// Hex-encoded bitfield with the services this peer advertises.
     pub services: String,
@@ -52,6 +53,7 @@ pub struct PeerInfo {
     pub relay_txs: bool,
     /// User agent is a string that represents the client being used by our peer. E.g.
     /// /Satoshi-26.0/ for bitcoin core version 26
+    #[serde(rename = "subver")]
     pub user_agent: String,
     /// Whether this peer connection is inbound.
     pub inbound: bool,
@@ -69,6 +71,7 @@ pub struct PeerInfo {
     /// We can connect with peers for different reasons. E.g. we can connect to a peer to
     /// see if it has a block we're missing, or just to check if that address is still alive.
     /// Possible values are: outbound-full-relay, block-relay-only, manual, feeler, and addr-fetch.
+    #[serde(rename = "connection_type")]
     pub kind: String,
     /// The state of this peer
     ///
@@ -77,6 +80,7 @@ pub struct PeerInfo {
     /// Special permissions granted to this peer.
     pub permissions: Vec<String>,
     /// The transport protocol used with peer.
+    #[serde(rename = "transport_protocol_type")]
     pub transport_protocol: String,
 }
 

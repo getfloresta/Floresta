@@ -62,7 +62,9 @@ class AddNodeTest:
         assert len(peer_info) == expected_peer_count
 
         if is_connected:
-            assert peer_info[0]["transport_protocol"] == ("V2" if self.is_v2 else "V1")
+            assert peer_info[0]["transport_protocol_type"] == (
+                "v2" if self.is_v2 else "v1"
+            )
 
         if self.bitcoind.daemon.is_running:
             bitcoin_peers = self.bitcoind.rpc.get_peerinfo()

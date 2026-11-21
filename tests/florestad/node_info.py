@@ -28,8 +28,8 @@ def test_node_info(florestad_bitcoind):
 
     peers_seen_by_floresta = florestad.rpc.get_peerinfo()
     bitcoind_peer = peers_seen_by_floresta[0]
-    assert bitcoind_peer["address"] == bitcoind.p2p_url
-    assert bitcoind_peer["kind"] == "manual"
+    assert bitcoind_peer["addr"] == bitcoind.p2p_url
+    assert bitcoind_peer["connection_type"] == "manual"
     assert_bitcoind_service_fields(bitcoind_peer)
-    assert bitcoind_peer["transport_protocol"] == "V2"
-    assert re.match(r"\/Satoshi:\d*\.\d*\.\d*\/", bitcoind_peer["user_agent"])
+    assert bitcoind_peer["transport_protocol_type"] == "v2"
+    assert re.match(r"\/Satoshi:\d*\.\d*\.\d*\/", bitcoind_peer["subver"])
