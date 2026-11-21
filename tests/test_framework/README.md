@@ -26,4 +26,4 @@ To write a new test, create a new file in the `tests` directory. The file name s
 
 You can use the `self.nodes` list to access the nodes. The first node in the list is the controller node, and the other nodes are the peers. You can use the `self.nodes[0].rpc` attribute to access the RPC interface of the controller node. You can use the `self.nodes[0].utreexo` attribute to access the utreexo interface of the controller node. You can use the `self.nodes[0].electrum` attribute to access the Electrum interface of the controller node.
 
-You can use the `self.log` method to log messages. The log messages will be prefixed with the test name. You can use the `self.stop_node` method to stop a node. You can use the `self.start_node` method to start a node.
+You can use the `self.log` method to log messages. The log messages will be prefixed with the test name.

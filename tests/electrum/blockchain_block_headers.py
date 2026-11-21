@@ -22,7 +22,7 @@ def test_block_headers(setup_logging, node_manager, florestad_utreexod):
     log = setup_logging
     florestad, _ = florestad_utreexod
 
-    node_manager.generate_blocks_and_sync(MINE_BLOCKS, is_finished_ibd=False)
+    node_manager.generate_blocks_and_sync(MINE_BLOCKS, is_ibd_finished=False)
 
     log.info("Testing out-of-range request...")
     response = florestad.electrum.block_headers(MINE_BLOCKS + 2, 10)
