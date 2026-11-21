@@ -234,7 +234,7 @@ pub struct Cli {
     ///
     /// The Electrum server is what feeds newly validated blocks into the watch-only wallet, so
     /// while this flag is set the wallet will not update for new blocks. You can still catch the
-    /// wallet up afterwards with the `rescan` RPC.
+    /// wallet up afterwards with the `rescanblockchain` RPC.
     pub disable_electrum: bool,
 
     #[cfg(feature = "zmq-server")]
