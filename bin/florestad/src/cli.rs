@@ -47,6 +47,13 @@ pub struct Cli {
     /// Core's `--nodebuglogfile` spelling also works.
     pub no_log_file: bool,
 
+    #[arg(long, alias = "noshrinkdebugfile")]
+    /// Don't trim the log file on startup
+    ///
+    /// By default, a log file over 11MB is cut down to its last 10MB on startup.
+    /// Only `--debug` skips this; raising the level with `RUST_LOG` doesn't.
+    pub no_shrink_log_file: bool,
+
     #[arg(long, value_name = "PATH")]
     /// Where should we store data. This is the directory where we'll store the chainstate,
     /// the wallet, the logs, the compact block filters, the Utreexo state, etc.

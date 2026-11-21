@@ -19,6 +19,9 @@
 use core::fmt;
 use std::fs;
 use std::io;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -39,6 +42,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// The file which logging events are written to.
 pub(crate) const LOG_FILE: &str = "debug.log";
+
+/// How many bytes from the end of the log file [`shrink_log_file`] keeps, matching Core.
+pub(crate) const RECENT_LOG_HISTORY_SIZE: u64 = 10_000_000;
 
 /// The string used to format the timestamp, via [`ChronoLocal`].
 ///
@@ -247,6 +253,55 @@ pub(crate) fn resolve_log_file(
     }
 }
 
+/// Trims the file at `path` down to its last `keep` bytes, once it has grown
+/// more than 10% past that, like Core's `-shrinkdebugfile`.
+///
+/// Unlike Core, the cut moves forward to the next line break, so the file
+/// doesn't start with half a line. Missing files and special files such as
+/// `/dev/null` are left alone.
+pub(crate) fn shrink_log_file(path: &Path, keep: u64) -> io::Result<()> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    let len = metadata.len();
+    // Core's threshold rounds down, so it is floored at `keep` to stay valid for
+    // values that aren't a multiple of 10.
+    if !metadata.is_file() || len <= (keep / 10 * 11).max(keep) {
+        return Ok(());
+    }
+
+    rewrite_with_tail(path, len, keep)
+}
+
+/// Rewrites the file at `path`, which was `len` bytes long when its size was
+/// checked, with its last `keep` bytes, starting on a whole line.
+fn rewrite_with_tail(path: &Path, len: u64, keep: u64) -> io::Result<()> {
+    // Read one byte before the tail too, so a cut that already sits on a line
+    // boundary keeps its first line.
+    let mut file = fs::File::open(path)?;
+    file.seek(SeekFrom::Start(len - keep - 1))?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail)?;
+
+    // The file shrank since its size was checked, so something else is
+    // changing it. Leave it alone.
+    if tail.len() as u64 <= keep {
+        return Ok(());
+    }
+
+    // Start after the first line break. If there is none, or nothing follows
+    // it, the last line is longer than `keep`, so keep its end rather than
+    // emptying the file.
+    let start = match tail.iter().position(|&b| b == b'\n') {
+        Some(i) if i + 1 < tail.len() => i + 1,
+        _ => 1,
+    };
+    fs::write(path, &tail[start..])
+}
+
 /// Initialises the global [`tracing`] subscriber for the application.
 ///
 /// Depending on the flags provided, the subscriber can write to stdout, a log
@@ -258,6 +313,8 @@ pub(crate) fn resolve_log_file(
 /// * `log_file` – Full path of the file log output is appended to, as resolved
 ///   by [`resolve_log_file`]. `None` disables file logging. The parent
 ///   directory must already exist.
+/// * `shrink` – Trim `log_file` with [`shrink_log_file`] before appending to
+///   it. A failed trim doesn't stop the node; it is logged as a warning.
 /// * `log_to_stdout` – Emit log output to stdout.
 /// * `debug` – Set the default log level to `debug`. When `false` the
 ///   level defaults to `info`. In both cases `RUST_LOG` overrides the default.
@@ -280,6 +337,7 @@ pub(crate) fn resolve_log_file(
 /// installed (e.g. if this function is called more than once).
 pub fn start_logger(
     log_file: Option<impl AsRef<Path>>,
+    shrink: bool,
     log_to_stdout: bool,
     log_level: Level,
 ) -> Result<Option<WorkerGuard>, io::Error> {
@@ -300,9 +358,18 @@ pub fn start_logger(
 
     // Formatter for events destined to the log file.
     let mut guard = None;
+    let mut shrink_error = None;
     let fmt_layer_logfile = match log_file.as_ref().map(AsRef::as_ref) {
         None => None,
         Some(path) => {
+            // Trimmed before the file is opened for appending. The subscriber isn't
+            // up yet, so any error is held and logged once it is.
+            if shrink {
+                shrink_error = shrink_log_file(path, RECENT_LOG_HISTORY_SIZE)
+                    .err()
+                    .map(|e| format!("Could not shrink log file {}: {e}", path.display()));
+            }
+
             // Opened before installing the subscriber, so an unusable path fails here.
             let file = fs::OpenOptions::new()
                 .create(true)
@@ -332,6 +399,10 @@ pub fn start_logger(
 
     registry.init();
 
+    if let Some(error) = shrink_error {
+        tracing::warn!("{error}");
+    }
+
     Ok(guard)
 }
 
@@ -342,6 +413,126 @@ mod tests {
 
     use super::LOG_FILE;
     use super::resolve_log_file;
+    use super::rewrite_with_tail;
+    use super::shrink_log_file;
+
+    /// Writes `count` lines of 10 bytes each (`line 0000\n`, ...) to a fresh
+    /// file named `name` in the temp dir, and returns its path and contents.
+    fn write_lines(name: &str, count: usize) -> (PathBuf, String) {
+        let path = std::env::temp_dir().join(format!("florestad-{}-{name}", std::process::id()));
+        let contents: String = (0..count).map(|i| format!("line {i:04}\n")).collect();
+        std::fs::write(&path, &contents).unwrap();
+        (path, contents)
+    }
+
+    /// A file past the threshold keeps only its last whole lines.
+    #[test]
+    fn shrink_log_file_keeps_the_last_whole_lines() {
+        let (path, contents) = write_lines("shrink-mid-line.log", 20);
+
+        // 95 bytes lands mid-line, so the partial line at the cut is dropped.
+        shrink_log_file(&path, 95).unwrap();
+        let shrunk = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(shrunk, contents[110..]);
+    }
+
+    /// A cut that already sits on a line boundary keeps that line.
+    #[test]
+    fn shrink_log_file_keeps_a_line_starting_at_the_cut() {
+        let (path, contents) = write_lines("shrink-boundary.log", 20);
+
+        shrink_log_file(&path, 100).unwrap();
+        let shrunk = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(shrunk, contents[100..]);
+    }
+
+    /// Up to 10% past `keep`, the file is left as it is.
+    #[test]
+    fn shrink_log_file_leaves_small_files_alone() {
+        let (path, contents) = write_lines("shrink-small.log", 11);
+
+        shrink_log_file(&path, 100).unwrap();
+        let unchanged = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(unchanged, contents);
+    }
+
+    /// A file no bigger than `keep` is left alone even when rounding puts 10%
+    /// past `keep` below `keep` itself.
+    #[test]
+    fn shrink_log_file_leaves_files_under_keep_alone() {
+        let path = std::env::temp_dir().join(format!(
+            "florestad-{}-shrink-rounding.log",
+            std::process::id()
+        ));
+        std::fs::write(&path, "twelve bytes").unwrap();
+
+        // `19 / 10 * 11` is 11, below the 12-byte file.
+        shrink_log_file(&path, 19).unwrap();
+        let unchanged = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(unchanged, "twelve bytes");
+    }
+
+    /// A log file that doesn't exist yet isn't an error, and isn't created.
+    #[test]
+    fn shrink_log_file_ignores_a_missing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "florestad-{}-shrink-missing.log",
+            std::process::id()
+        ));
+
+        shrink_log_file(&path, 100).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    /// A file truncated after its size was checked is left alone, whether the
+    /// read comes back empty or short.
+    #[test]
+    fn shrink_log_file_leaves_a_file_that_shrank_alone() {
+        let (path, contents) = write_lines("shrink-truncated.log", 15);
+
+        // Checked at 300 bytes, now 150: the seek lands past the end.
+        rewrite_with_tail(&path, 300, 100).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+
+        // Checked at 230 bytes, now 150: only the last 21 bytes are read.
+        rewrite_with_tail(&path, 230, 100).unwrap();
+        let unchanged = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(unchanged, contents);
+    }
+
+    /// A last line longer than `keep` keeps its end, whether or not it ends in
+    /// a line break, instead of leaving the file empty.
+    #[test]
+    fn shrink_log_file_keeps_the_end_of_a_long_last_line() {
+        for (name, contents) in [
+            (
+                "shrink-long-line-newline.log",
+                format!("{}\n", "a".repeat(199)),
+            ),
+            ("shrink-long-line.log", "a".repeat(200)),
+        ] {
+            let path =
+                std::env::temp_dir().join(format!("florestad-{}-{name}", std::process::id()));
+            std::fs::write(&path, &contents).unwrap();
+
+            shrink_log_file(&path, 100).unwrap();
+            let shrunk = std::fs::read_to_string(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
+
+            assert_eq!(shrunk, contents[100..], "{name}");
+        }
+    }
 
     /// With no flags, we log to [`LOG_FILE`] inside the datadir.
     #[test]
