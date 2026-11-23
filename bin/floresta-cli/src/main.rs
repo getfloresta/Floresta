@@ -351,7 +351,7 @@ pub enum Methods {
     #[doc = include_str!("../../../doc/rpc/getblockcount.md")]
     #[command(
         name = "getblockcount",
-        about = "Returns the height of the most-work chain.",
+        about = "Returns the height of the most-work fully-validated chain.",
         long_about = Some(include_str!("../../../doc/rpc/getblockcount.md")),
         disable_help_subcommand = true
     )]
