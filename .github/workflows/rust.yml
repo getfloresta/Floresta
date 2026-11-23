@@ -139,6 +139,8 @@ jobs:
         include:
           - crate: floresta-common
             feature_args: ""
+          - crate: floresta-chain
+            feature_args: ""
 
     steps:
       - name: Checkout Repository
