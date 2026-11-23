@@ -112,38 +112,65 @@ pub struct AssumeUtreexoValue {
     pub leaves: u64,
 }
 
+// Keep each checkpoint height and hash together.
+#[derive(Clone, Copy)]
+struct Checkpoint {
+    height: u32,
+    hash: &'static str,
+}
+
+const MAINNET_ASSUME_VALID: Checkpoint = Checkpoint {
+    height: 976_679,
+    hash: "000000000000000000000d9c98eed0d249631c1326408b194321690611bf52b9",
+};
+
+const MAINNET_ASSUME_UTREEXO: Checkpoint = MAINNET_ASSUME_VALID;
+
+// Compile time check.
+// `bhash!` cannot check hashes stored in named constants, so checking their
+// format at build time before converting them to block hashes, catches
+// typos, but does not verify that a hash belongs to the given height.
+const _: () = {
+    match floresta_common::macros::validate_hash_compile_time(MAINNET_ASSUME_VALID.hash) {
+        Ok(()) => (),
+        Err(_) => panic!("invalid mainnet assume-valid hash"),
+    }
+    match floresta_common::macros::validate_hash_compile_time(MAINNET_ASSUME_UTREEXO.hash) {
+        Ok(()) => (),
+        Err(_) => panic!("invalid mainnet assume-utreexo hash"),
+    }
+};
+
 impl ChainParams {
     /// This method is called when Assume Utreexo is set to true. It means that the user will accept the hardcoded utreexo state for the specified block, if it is found in the best chain. We can then sync rapidly from this state.
     pub fn get_assume_utreexo(network: Network) -> AssumeUtreexoValue {
         let genesis = genesis_block(Params::new(network));
         match network {
             Network::Bitcoin => AssumeUtreexoValue {
-                height: 939969,
-                block_hash: bhash!(
-                    "000000000000000000009d36aae180d04aeac872adb14e22f65c8b6647a8bf79"
-                ),
+                height: MAINNET_ASSUME_UTREEXO.height,
+                block_hash: MAINNET_ASSUME_UTREEXO
+                    .hash
+                    .parse()
+                    .expect("valid checkpoint hash"),
                 roots: acchashes![
-                    "08daaf0c6bc41531885cfcfdeb89c34bd4d06ab4b105cf0e81bd74ab082693f5",
-                    "8d4166d0303d41f7023cd35b95b24455b99b2f4a2728083bba3d172727900bed",
-                    "08d95bc9b7bc0bc07c9f626322c0092bd16c198fcb96d290fe1a191e9719b4c9",
-                    "e663da82fd6523124b4ae5b52d1790460cfdd16ae7733fb5ef7d9d0e8911f516",
-                    "87a9dd5e49e99b29c394622207a27f0c2ba51a8325eedccc8f604b07b3dafe23",
-                    "174bed42eb80a6e5adec1e97f7fc8e736e96d99d0f4d6cdcfed0343281934aa3",
-                    "16a4b567f72e39d928b8fc84afc50e035bba5639c5bdaa01b53ddb806190f96a",
-                    "d1a2df40385aa7c5ac3b9fc9f1ebd4fa9c2d007842fa70e3f60a434762ae8855",
-                    "cf985706bc58a2fb89edc2f28b7c4bf04af440c0534da01b27a2a7eea5f98391",
-                    "6d3c3406b7b99e476a754f3d04a1bec2442b2699c8b7d317ee0aca877b59a74f",
-                    "f166e22db463c0c1ec2c374d6ddff56699ae27d52443622154a4f6f29b2d6bac",
-                    "11270cc9d63da0cf47b2a75e8948576fecc9f6405981f7306c2b58b0fcb37ef6",
-                    "fc9bcdcf61bf2ee5480326d24a460ef520f4b02d1cec8a309784795ddcc4bcd9",
-                    "c97717ab33820c8efe9d464ff48a1d593e06e4c99135686ae96cc7328a290a79",
-                    "5b3c899b033b43989ed57db0854e2deb084de27fcf8596e9c60738ccd08d16c1",
-                    "745b78a30e984590b7ceb3a433adb363862cf84b747cb55e500eb25164b5f71f",
-                    "d338cb3e81a902b4e0301f69ac9443f7a9bb423446bbac41306c7e839bae4866",
-                    "d3078b9c3bb20af622559fc2837d339210cd4e1e13ebdb66d19ca70e83e91a00",
+                    "7d9bdee21d75a5c2b4eb9e3a9300b37d14b1c89b0e1c5af9fd41417fc4ce4abc",
+                    "de2d96c559d1bb933f0d194cfb36180f2e20204766b40e8d9509e673f3f41f8a",
+                    "f425aaddf40db26b4884892f2b1371d37733aa9c68bdec21190f58a73e1f3d98",
+                    "e2793a974c9b39aa2c27a014d67dfcc16dd72e3e083e20d9d04d7cf9f7d266ec",
+                    "acbc10a5a8506d0ff217b664661d19cd177e1352de6f7f0b4376bee7849e0f12",
+                    "8cb1a6153fa5c359b837e84401600923b46cce1b03da792764566498d6e56239",
+                    "b480e08f8333e39c715183339a215bcec3eb6f6d3106eeb6d031370f699eb058",
+                    "f14d29c159669f93e62eba0d1a317a0bd13e0192f0cc915254b537535c0598b6",
+                    "4ef58ba52ce2db8be116bbc6148a181af018642f954c61c555ac8ccae888dd6a",
+                    "7cf06c7367e9b25edc7981b8afc07d14fc4449995ee441f3f0ea13228907dcbe",
+                    "a01c424e89fef3f455cf4caec71dc0959d66f9687c2a6316f6b8a1fab97fa67a",
+                    "a964e30a5b3504661a1bd1047ba6242a6e4dea8a5a1f931b641934f0f15d4cd7",
+                    "438ad4152fcab5de786e75cca4928654239ccfad550a9557b56a6ca61f4c1a78",
+                    "c65700fab927ff98fcd21c9541e46a23d1ffee4b8e7b5f987fa6c7191dda833b",
+                    "fd6db3280d75bb5a796e730b9d1aaa5ba0595a6167ce75f9320149873b6e8c8a",
                 ]
                 .to_vec(),
-                leaves: 3066490760,
+                leaves: 3_243_591_085,
             },
             Network::Signet => AssumeUtreexoValue {
                 height: 296870,
@@ -198,7 +225,7 @@ impl ChainParams {
     /// - [`AssumeValidArg::Disabled`] — no checkpoint; all scripts are validated.
     /// - [`AssumeValidArg::UserInput`] — use the provided hash.
     /// - [`AssumeValidArg::Hardcoded`] — use a release-time checkpoint per [`Network`]:
-    ///   - **Bitcoin**: block [971,420](https://mempool.space/block/971420)
+    ///   - **Bitcoin**: block [976,679](https://mempool.space/block/976679)
     ///   - **Signet**: block [326,326](https://mempool.space/signet/block/326326)
     ///   - **Testnet**: block [4,887,983](https://mempool.space/testnet/block/4887983)
     ///   - **Testnet4**: block [126,514](https://mempool.space/testnet4/block/126514)
@@ -208,9 +235,12 @@ impl ChainParams {
             AssumeValidArg::Disabled => None,
             AssumeValidArg::UserInput(hash) => Some(hash),
             AssumeValidArg::Hardcoded => match network {
-                Network::Bitcoin => Some(bhash!(
-                    "000000000000000000019d4afaefa42fc5b4211a7edcce7681a1478df661ead6" // 971_420
-                )),
+                Network::Bitcoin => Some(
+                    MAINNET_ASSUME_VALID
+                        .hash
+                        .parse()
+                        .expect("valid checkpoint hash"),
+                ),
                 Network::Signet => Some(bhash!(
                     "00000008f507c8db68879442b1eea8c312fd66b445d4dd9b1b12c4bc8188ef64" // 326_326
                 )),
