@@ -43,6 +43,7 @@ Usage examples are available under the [`examples`](./examples) directory.
 | [`floresta-chain`]      | `chain-bitcoinkernel`        | `floresta-chain/bitcoinkernel`        |
 | [`floresta-chain`]      | `chain-flat-chainstore`      | `floresta-chain/flat-chainstore`      |
 | [`floresta-chain`]      | `chain-metrics`              | `floresta-chain/metrics`              |
+| [`floresta-chain`]      | `chain-std`                  | `floresta-chain/std`                  |
 | [`floresta-common`]     | `common-std`                 | `floresta-common/std`                 |
 | [`floresta-node`]       | `node-compact-filters`       | `floresta-node/compact-filters`       |
 | [`floresta-node`]       | `node-json-rpc`              | `floresta-node/json-rpc`              |

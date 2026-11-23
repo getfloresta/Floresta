@@ -60,6 +60,7 @@ default = []
 full = [
     "chain-bitcoinkernel",
     "chain-flat-chainstore",
+    "chain-std",
     "common-std",
     "compact-filters",
     "domain",
@@ -77,6 +78,7 @@ chain = ["dep:floresta-chain"]
 chain-bitcoinkernel = ["chain", "floresta-chain/bitcoinkernel"]
 chain-flat-chainstore = ["chain", "floresta-chain/flat-chainstore"]
 chain-metrics = ["chain", "floresta-chain/metrics"]
+chain-std = ["chain", "floresta-chain/std"]
 
 # floresta-common
 common = ["dep:floresta-common"]

@@ -23,6 +23,9 @@
 //!   - Sending is fine: There's nothing in this module that makes it not sendable to between
 //!     threads, as long as the origin thread gives away the ownership.
 
+extern crate alloc;
+
+use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 
 use bitcoin::Block;
@@ -512,7 +515,7 @@ impl BlockchainInterface for PartialChainState {
         unimplemented!("partialChainState::get_tx")
     }
 
-    fn subscribe(&self, _tx: sync::Arc<dyn crate::BlockConsumer>) {
+    fn subscribe(&self, _tx: Arc<dyn crate::BlockConsumer>) {
         unimplemented!("partialChainState::subscribe")
     }
 
