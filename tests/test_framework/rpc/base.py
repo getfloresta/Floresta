@@ -9,7 +9,6 @@ Define a base class for making RPC calls to a
 
 import json
 import re
-import socket
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
@@ -20,6 +19,7 @@ from requests.exceptions import HTTPError
 from requests.models import HTTPBasicAuth
 from test_framework.rpc import ConfigRPC
 from test_framework.rpc.exceptions import JSONRPCError
+from test_framework.util import is_port_open
 
 
 # pylint: disable=too-many-public-methods
@@ -211,10 +211,7 @@ class BaseRPC(ABC):
 
     def is_socket_listening(self) -> bool:
         """Check if the socket is listening for connections on the specified port."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.5)
-            connected = sock.connect_ex((self._config.host, self._config.port))
-            return connected == 0
+        return is_port_open(self._config.host, self._config.port)
 
     def is_responsive(self) -> bool:
         """

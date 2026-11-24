@@ -183,7 +183,13 @@ def florestad_has_feature(flag: str) -> bool:
     except (OSError, subprocess.SubprocessError, RuntimeError):
         return False
 
-    return flag in (result.stdout + result.stderr)
+    return (
+        re.search(
+            r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])",
+            result.stdout + result.stderr,
+        )
+        is not None
+    )
 
 
 def wait_until_helper_internal(
@@ -229,6 +235,27 @@ def wait_until(predicate, timeout=30, interval=0.5, error_msg="Condition not met
         time.sleep(interval)
 
     raise TimeoutError(f"{error_msg} after {timeout} seconds")
+
+
+def wait_for_log(log_path, text, timeout=30):
+    """Wait until the daemon log file at `log_path` contains `text`.
+
+    The daemon writes its log output to `log_path`, so waiting for a specific
+    line gives tests a deterministic signal instead of relying on start order.
+    """
+
+    def log_contains_text() -> bool:
+        try:
+            with open(log_path, "r", encoding="utf-8") as log_file:
+                return text in log_file.read()
+        except FileNotFoundError:
+            return False
+
+    return wait_until(
+        log_contains_text,
+        timeout=timeout,
+        error_msg=f"log at {log_path} did not contain {text!r}",
+    )
 
 
 def assert_service_fields_consistent(peer_info):
