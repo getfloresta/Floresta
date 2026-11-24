@@ -582,6 +582,8 @@ where
                     }
                     invalid_accs.insert(peer[1].1.clone());
                 }
+                // A peer that timed out didn't prove its accumulator wrong, so we don't mark
+                // it as invalid
                 PeerCheck::UnresponsivePeer(dead_peer) => {
                     self.disconnect_and_ban(dead_peer)?;
                 }
@@ -598,12 +600,33 @@ where
                 }
             }
         }
-        //filter out the invalid accs
-        candidate_accs.retain(|acc| !invalid_accs.contains(&acc.1));
-        //we should have only one candidate left
-        assert_eq!(candidate_accs.len(), 1);
 
-        Self::parse_acc(&candidate_accs.pop().unwrap().1)
+        // If we can't settle on a single accumulator, bail instead of picking one: this may mean
+        // we're close to being eclipsed
+        let Some(acc) = Self::remaining_acc(&candidate_accs, &invalid_accs) else {
+            warn!("Couldn't settle on a single accumulator for block {hash} at height {height}");
+            return Err(WireError::PeerTimeout);
+        };
+
+        Self::parse_acc(acc)
+    }
+
+    /// Returns the only accumulator left once the ones proven invalid are dropped.
+    ///
+    /// Several peers may report the same accumulator, so this counts distinct accumulators, not
+    /// peers. Returns `None` if none is left, or if more than one is, e.g. because a peer timed
+    /// out before we could check its accumulator.
+    fn remaining_acc<'a>(
+        candidate_accs: &'a [(PeerId, Vec<u8>)],
+        invalid_accs: &HashSet<Vec<u8>>,
+    ) -> Option<&'a [u8]> {
+        let mut remaining = candidate_accs
+            .iter()
+            .map(|(_, acc)| acc.as_slice())
+            .filter(|acc| !invalid_accs.contains(*acc));
+
+        let first = remaining.next()?;
+        remaining.all(|acc| acc == first).then_some(first)
     }
 
     /// If we get an empty `headers` message, our next action depends on which state are
@@ -1177,6 +1200,40 @@ mod tests {
                 ],
             },
         );
+    }
+
+    #[test]
+    fn test_remaining_acc() {
+        let acc_a = serialize_acc(1, 1);
+        let acc_b = serialize_acc(2, 1);
+        let no_invalid = HashSet::new();
+        let b_invalid = HashSet::from([acc_b.clone()]);
+
+        // Peers reporting the same accumulator count as one candidate
+        let agreeing = [(0, acc_a.clone()), (1, acc_a.clone())];
+        assert_eq!(
+            TestNode::remaining_acc(&agreeing, &no_invalid),
+            Some(acc_a.as_slice())
+        );
+
+        // Peer 1 was caught lying, peers 0 and 2 agree. This used to panic, since two
+        // candidates were left
+        let one_liar = [(0, acc_a.clone()), (1, acc_b.clone()), (2, acc_a.clone())];
+        assert_eq!(
+            TestNode::remaining_acc(&one_liar, &b_invalid),
+            Some(acc_a.as_slice())
+        );
+
+        // A peer timed out before we could check its accumulator, so we can't pick either one
+        let unchecked = [(0, acc_a.clone()), (1, acc_b.clone())];
+        assert_eq!(TestNode::remaining_acc(&unchecked, &no_invalid), None);
+
+        // Every accumulator was proven invalid, or nobody answered
+        assert_eq!(
+            TestNode::remaining_acc(&[(1, acc_b.clone())], &b_invalid),
+            None
+        );
+        assert_eq!(TestNode::remaining_acc(&[], &no_invalid), None);
     }
 
     #[tokio::test]
