@@ -537,6 +537,8 @@ impl Florestad {
             } else {
                 error!("Could not create zmq server, skipping");
             };
+        } else {
+            info!("ZMQ server is disabled");
         }
 
         info!("Starting server");
@@ -664,6 +666,8 @@ impl Florestad {
             if self.json_rpc.set(server).is_err() {
                 core::panic!("We should be the first one setting this");
             }
+        } else {
+            info!("JSON-RPC server is disabled");
         }
 
         // Electrum Server configuration.
@@ -775,6 +779,8 @@ impl Florestad {
 
             // Electrum Server's main loop.
             task::spawn(electrum_server.main_loop());
+        } else {
+            info!("Electrum server is disabled");
         }
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
