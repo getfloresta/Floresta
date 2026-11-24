@@ -8,6 +8,22 @@ cargo build --release -p florestad --features metrics
 cargo build --release -p floresta-cli
 ```
 
+The metrics endpoint listens on `0.0.0.0` by default, on a port that depends on the network, so nodes running on different networks don't conflict:
+
+| Network  | Default port |
+|----------|--------------|
+| bitcoin  | 3333         |
+| testnet  | 3334         |
+| testnet4 | 3335         |
+| signet   | 3336         |
+| regtest  | 3337         |
+
+You can change the address and port with `--metrics-address <address>[:<port>]`. If you omit the port, the network's default is used:
+
+```sh
+florestad --network signet --metrics-address 127.0.0.1:9333
+```
+
 The easiest way to visualize those metrics is by using some observability graphic tool like [Grafana](https://grafana.com/). To make it easier, you can also straight away use the `contrib/docker/docker-compose.yml` file to spin up an infrastructure that will run the project with Prometheus and Grafana.
 
 To run it, first make sure you have [Docker Compose](https://docs.docker.com/compose/) installed and then:

@@ -13,6 +13,7 @@ services:
       -n ${NETWORK:-bitcoin}
       --rpc-address 0.0.0.0:${RPC_PORT:-8332}
       --electrum-address 0.0.0.0:${ELECTRUM_PORT:-50001}
+      --metrics-address 0.0.0.0:3333
     ports:
       - ${RPC_PORT:-8332}:${RPC_PORT:-8332}
       - ${ELECTRUM_PORT:-50001}:${ELECTRUM_PORT:-50001}
