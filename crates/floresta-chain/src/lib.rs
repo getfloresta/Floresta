@@ -10,6 +10,8 @@
 //! All data is stored in a `ChainStore` implementation, which is generic over the
 //! underlying database. See the ChainStore trait for more information. For a
 //! ready-to-use implementation, see the [`FlatChainStore`] struct.
+//!
+//! Without its default `std` feature, this crate is `no_std` and only needs `alloc`.
 
 // cargo docs customization
 #![cfg_attr(docsrs, feature(doc_cfg))]
