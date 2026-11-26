@@ -51,7 +51,7 @@ jobs:
 
       - name: Run expensive functional tests tasks
         run: |
-          tests/run.sh -n 1 --run-expensive ./tests/expensive
+          tests/run.sh -n 1 --run-expensive -m expensive
 
       - name: Log tests on failure
         if: failure()
