@@ -116,6 +116,11 @@ pub struct Cli {
     /// The address where our json-rpc server should listen to, in the format `<address>[:<port>]`
     pub rpc_address: Option<String>,
 
+    #[cfg(feature = "metrics")]
+    #[arg(long, value_name = "PORT")]
+    /// The port where the Prometheus metrics server should listen (defaults to a network-specific port)
+    pub metrics_port: Option<u16>,
+
     #[arg(long, value_name = "HEIGHT")]
     /// Download block filters starting at this height. Negative numbers are relative to the current tip.
     pub filters_start_height: Option<i32>,
@@ -244,5 +249,19 @@ fn parse_assume_valid(s: &str) -> Result<AssumeValidArg, String> {
             .parse::<BlockHash>()
             .map(AssumeValidArg::UserInput)
             .map_err(|e| format!("expected 0 or a block hash, got '{other}': {e}")),
+    }
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod tests {
+    use clap::Parser;
+
+    use super::Cli;
+
+    #[test]
+    fn metrics_port_can_be_overridden_from_cli() {
+        let cli = Cli::try_parse_from(["florestad", "--metrics-port", "9400"]).unwrap();
+
+        assert_eq!(cli.metrics_port, Some(9400));
     }
 }

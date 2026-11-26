@@ -10,6 +10,22 @@ cargo build --release -p floresta-cli
 
 The easiest way to visualize those metrics is by using some observability graphic tool like [Grafana](https://grafana.com/). To make it easier, you can also straight away use the `contrib/docker/docker-compose.yml` file to spin up an infrastructure that will run the project with Prometheus and Grafana.
 
+The metrics server listens on all interfaces using a network-specific default port:
+
+| Network | Default port |
+| --- | ---: |
+| Bitcoin | 3333 |
+| Testnet | 3334 |
+| Testnet4 | 3335 |
+| Signet | 3336 |
+| Regtest | 3337 |
+
+Use `--metrics-port` to override the default. For example, to listen on port `9400`:
+
+```sh
+florestad --metrics-port 9400
+```
+
 To run it, first make sure you have [Docker Compose](https://docs.docker.com/compose/) installed and then:
 
 ```sh

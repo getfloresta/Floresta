@@ -170,6 +170,10 @@ pub struct Config {
     /// The address our json-rpc should listen to
     pub json_rpc_address: Option<String>,
 
+    #[cfg(feature = "metrics")]
+    /// The port the Prometheus metrics server should listen to.
+    pub metrics_port: Option<u16>,
+
     /// Whether we should write logs to `stdout`.
     pub log_to_stdout: bool,
 
@@ -259,6 +263,8 @@ impl Config {
             connect: Vec::new(),
             #[cfg(feature = "json-rpc")]
             json_rpc_address: None,
+            #[cfg(feature = "metrics")]
+            metrics_port: None,
             log_to_stdout: false,
             log_file: None,
             assume_utreexo: false,
@@ -716,8 +722,12 @@ impl Florestad {
         // Metrics
         #[cfg(feature = "metrics")]
         {
+            let metrics_port = self
+                .config
+                .metrics_port
+                .unwrap_or_else(|| Self::get_default_metrics_port(self.config.network));
             let metrics_server_address =
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 3333);
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), metrics_port);
 
             task::spawn(floresta_metrics::metrics_server(metrics_server_address));
             info!("Started metrics server on: {metrics_server_address}",);
@@ -934,6 +944,18 @@ impl Florestad {
         electrum_port
     }
 
+    /// Get the default Prometheus metrics port for the given network.
+    #[cfg(feature = "metrics")]
+    fn get_default_metrics_port(network: Network) -> u16 {
+        match network {
+            Network::Bitcoin => 3333,
+            Network::Testnet => 3334,
+            Network::Testnet4 => 3335,
+            Network::Signet => 3336,
+            Network::Regtest => 3337,
+        }
+    }
+
     /// Generate a self-signed TLS certificate from a random private key.
     pub fn generate_self_signed_certificate(
         tls_key_path: impl AsRef<Path>,
@@ -1009,6 +1031,26 @@ impl From<Config> for Florestad {
             stop_notify: Arc::new(Mutex::new(None)),
             #[cfg(feature = "json-rpc")]
             json_rpc: OnceLock::new(),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod metrics_tests {
+    use super::*;
+
+    #[test]
+    fn default_metrics_ports_are_distinct_per_network() {
+        let network_ports = [
+            (Network::Bitcoin, 3333),
+            (Network::Testnet, 3334),
+            (Network::Testnet4, 3335),
+            (Network::Signet, 3336),
+            (Network::Regtest, 3337),
+        ];
+
+        for (network, expected_port) in network_ports {
+            assert_eq!(Florestad::get_default_metrics_port(network), expected_port);
         }
     }
 }

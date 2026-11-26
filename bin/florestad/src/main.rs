@@ -73,6 +73,8 @@ fn main() {
         connect: params.connect,
         wallet_xpub: params.wallet_xpub,
         config_file: params.config_file,
+        #[cfg(feature = "metrics")]
+        metrics_port: params.metrics_port,
         #[cfg(unix)]
         log_to_stdout: !params.daemon,
         #[cfg(not(unix))]
