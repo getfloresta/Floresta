@@ -362,23 +362,13 @@ class Node:
         """
         Check if the given peer is connected to this node via RPC.
         """
-        keys = {
-            NodeType.FLORESTAD: ("user_agent", "address"),
-            NodeType.BITCOIND: ("subver", "addr"),
-            NodeType.UTREEXOD: ("subver", "addr"),
-        }
-
-        if self.variant not in keys:
-            raise ValueError(f"Unknown peer variant: {self.variant}")
-
-        user_agent_key, address_key = keys[self.variant]
         peers_info = self.rpc.get_peerinfo()
         user_agent, address = peer.get_connection_info()
 
         return any(
-            user_agent in peer_info.get(user_agent_key)
+            user_agent in peer_info.get("subver")
             and (
-                address == peer_info.get(address_key)
+                address == peer_info.get("addr")
                 # The p2p port is not configurable in floresta
                 or address is None
                 # Utreexo nodes use `addrlocal` instead of `addr` to show connection information.

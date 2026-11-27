@@ -14,6 +14,7 @@ use floresta_rpc::rpc_types::GetAddrManInfo;
 use floresta_rpc::rpc_types::GetNetworkInfo;
 use floresta_rpc::rpc_types::GetNetworkInfoNetwork;
 use floresta_rpc::rpc_types::PeerInfo;
+use floresta_wire::TransportProtocol;
 use floresta_wire::address_man::NetworkStats;
 use floresta_wire::address_man::ReachableNetworks;
 use floresta_wire::bitcoin_socket_addr::BitcoinSocketAddr;
@@ -150,7 +151,11 @@ impl<Blockchain: RpcChain> NetworkRpc for RpcImpl<Blockchain> {
                 initial_height: info.initial_height,
                 kind: info.kind.as_str().to_string(),
                 state: format!("{:?}", info.state),
-                transport_protocol: format!("{:?}", info.transport_protocol),
+                transport_protocol: match info.transport_protocol {
+                    TransportProtocol::V1 => "v1",
+                    TransportProtocol::V2 => "v2",
+                }
+                .to_string(),
                 bip152_hb_from: info.bip152_hb_from,
                 bip152_hb_to: info.bip152_hb_to,
                 services_names: info.services_names,
