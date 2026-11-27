@@ -69,8 +69,14 @@ pub enum BlockchainError {
     /// The [`ChainState`](crate::ChainState)'s validation index is invalid.
     BadValidationIndex,
 
-    /// A [`ChainState`](crate::ChainState) operation overflowed.
+    /// A chainwork calculation overflowed the 256-bit `Work` type.
     OperationOverflow(ChainWorkOverflow),
+
+    /// A trait method was called on a type that doesn't implement it
+    ///
+    /// Some backends only implement part of a chain trait, e.g. a pruned
+    /// [`ChainState`](crate::ChainState) holds no full blocks or transactions.
+    Unsupported,
 }
 
 impl_error_from!(BlockchainError, ChainWorkOverflow, OperationOverflow);
@@ -98,6 +104,7 @@ impl Display for BlockchainError {
             Self::InvalidTip(e) => write!(f, "The ChainState's tip is invalid: {e}"),
             Self::BadValidationIndex => write!(f, "The ChainState's validation index is invalid"),
             Self::OperationOverflow(_) => write!(f, "A ChainState operation overflowed"),
+            Self::Unsupported => write!(f, "This operation is not supported by this backend"),
         }
     }
 }
