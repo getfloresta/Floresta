@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -65,12 +66,12 @@ where
     ///
     /// Each candidate weight is computed as `lowest_time / time_i`. For instance, if we have two
     /// candidates with latencies of 50ms and 100ms, weights are 1.0 and 0.5 respectively, and the
-    /// probability of being chosen is 2/3 and 1/3. If `exclude` is `Some`, that peer is never
-    /// considered a candidate.
+    /// probability of being chosen is 2/3 and 1/3. Peers in `excluded` are never considered
+    /// candidates.
     fn choose_peer_by_latency(
         &self,
         service: ServiceFlags,
-        exclude: Option<PeerId>,
+        excluded: &HashSet<PeerId>,
     ) -> Option<(&PeerId, &LocalPeerView)> {
         // Epsilon is a small positive floor for `f64`. If by any chance a peer has extremely low
         // message latency, we clamp it to `EPS` so `lowest_time / time_i` stays finite and stable.
@@ -80,7 +81,7 @@ where
             .peers
             .iter()
             .filter(|(id, peer)| {
-                Some(**id) != exclude
+                !excluded.contains(id)
                     && peer.services.has(service)
                     && peer.state == PeerStatus::Ready
             })
@@ -137,29 +138,29 @@ where
         request: NodeRequest,
         required_service: ServiceFlags,
     ) -> Result<PeerId, WireError> {
-        self.send_to_fast_peer_inner(request, required_service, None)
+        self.send_to_fast_peer_inner(request, required_service, &HashSet::new())
     }
 
-    /// Same as [`Self::send_to_fast_peer`], but never picks the `excluded` peer.
+    /// Same as [`Self::send_to_fast_peer`], but never picks a peer in `excluded`.
     ///
     /// Returns [`WireError::NoPeersAvailable`] if no other eligible peer exists.
     pub(crate) fn send_to_fast_peer_excluding(
         &self,
         request: NodeRequest,
         required_service: ServiceFlags,
-        excluded: PeerId,
+        excluded: &HashSet<PeerId>,
     ) -> Result<PeerId, WireError> {
-        self.send_to_fast_peer_inner(request, required_service, Some(excluded))
+        self.send_to_fast_peer_inner(request, required_service, excluded)
     }
 
     fn send_to_fast_peer_inner(
         &self,
         request: NodeRequest,
         required_service: ServiceFlags,
-        exclude: Option<PeerId>,
+        excluded: &HashSet<PeerId>,
     ) -> Result<PeerId, WireError> {
         let (peer_id, peer) = self
-            .choose_peer_by_latency(required_service, exclude)
+            .choose_peer_by_latency(required_service, excluded)
             .ok_or(WireError::NoPeersAvailable)?;
 
         peer.channel.send(request)?;
@@ -719,6 +720,11 @@ where
 
         self.send_to_peer(peer, NodeRequest::Shutdown)?;
         Ok(())
+    }
+
+    /// Closes the connection to `peer` without marking it as banned.
+    pub(crate) fn disconnect(&mut self, peer: PeerId) -> Result<(), WireError> {
+        self.send_to_peer(peer, NodeRequest::Shutdown)
     }
 
     /// Tries to randomly disconnect up to `n` non-protected-feature peers.

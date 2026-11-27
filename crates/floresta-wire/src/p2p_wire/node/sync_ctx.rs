@@ -16,6 +16,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::node::ConnectionKind;
 use crate::node::NodeNotification;
@@ -208,15 +209,20 @@ where
             .get_validation_index()
             .expect("validation index block should present");
 
-        let best_block = self
+        let (best_block, _) = self
             .chain
             .get_best_block()
-            .expect("best block should present")
-            .0;
+            .expect("best block should present");
 
         if validation_index == best_block {
-            info!("IBD is finished, switching to normal operation mode");
-            self.chain.update_ibd(IBDState::Done);
+            // We leave either way, since SyncNode can't receive new headers. A tip that isn't
+            // recent only keeps the IBD flag on, and the running node clears it once one arrives.
+            if !self.is_tip_recent().unwrap_or(true) {
+                warn!("Caught up to a tip that isn't recent, staying in IBD until one arrives");
+            } else {
+                info!("IBD is finished, switching to normal operation mode");
+                self.chain.update_ibd(IBDState::Done);
+            }
             return LoopControl::Break;
         }
 

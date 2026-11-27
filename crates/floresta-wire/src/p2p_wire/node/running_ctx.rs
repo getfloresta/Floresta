@@ -16,6 +16,7 @@ use bitcoin::p2p::address::AddrV2Message;
 use floresta_chain::ThreadSafeChain;
 use floresta_chain::proof_util;
 use floresta_chain::pruned_utreexo::BlockchainInterface;
+use floresta_chain::pruned_utreexo::IBDState;
 use floresta_chain::pruned_utreexo::UpdatableChainstate;
 use floresta_chain::pruned_utreexo::partial_chain::PartialChainState;
 use floresta_common::service_flags;
@@ -31,6 +32,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::UtreexoNodeConfig;
 use crate::node::ConnectionKind;
 use crate::node::InflightRequests;
 use crate::node::MAX_ADDRV2_ADDRESSES;
@@ -267,8 +269,13 @@ where
             }
         };
 
+        // The backfill range ends in the past by design, so its tip always looks stale.
+        let backfill_config = UtreexoNodeConfig {
+            max_tip_age_secs: u32::MAX,
+            ..self.config.clone()
+        };
         let backfill = UtreexoNode::<PartialChainState, SyncNode>::new(
-            self.config.clone(),
+            backfill_config,
             chain,
             self.mempool.clone(),
             None,
@@ -452,6 +459,12 @@ where
 
         // Jobs that don't need a connected peer
         try_and_log!(self.process_pending_blocks());
+
+        // SyncNode leaves IBD on when the tip isn't recent, so clear it once one arrives.
+        if self.chain.is_in_ibd() && self.is_tip_recent().unwrap_or(false) {
+            info!("Tip is recent, IBD is finished");
+            self.chain.update_ibd(IBDState::Done);
+        }
 
         // Save our peers db
         periodic_job!(

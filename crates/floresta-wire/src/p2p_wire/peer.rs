@@ -24,6 +24,7 @@ use bitcoin::p2p::ServiceFlags;
 use bitcoin::p2p::address::AddrV2Message;
 use bitcoin::p2p::message::CommandString;
 use bitcoin::p2p::message::NetworkMessage;
+use bitcoin::p2p::message_blockdata::GetHeadersMessage;
 use bitcoin::p2p::message_blockdata::Inventory;
 use bitcoin::p2p::message_filter::CFHeaders;
 use bitcoin::p2p::message_filter::GetCFHeaders;
@@ -436,13 +437,20 @@ impl<T: AsyncWrite + Unpin + Send + Sync> Peer<T> {
             }
             NodeRequest::GetHeaders(locator) => {
                 let _ = self
-                    .write(NetworkMessage::GetHeaders(
-                        bitcoin::p2p::message_blockdata::GetHeadersMessage {
-                            version: 0,
-                            locator_hashes: locator,
-                            stop_hash: BlockHash::all_zeros(),
-                        },
-                    ))
+                    .write(NetworkMessage::GetHeaders(GetHeadersMessage {
+                        version: 0,
+                        locator_hashes: locator,
+                        stop_hash: BlockHash::all_zeros(),
+                    }))
+                    .await;
+            }
+            NodeRequest::GetHeadersRange { locator, stop_hash } => {
+                let _ = self
+                    .write(NetworkMessage::GetHeaders(GetHeadersMessage {
+                        version: 0,
+                        locator_hashes: locator,
+                        stop_hash,
+                    }))
                     .await;
             }
             NodeRequest::Shutdown => {
