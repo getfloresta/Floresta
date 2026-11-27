@@ -1007,6 +1007,13 @@ where
 
         let metrics = get_metrics();
         metrics.peer_count.set(self.peer_ids.len() as f64);
+
+        let utreexo_peers = self
+            .peer_by_service
+            .get(&service_flags::UTREEXO.into())
+            .map_or(0, |peers| peers.len());
+
+        metrics.utreexo_peer_count.set(utreexo_peers as f64);
     }
 
     pub(crate) fn has_utreexo_peers(&self) -> bool {
