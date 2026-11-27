@@ -228,11 +228,16 @@ class TestP2pAddrRelay:
             predicate=lambda: self.floresta_has_peer_count(
                 expected_peer_count=expected_peer_count
             ),
+            interval=0.2,
             error_msg="Floresta node did not connect as expected",
         )
 
     def floresta_has_peer_count(self, expected_peer_count: int = 0) -> bool:
-        """Check if the Floresta node has the expected number of peers."""
+        """Check if the Floresta node has the expected number of peers.
+
+        Every call costs two RPCs, so waiters on this back off a little more
+        than the default interval, like `wait_for_peers_connections` does.
+        """
         self.florestad.rpc.ping()
         return self.florestad.rpc.get_connectioncount() == expected_peer_count
 
@@ -244,6 +249,7 @@ class TestP2pAddrRelay:
             predicate=lambda: self.floresta_has_peer_count(
                 expected_peer_count=expected_peer_count
             ),
+            interval=0.2,
             error_msg="Floresta node did not disconnect as expected",
         )
 

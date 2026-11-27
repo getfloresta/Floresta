@@ -8,7 +8,6 @@ that can be started in regtest mode.
 """
 
 import os
-import time
 
 from abc import ABC, abstractmethod
 from subprocess import Popen, PIPE
@@ -18,17 +17,23 @@ from test_framework.daemon import ConfigP2P
 from test_framework.electrum import ConfigElectrum
 
 
-# pylint: disable=too-many-public-methods
+# pylint: disable=too-many-public-methods,too-many-instance-attributes
 class BaseDaemon(ABC):
     """
     Base class for managing daemon processes (e.g., florestad, utreexod) in regtest mode.
 
-    This class provides the necessary methods to configure, start, and manage daemon processes.
-    It ensures proper initialization, validation, and graceful termination of the processes.
-    The class abstracts common functionality for handling RPC, P2P, and Electrum configurations.
+    This class provides the necessary methods to configure and spawn daemon processes,
+    abstracting common functionality for handling RPC, P2P, and Electrum configurations.
+    Waiting for a daemon to be up or gone is `Node`'s job, not this class's.
     """
 
-    # pylint: disable=too-many-arguments too-many-instance-attributes too-many-positional-arguments
+    # How long the process is given to be gone once it has accepted `stop`.
+    # This is a budget for the process, not for an RPC call: it covers the
+    # flush the daemon does after it has already answered. Bitcoin Core keeps
+    # the same split, with `BITCOIND_PROC_WAIT_TIMEOUT = 60`.
+    PROC_WAIT_TIMEOUT: int = 30  # seconds
+
+    # pylint: disable=too-many-arguments too-many-positional-arguments
     def __init__(
         self,
         name: str,
@@ -152,10 +157,13 @@ class BaseDaemon(ABC):
 
     def start(self):
         """
-        Start the daemon process in regtest mode.
+        Spawn the daemon process in regtest mode.
 
-        Validates if the process starts successfully; otherwise, logs the error
-        and terminates the process.
+        Builds the command line from `settings`, starts it with its stdout going
+        to the node's log file and records the process. Deciding when the daemon
+        is actually up is `Node.start`'s job: it waits for the RPC port and calls
+        `raise_if_died` on every poll, so a daemon that dies on startup is
+        reported with its own error rather than with a timeout.
         """
         if self.is_running:
             raise RuntimeError(f"Daemon '{self.name}' is already running")
@@ -173,20 +181,37 @@ class BaseDaemon(ABC):
         # pylint: disable=consider-using-with
         self.process = Popen(cmd, text=True, stderr=PIPE, stdout=stdout_file)
 
-        # Wait a little to see if the process is running
-        time.sleep(1)
-        if not self.is_running:
-            self.process.terminate()
-            stderr = self.process.stderr.read()
-
-            self.log.debug(
-                self.log_msg(
-                    f"Failed to start node '{self.name}'. Command: {' '.join(cmd)} "
-                )
-            )
-            raise RuntimeError(f"Failed to start node '{self.name}'. {stderr}")
-
         self.log.debug(self.log_msg(f"Starting node '{self.name}': {' '.join(cmd)}"))
+
+    def raise_if_died(self):
+        """
+        Raise if the daemon process is no longer running, reporting its stderr.
+
+        Callers wait for the daemon to open its RPC port instead of sleeping for
+        a fixed amount of time, so this is how a daemon that dies on startup
+        (bad config, port already taken) is turned into an error.
+
+        The log file is named along with the stderr, since a daemon may well
+        report why it died on stdout instead: florestad logs the RPC bind
+        failure through `tracing` and exits, leaving stderr empty.
+        """
+        if self.process is None:
+            raise RuntimeError(f"Node '{self.name}' was never started")
+
+        if self.is_running:
+            return
+
+        stderr = self.process.stderr.read().strip()
+        cmd = " ".join(str(a) for a in self.process.args)
+        self.log.debug(
+            self.log_msg(f"Failed to start node '{self.name}'. Command: {cmd} ")
+        )
+        # Keep the message tight when stderr is empty, which is the common case.
+        details = f"{stderr} " if stderr else ""
+        raise RuntimeError(
+            f"Failed to start node '{self.name}'. {details}"
+            f"See its log at {self._p2p_config.log_path}"
+        )
 
     @abstractmethod
     def get_cmd_network(self) -> List[str]:

@@ -11,7 +11,6 @@ This module provides fixtures for creating and managing test nodes
 
 import logging
 import os
-import time
 from typing import Callable, List
 
 import pytest
@@ -218,7 +217,6 @@ def florestad_bitcoind_utreexod_with_chain(
     def _create_nodes_with_chain(
         blocks: int = 100,
         floresta_descriptors: List[str] | None = None,
-        addr_coinbase: str | None = None,
     ) -> tuple[Node, Node, Node]:
         if floresta_descriptors is None:
             floresta_descriptors = [
@@ -229,17 +227,19 @@ def florestad_bitcoind_utreexod_with_chain(
         for descriptor in floresta_descriptors:
             florestad_node.rpc.load_descriptor(descriptor)
 
-        if addr_coinbase:
-            bitcoind_node.rpc.generatetoaddress(blocks, addr_coinbase)
-        else:
-            utreexod_node.rpc.generate(blocks)
-
-        node_manager.connect_nodes(florestad_node, utreexod_node)
-        time.sleep(3)
+        # utreexod mines the chain, so it already has every block and its
+        # proof by the time florestad connects and asks for them.
+        utreexod_node.rpc.generate(blocks)
         node_manager.connect_nodes(bitcoind_node, utreexod_node)
-        time.sleep(1)
+
+        # Connect the rest and wait once, so the nodes sync in parallel.
+        node_manager.connect_nodes(florestad_node, utreexod_node)
         node_manager.connect_nodes(florestad_node, bitcoind_node)
 
+        node_manager.wait_for_sync_nodes(
+            is_ibd_finished=False,
+            nodes=[florestad_node, bitcoind_node, utreexod_node],
+        )
         return florestad_node, bitcoind_node, utreexod_node
 
     return _create_nodes_with_chain
@@ -272,15 +272,16 @@ def shared_florestad_bitcoind_utreexod_with_chain(
         for descriptor in floresta_descriptors:
             shared_florestad_node.rpc.load_descriptor(descriptor)
 
+        # utreexod mines the chain, so it already has every block and its
+        # proof by the time florestad connects and asks for them.
         shared_utreexod_node.rpc.generate(blocks)
-
-        shared_node_manager.connect_nodes(shared_florestad_node, shared_utreexod_node)
-        time.sleep(3)
         shared_node_manager.connect_nodes(shared_bitcoind_node, shared_utreexod_node)
-        time.sleep(1)
+
+        # Connect the rest and wait once, so the nodes sync in parallel.
+        shared_node_manager.connect_nodes(shared_florestad_node, shared_utreexod_node)
         shared_node_manager.connect_nodes(shared_florestad_node, shared_bitcoind_node)
 
-        shared_node_manager.wait_for_sync_nodes(is_finished_ibd=False)
+        shared_node_manager.wait_for_sync_nodes(is_ibd_finished=False)
 
         return shared_florestad_node, shared_bitcoind_node, shared_utreexod_node
 
