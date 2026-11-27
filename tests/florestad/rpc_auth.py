@@ -17,6 +17,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from time import monotonic
 
+import pytest
 from requests import post
 from requests.exceptions import ReadTimeout
 from requests.models import HTTPBasicAuth
@@ -200,6 +201,9 @@ class TestRpcAuth:
         assert body.get("error") is None
         assert isinstance(body.get("result"), int)
 
+    # Runs alone in the serial lane: with other tests' nodes competing for the
+    # CPU, the setup can use up the whole hold and the check proves nothing.
+    @pytest.mark.expensive
     def test_abandoned_guesses_still_hold_their_auth_slot(self, node_manager):
         """An attacker only needs the 200, so they hang up on the 401s. Timing
         the 401s would pass even uncapped; what has to be measured is whether
@@ -235,18 +239,21 @@ class TestRpcAuth:
                 return True
             return False
 
+        # The hold starts when the guesses arrive, so time from here.
+        guesses_sent = monotonic()
         with ThreadPoolExecutor(max_workers=AUTH_SLOTS) as pool:
             abandoned = list(pool.map(abandon, range(AUTH_SLOTS)))
         assert all(abandoned), "guesses should have been abandoned mid-delay"
 
+        setup = monotonic() - guesses_sent
         saturated = unsaturated()
+        held_for = setup + saturated
 
-        # Half the delay, not the whole of it: some of the hold already elapsed
-        # while the guesses were being abandoned. A lower bound cannot flake,
-        # and freeing the slot on hang-up measured ~0.005s here.
-        assert saturated >= REJECT_DELAY / 2, (
-            f"a correct request should wait for a slot, took {saturated:.3f}s "
-            f"against a {baseline:.3f}s baseline"
+        # A slow runner only makes this longer. Freeing on hang-up gives ~0.1s.
+        assert held_for >= REJECT_DELAY, (
+            f"a correct request should wait for a slot, finished {held_for:.3f}s "
+            f"after the guesses were sent (took {saturated:.3f}s against a "
+            f"{baseline:.3f}s baseline)"
         )
 
     def test_empty_rpc_password_falls_back_to_cookie(self, node_manager):
