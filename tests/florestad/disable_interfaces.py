@@ -6,8 +6,9 @@ Test disabling the JSON-RPC, Electrum and ZMQ interface servers in florestad.
 Each test starts the daemon directly, instead of going through
 `node_manager.run_node`, because that helper waits on the JSON-RPC socket and
 one of the interfaces under test is always down. To avoid asserting on a port
-that is merely not bound *yet*, every test first waits for an interface that is
-still enabled, and only then checks that the disabled one refuses connections.
+that is merely not bound *yet*, every test first waits for the daemon to log
+that the interface is disabled, and only then checks that it refuses
+connections.
 """
 
 import pytest
@@ -17,7 +18,7 @@ from test_framework.util import (
     Utility,
     florestad_has_feature,
     is_port_open,
-    wait_until,
+    wait_for_log,
 )
 
 
@@ -32,15 +33,11 @@ def test_disable_rpc(node_manager):
     )
     node.daemon.start()
 
-    electrum_config = node.daemon.electrum_config
     rpc_config = node.rpc.config
 
-    # The Electrum server is started after the JSON-RPC one, so once it accepts
-    # connections the JSON-RPC server would already have been started too.
-    wait_until(
-        lambda: is_port_open(electrum_config.host, electrum_config.port),
-        error_msg="Electrum port should be open",
-    )
+    # Wait for the daemon to log that the interface is disabled, a deterministic
+    # signal that does not depend on the order in which the servers start.
+    wait_for_log(node.daemon.p2p_config.log_path, "JSON-RPC server is disabled")
 
     assert not is_port_open(
         rpc_config.host, rpc_config.port
@@ -60,7 +57,7 @@ def test_disable_electrum(node_manager):
 
     electrum_config = node.daemon.electrum_config
 
-    node.rpc.wait_on_socket(opened=True)
+    wait_for_log(node.daemon.p2p_config.log_path, "Electrum server is disabled")
 
     assert not is_port_open(
         electrum_config.host, electrum_config.port
@@ -90,7 +87,7 @@ def test_disable_zmq(node_manager):
     )
     node.daemon.start()
 
-    node.rpc.wait_on_socket(opened=True)
+    wait_for_log(node.daemon.p2p_config.log_path, "ZMQ server is disabled")
 
     assert not is_port_open(
         zmq_host, zmq_port
