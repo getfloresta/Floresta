@@ -81,6 +81,12 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .map_err(|_| JsonRpcError::BlockNotFound)
     }
 
+    fn get_validated_height_inner(&self) -> Result<u32, JsonRpcError> {
+        self.chain
+            .get_validation_index()
+            .map_err(|_| JsonRpcError::Chain)
+    }
+
     /// Same as `get_block_header_inner` but verbose.
     fn get_block_header_verbose_inner(
         &self,
@@ -409,10 +415,7 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
             .chain
             .get_best_block()
             .map_err(|_| JsonRpcError::Chain)?;
-        let validated = self
-            .chain
-            .get_validation_index()
-            .map_err(|_| JsonRpcError::Chain)?;
+        let validated = self.get_validated_height_inner()?;
         let initial_block_download = self.chain.is_in_ibd();
         let latest_header = self
             .chain
@@ -475,7 +478,7 @@ impl<Blockchain: RpcChain> BlockchainRpc for RpcImpl<Blockchain> {
 
     // getblockcount
     async fn get_block_count(&self) -> Result<u32, JsonRpcError> {
-        self.chain.get_height().map_err(|_| JsonRpcError::Chain)
+        self.get_validated_height_inner()
     }
 
     // getblockfilter

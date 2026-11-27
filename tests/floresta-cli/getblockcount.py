@@ -32,3 +32,5 @@ def test_get_block_count(florestad_utreexod, node_manager):
     final_utreexod_count = utreexod.rpc.get_block_count()
 
     assert final_florestad_count == final_utreexod_count == MINE_BLOCKS
+
+    assert final_florestad_count == florestad.rpc.get_blockchain_info()["blocks"]
