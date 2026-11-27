@@ -14,6 +14,8 @@ use alloc::vec::Vec;
 use bitcoin::Block;
 use bitcoin::BlockHash;
 use bitcoin::Network;
+use bitcoin::Script;
+use bitcoin::ScriptBuf;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::constants::SUBSIDY_HALVING_INTERVAL;
 use bitcoin::params::Params;
@@ -38,6 +40,14 @@ const _: () = {
     assert!(VERIFY_P2SH == bitcoinkernel::VERIFY_P2SH);
     assert!(VERIFY_WITNESS == bitcoinkernel::VERIFY_WITNESS);
 };
+
+const DEFAULT_SIGNET_CHALLENGE: &[u8] = &[
+    0x51, 0x21, 0x03, 0xad, 0x5e, 0x0e, 0xda, 0xd1, 0x8c, 0xb1, 0xf0, 0xfc, 0x0d, 0x28, 0xa3, 0xd4,
+    0xf1, 0xf3, 0xe4, 0x45, 0x64, 0x03, 0x37, 0x48, 0x9a, 0xbb, 0x10, 0x40, 0x4f, 0x2d, 0x1e, 0x08,
+    0x6b, 0xe4, 0x30, 0x21, 0x03, 0x59, 0xef, 0x50, 0x21, 0x96, 0x4f, 0xe2, 0x2d, 0x6f, 0x8e, 0x05,
+    0xb2, 0x46, 0x3c, 0x95, 0x40, 0xce, 0x96, 0x88, 0x3f, 0xe3, 0xb2, 0x78, 0x76, 0x0f, 0x04, 0x8f,
+    0x51, 0x89, 0xf2, 0xe6, 0xc4, 0x52, 0xae,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubsidyHalvingInterval {
@@ -89,6 +99,11 @@ pub struct ChainParams {
     /// The network this chain params is for
     pub network: Network,
 
+    /// The challenge script that signet blocks must satisfy.
+    ///
+    /// This is [`None`] for networks other than signet.
+    pub signet_challenge: Option<ScriptBuf>,
+
     /// Whether we should enforce BIP-094 "Testnet 4" rules
     pub enforce_bip94: bool,
 }
@@ -113,6 +128,17 @@ pub struct AssumeUtreexoValue {
 }
 
 impl ChainParams {
+    /// Returns the default Bitcoin signet challenge.
+    pub fn default_signet_challenge() -> &'static Script {
+        Script::from_bytes(DEFAULT_SIGNET_CHALLENGE)
+    }
+
+    /// Returns whether these parameters select a custom signet challenge.
+    pub fn is_custom_signet(&self) -> bool {
+        self.network == Network::Signet
+            && self.signet_challenge.as_deref() != Some(Self::default_signet_challenge())
+    }
+
     /// This method is called when Assume Utreexo is set to true. It means that the user will accept the hardcoded utreexo state for the specified block, if it is found in the best chain. We can then sync rapidly from this state.
     pub fn get_assume_utreexo(network: Network) -> AssumeUtreexoValue {
         let genesis = genesis_block(Params::new(network));
@@ -199,14 +225,19 @@ impl ChainParams {
     /// # Variants
     /// - [`AssumeValidArg::Disabled`] — no checkpoint; all scripts are validated.
     /// - [`AssumeValidArg::UserInput`] — use the provided hash.
-    /// - [`AssumeValidArg::Hardcoded`] — use the release-time checkpoint hardcoded for
-    ///   each [`Network`] in the body of this function, where every hash carries its
-    ///   height as a comment. For Regtest this is the genesis block.
-    pub fn get_assume_valid(network: Network, arg: AssumeValidArg) -> Option<BlockHash> {
+    /// - [`AssumeValidArg::Hardcoded`] — use a release-time checkpoint per [`Network`]:
+    ///   Custom signets have no hardcoded checkpoint.
+    ///   - **Bitcoin**: block [971,420](https://mempool.space/block/971420)
+    ///   - **Signet**: block [326,326](https://mempool.space/signet/block/326326)
+    ///   - **Testnet**: block [4,887,983](https://mempool.space/testnet/block/4887983)
+    ///   - **Testnet4**: block [126,514](https://mempool.space/testnet4/block/126514)
+    ///   - **Regtest**: genesis block
+    pub fn get_assume_valid(&self, arg: AssumeValidArg) -> Option<BlockHash> {
         match arg {
             AssumeValidArg::Disabled => None,
             AssumeValidArg::UserInput(hash) => Some(hash),
-            AssumeValidArg::Hardcoded => match network {
+            AssumeValidArg::Hardcoded if self.is_custom_signet() => None,
+            AssumeValidArg::Hardcoded => match self.network {
                 Network::Bitcoin => Some(bhash!(
                     "000000000000000000000d9c98eed0d249631c1326408b194321690611bf52b9" // 976_679
                 )),
@@ -303,6 +334,10 @@ impl From<Network> for ChainParams {
     fn from(network: Network) -> Self {
         let genesis = genesis_block(Params::new(network));
         let exceptions = get_exceptions();
+        let signet_challenge = match network {
+            Network::Signet => Some(ScriptBuf::from_bytes(DEFAULT_SIGNET_CHALLENGE.to_vec())),
+            _ => None,
+        };
 
         match network {
             Network::Bitcoin => Self {
@@ -315,6 +350,7 @@ impl From<Network> for ChainParams {
                 segwit_activation_height: 481_824,
                 csv_activation_height: 419_328,
                 exceptions,
+                signet_challenge,
                 enforce_bip94: false,
             },
             Network::Testnet => Self {
@@ -327,6 +363,7 @@ impl From<Network> for ChainParams {
                 segwit_activation_height: 834_624,
                 csv_activation_height: 770_112,
                 exceptions,
+                signet_challenge,
                 enforce_bip94: false,
             },
             Network::Testnet4 => Self {
@@ -339,6 +376,7 @@ impl From<Network> for ChainParams {
                 segwit_activation_height: 1,
                 csv_activation_height: 1,
                 exceptions,
+                signet_challenge,
                 enforce_bip94: true,
             },
             Network::Signet => Self {
@@ -351,6 +389,7 @@ impl From<Network> for ChainParams {
                 csv_activation_height: 1,
                 segwit_activation_height: 1,
                 exceptions,
+                signet_challenge,
                 enforce_bip94: false,
             },
             Network::Regtest => Self {
@@ -363,8 +402,62 @@ impl From<Network> for ChainParams {
                 csv_activation_height: 1,
                 segwit_activation_height: 0,
                 exceptions,
+                signet_challenge,
                 enforce_bip94: false,
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_signet_challenge_matches_bitcoin_core() {
+        let params = ChainParams::from(Network::Signet);
+
+        assert_eq!(
+            params
+                .signet_challenge
+                .as_deref()
+                .map(|script| script.as_bytes()),
+            Some(DEFAULT_SIGNET_CHALLENGE)
+        );
+    }
+
+    #[test]
+    fn distinguishes_default_and_custom_signet() {
+        let mut params = ChainParams::from(Network::Signet);
+        assert!(!params.is_custom_signet());
+
+        params.signet_challenge = Some(ScriptBuf::from_bytes(vec![0x51]));
+        assert!(params.is_custom_signet());
+        assert!(!ChainParams::from(Network::Bitcoin).is_custom_signet());
+    }
+
+    #[test]
+    fn custom_signet_disables_only_hardcoded_assume_valid() {
+        let mut params = ChainParams::from(Network::Signet);
+        params.signet_challenge = Some(ScriptBuf::from_bytes(vec![0x51]));
+        let explicit_checkpoint = params.genesis.block_hash();
+
+        assert_eq!(params.get_assume_valid(AssumeValidArg::Hardcoded), None);
+        assert_eq!(
+            params.get_assume_valid(AssumeValidArg::UserInput(explicit_checkpoint)),
+            Some(explicit_checkpoint)
+        );
+    }
+
+    #[test]
+    fn non_signet_networks_have_no_signet_challenge() {
+        for network in [
+            Network::Bitcoin,
+            Network::Testnet,
+            Network::Testnet4,
+            Network::Regtest,
+        ] {
+            assert!(ChainParams::from(network).signet_challenge.is_none());
         }
     }
 }
