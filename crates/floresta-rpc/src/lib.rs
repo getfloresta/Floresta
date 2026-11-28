@@ -76,9 +76,17 @@ pub fn resolve_cookie_path(datadir: &Path, cookie_file: Option<&Path>) -> PathBu
 
 /// Read a florestad RPC cookie file at `path` and split it into `(user, pass)`
 /// on the first `:`. Returns `io::Error` on read failure or malformed content.
+///
+/// Only the first line is read, so a copy made with `echo`, an editor or a
+/// config-management template still authenticates. `florestad` writes no
+/// trailing newline, but anything that round-trips the file as text adds one,
+/// and it would otherwise end up inside the password.
 pub fn read_cookie_file(path: &Path) -> io::Result<(String, String)> {
     let contents = std::fs::read_to_string(path)?;
     contents
+        .lines()
+        .next()
+        .unwrap_or_default()
         .split_once(':')
         .map(|(u, p)| (u.to_string(), p.to_string()))
         .ok_or_else(|| {
@@ -146,6 +154,49 @@ mod path_tests {
             resolve_cookie_path(Path::new("/data"), Some(Path::new("/elsewhere/x.cookie"))),
             PathBuf::from("/elsewhere/x.cookie")
         );
+    }
+}
+
+#[cfg(test)]
+mod cookie_file_tests {
+    use std::fs;
+    use std::io;
+
+    use tempfile::TempDir;
+
+    use super::read_cookie_file;
+
+    /// Write `contents` to a cookie file and read it back through the public API.
+    fn read(contents: &str) -> io::Result<(String, String)> {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".cookie");
+        fs::write(&path, contents).unwrap();
+        read_cookie_file(&path)
+    }
+
+    fn cookie() -> (String, String) {
+        ("__cookie__".to_string(), "secret".to_string())
+    }
+
+    /// A copy made with `echo` or saved by an editor gains a trailing newline,
+    /// which must not end up inside the password.
+    #[test]
+    fn trailing_newline_is_not_part_of_the_password() {
+        assert_eq!(read("__cookie__:secret\n").unwrap(), cookie());
+    }
+
+    /// Same for CRLF. Core's `std::getline` stops at the `\n` and leaves the
+    /// `\r` behind, so this is deliberately more lenient than Core.
+    #[test]
+    fn trailing_crlf_is_not_part_of_the_password() {
+        assert_eq!(read("__cookie__:secret\r\n").unwrap(), cookie());
+    }
+
+    /// A file with no `:` is still rejected.
+    #[test]
+    fn a_file_without_a_colon_is_malformed() {
+        let err = read("not-a-cookie\n").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }
 

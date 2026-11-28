@@ -29,6 +29,7 @@ floresta-proc-macro = { workspace = true }
 [dev-dependencies]
 rand = { workspace = true }
 rcgen = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 default = ["with-jsonrpc"]
