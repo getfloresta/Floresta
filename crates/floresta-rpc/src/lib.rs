@@ -157,9 +157,10 @@ mod path_tests {
 ))]
 mod tests {
     use core::str::FromStr;
+    use std::ffi::OsString;
     use std::fs;
     use std::net::TcpListener;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::Child;
     use std::process::Command;
     use std::process::Stdio;
@@ -168,8 +169,8 @@ mod tests {
 
     use bitcoin::BlockHash;
     use bitcoin::Txid;
-    use rcgen::CertifiedKey;
     use rcgen::generate_simple_self_signed;
+    use rcgen::CertifiedKey;
 
     use crate::jsonrpc_client::Client;
     use crate::jsonrpc_client::JsonRPCConfig;
@@ -191,6 +192,84 @@ mod tests {
         }
     }
 
+    fn locate_florestad() -> PathBuf {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+        let path = locate_florestad_with(
+            std::env::var_os("FLORESTAD_EXE").or_else(|| std::env::var_os("FLORESTAD_PATH")),
+            std::env::var_os("CARGO_TARGET_DIR"),
+            &root,
+        );
+
+        println!("Using florestad at: {}", path.display());
+        path
+    }
+
+    fn locate_florestad_with(
+        explicit: Option<OsString>,
+        cargo_target_dir: Option<OsString>,
+        root: &Path,
+    ) -> PathBuf {
+        if let Some(explicit) = explicit {
+            let path = PathBuf::from(explicit);
+
+            let resolved = if path.is_file() {
+                path
+            } else if path.is_relative() && root.join(&path).is_file() {
+                root.join(path)
+            } else {
+                panic!(
+                    "Configured florestad binary not found: {} \
+                     (FLORESTAD_EXE or FLORESTAD_PATH)",
+                    path.display()
+                );
+            };
+
+            return resolved;
+        }
+
+        let target_dir = match cargo_target_dir {
+            Some(dir) => {
+                let path = PathBuf::from(dir);
+
+                if path.is_absolute() {
+                    path
+                } else {
+                    std::env::current_dir()
+                        .expect("Could not determine current directory")
+                        .join(path)
+                }
+            }
+            None => root.join("target"),
+        };
+
+        let bin_name = if cfg!(windows) {
+            "florestad.exe"
+        } else {
+            "florestad"
+        };
+
+        let debug_path = target_dir.join("debug").join(bin_name);
+        let release_path = target_dir.join("release").join(bin_name);
+
+        if debug_path.is_file() {
+            return debug_path;
+        }
+
+        if release_path.is_file() {
+            return release_path;
+        }
+
+        panic!(
+            "Could not locate florestad binary.\n\
+             Checked paths:\n  - {}\n  - {}\n\
+             Build it with `cargo build --bin florestad` \
+             or set FLORESTAD_EXE.",
+            debug_path.display(),
+            release_path.display()
+        );
+    }
+
     /// A helper function for tests.
     ///
     /// This function will start a florestad process and return a client that can be used to
@@ -205,15 +284,7 @@ mod tests {
         // CARGO_MANIFEST_DIR is always floresta-cli's directory; PWD changes based on where the
         // command is executed.
         let root = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
-        let release_path = format!("{root}/target/release/florestad");
-        let debug_path = format!("{root}/target/debug/florestad");
-
-        let release_found = Path::new(&release_path).try_exists().unwrap();
-        // If release target not found, default to the debug path
-        let florestad_path = match release_found {
-            true => release_path,
-            false => debug_path,
-        };
+        let florestad_path = locate_florestad();
 
         // Makes a temporary directory to store the chain db, TLS certificate, logs, etc.
         let test_code = rand::random::<u64>();
@@ -241,7 +312,12 @@ mod tests {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()
-            .unwrap_or_else(|e| panic!("Couldn't launch florestad at {florestad_path}: {e}"));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Couldn't launch florestad at {}: {e}",
+                    florestad_path.display()
+                )
+            });
 
         // florestad writes the cookie file before binding the RPC port, so poll
         // for it to appear and use it to authenticate the test client.
@@ -497,6 +573,121 @@ mod tests {
         let rpc_info = client.get_rpc_info().unwrap();
         // Just check it returns something without error
         let _ = rpc_info;
+    }
+
+    #[test]
+    fn test_locate_florestad_explicit_override() {
+        let test_code = rand::random::<u64>();
+        let temp_dir = std::env::temp_dir().join(format!("floresta_test_{test_code}"));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let fake_bin = temp_dir.join("fake_florestad");
+        fs::write(&fake_bin, b"#!/bin/sh\nexit 0\n").unwrap();
+
+        let root = temp_dir.join("workspace");
+        let resolved =
+            locate_florestad_with(Some(fake_bin.as_os_str().to_os_string()), None, &root);
+        assert_eq!(resolved, fake_bin);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_locate_florestad_explicit_override_relative_to_root() {
+        let test_code = rand::random::<u64>();
+        let temp_dir = std::env::temp_dir().join(format!("floresta_test_{test_code}"));
+        let root = temp_dir.join("workspace");
+        let custom_bin_dir = root.join("custom_bin");
+        fs::create_dir_all(&custom_bin_dir).unwrap();
+
+        let fake_bin = custom_bin_dir.join("florestad");
+        fs::write(&fake_bin, b"#!/bin/sh\nexit 0\n").unwrap();
+
+        let resolved = locate_florestad_with(
+            Some(std::ffi::OsString::from("custom_bin/florestad")),
+            None,
+            &root,
+        );
+        assert_eq!(resolved, fake_bin);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[should_panic(expected = "Configured florestad binary not found")]
+    fn test_locate_florestad_explicit_override_nonexistent() {
+        let test_code = rand::random::<u64>();
+        let temp_dir = std::env::temp_dir().join(format!("floresta_test_{test_code}"));
+        let missing_bin = temp_dir.join("nonexistent_florestad");
+
+        let root = temp_dir.join("workspace");
+        locate_florestad_with(Some(missing_bin.as_os_str().to_os_string()), None, &root);
+    }
+
+    #[test]
+    fn test_locate_florestad_cargo_target_dir() {
+        let test_code = rand::random::<u64>();
+        let temp_dir = std::env::temp_dir().join(format!("floresta_test_{test_code}"));
+        let custom_target = temp_dir.join("custom_target");
+        let debug_dir = custom_target.join("debug");
+        fs::create_dir_all(&debug_dir).unwrap();
+
+        let bin_name = if cfg!(windows) {
+            "florestad.exe"
+        } else {
+            "florestad"
+        };
+        let fake_debug_bin = debug_dir.join(bin_name);
+        fs::write(&fake_debug_bin, b"#!/bin/sh\nexit 0\n").unwrap();
+
+        let root = temp_dir.join("workspace");
+        let resolved =
+            locate_florestad_with(None, Some(custom_target.as_os_str().to_os_string()), &root);
+        assert_eq!(resolved, fake_debug_bin);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_locate_florestad_prefers_debug_over_release() {
+        let test_code = rand::random::<u64>();
+        let temp_dir = std::env::temp_dir().join(format!("floresta_test_{test_code}"));
+        let target_dir = temp_dir.join("target");
+        let debug_dir = target_dir.join("debug");
+        let release_dir = target_dir.join("release");
+        fs::create_dir_all(&debug_dir).unwrap();
+        fs::create_dir_all(&release_dir).unwrap();
+
+        let bin_name = if cfg!(windows) {
+            "florestad.exe"
+        } else {
+            "florestad"
+        };
+        let debug_bin = debug_dir.join(bin_name);
+        let release_bin = release_dir.join(bin_name);
+
+        fs::write(&release_bin, b"release").unwrap();
+        fs::write(&debug_bin, b"debug").unwrap();
+
+        // When both exist, debug is preferred
+        let resolved = locate_florestad_with(None, None, &temp_dir);
+        assert_eq!(resolved, debug_bin);
+
+        // When only release exists, release is returned
+        fs::remove_file(&debug_bin).unwrap();
+        let resolved = locate_florestad_with(None, None, &temp_dir);
+        assert_eq!(resolved, release_bin);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[should_panic(expected = "Could not locate florestad binary.")]
+    fn test_locate_florestad_missing_panics_with_paths() {
+        let test_code = rand::random::<u64>();
+        let temp_dir = std::env::temp_dir().join(format!("floresta_test_{test_code}"));
+        let root = temp_dir.join("workspace");
+        locate_florestad_with(None, None, &root);
     }
 }
 
