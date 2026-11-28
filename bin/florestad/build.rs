@@ -19,7 +19,7 @@ fn main() {
         .expect("Failed to run rustc --version. Is rustc installed?");
 
     let long_version = format!("version {version} compiled for {arch}-{os}-{runtime} with {rustc}");
-    let user_agent = format!("/Floresta:{}/", version.replace("v", ""));
+    let user_agent = format!("/Floresta:{}/", version.strip_prefix('v').unwrap_or(&version));
 
     println!("cargo:rustc-env=LONG_VERSION={long_version}");
     println!("cargo:rustc-env=GIT_DESCRIBE={version}");
